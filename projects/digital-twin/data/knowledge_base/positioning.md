@@ -12,29 +12,40 @@ The through-line: **building systems that reason well under uncertainty**. The p
 
 ---
 
-## What specifically transfers
+## Transfer: evaluation discipline
 
-### 1. Evaluation discipline
 In ecological research, every model faces the question: is this finding real, or is it an artefact of the data, the model structure, or the detection method? Alejandro's doctoral work required separating detection probability from true population trends — if you don't correct for imperfect observation, you mistake a change in surveyor behaviour for a change in species abundance. This is exactly the problem of LLM evaluation: if you don't design the evaluation correctly, you mistake benchmark performance for production reliability.
 
 **In practice:** The same rigour shows up as retrieval evaluation with MRR and nDCG (not just "does it return relevant results?"), LLM-as-judge scoring with structured criteria and inter-rater agreement checks, held-out test splits that aren't contaminated by training signal, and systematic failure mode analysis by category. The AI-JIE project ran 33 prompt iterations tracked with a formal evaluation harness before shipping — not because 33 was a target, but because the evaluation exposed real failures at each stage.
 
-### 2. Uncertainty quantification
+---
+
+## Transfer: uncertainty quantification
+
 Bayesian inference produces posterior distributions, not point estimates. Every forecast from Alejandro's ecological models carries explicit credible intervals that propagate honestly through time: the uncertainty in a 30-year possum population forecast grows as it should. This is deeply different from point predictions that look confident because the error bars were never computed.
 
 **In practice:** This shows up in AI as calibrated confidence — not claiming precision that doesn't exist, explicitly communicating model limitations, and designing systems where uncertainty is a first-class output rather than an afterthought. It also shows up in ensemble design: the LLM Price Predictor uses a blended ensemble precisely because no single model is reliable at all price points.
 
-### 3. First-principles problem framing
+---
+
+## Transfer: first-principles problem framing
+
 Ecological modelling requires reasoning about the data-generating process before choosing a model. Why does this observation have this structure? What are the likely biases? What does "random" actually mean in this spatial, temporal context? Jumping straight to "fit a regression" without thinking about the process leads to wrong answers at scale.
 
 **In practice:** This shows up as knowing when structured extraction needs chain-of-thought scaffolding (AI-JIE) rather than flat prompting, when deterministic postprocessing should handle known noise rather than expecting the LLM to, when retrieval evaluation needs spatial (blocked) cross-validation rather than random splits.
 
-### 4. Systems-level thinking
+---
+
+## Transfer: systems-level thinking
+
 A Bayesian hierarchical model is a system: observation process, state process, prior distributions, partial pooling across sites, propagation of uncertainty to forecasts. Each component has to be coherent with the others. Breaking one component while keeping others intact produces outputs that look reasonable but are quietly wrong.
 
 **In practice:** Pipeline thinking — every stage of a data pipeline or LLM system must be coherent end-to-end, not just locally optimised. The LLM Price Predictor's 7-stage pipeline was designed so that each stage could be re-run or swapped independently, and the `Tester` class applied identically across all model families so comparisons were fair. The Job Intelligence Engine was built around pipeline chapters that produce stable outputs, so the recommender can be validated against the market model without recomputing everything.
 
-### 5. Transparent communication under uncertainty
+---
+
+## Transfer: transparent communication under uncertainty
+
 Peer-reviewed papers require explicit statements of assumptions, limitations, and scope. Results must be communicated with their uncertainty attached. "This is probably true given these assumptions, and here's what would change the conclusion" is the standard — not "this is the answer."
 
 **In practice:** This shows up as decision-ready outputs (not just model outputs) with explicit assumptions and caveats, evaluation dashboards that show per-category failure rates rather than aggregate scores, and documentation that treats limitations as first-class content.

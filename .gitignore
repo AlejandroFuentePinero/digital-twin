@@ -9,3 +9,6 @@ data/
 !projects/digital-twin/data/knowledge_base/**
 CLAUDE.md
 .DS_Store
+__pycache__/
+*.pyc
+projects/digital-twin/data/preprocessed_db/

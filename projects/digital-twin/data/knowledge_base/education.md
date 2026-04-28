@@ -1,19 +1,17 @@
 # Education and Training
 
-## Formal Degrees
-
-### PhD in Quantitative Ecology — James Cook University (Cum Laude), 2024
+## PhD in Quantitative Ecology — James Cook University (Cum Laude), 2024
 Focus: research-grade modelling for ecological systems under uncertainty and spatiotemporal structure. 30+ years of monitoring data, 150+ locations, Bayesian hierarchical and spatiotemporal forecasting, biophysical and nutritional modelling. Produced frameworks predicting vulnerability to extreme events and identifying high-risk habitats. Awarded Cum Laude.
 
-### MSc in Biology and Conservation of Biodiversity — Universidad de Salamanca, 2016
+## MSc in Biology and Conservation of Biodiversity — Universidad de Salamanca, 2016
 Thesis: *"Implementation of GIS and species distribution models on studies of niche marginality of threatened plants"*. GIS, advanced statistics, applied statistical modelling, spatial analysis, workflow automation. The thesis work on species distribution models and niche marginality directly foreshadowed the SDM methodology applied at scale in the PhD.
 
-### BSc in Biology — Universidad de Salamanca, 2014
+## BSc in Biology — Universidad de Salamanca, 2014
 Mathematics, algebra, biostatistics, physics, introductory statistical programming, ecological modelling.
 
 ---
 
-## AI and LLM Engineering
+## AI and LLM Engineering certifications
 
 **AI Engineer Core Track: LLM Engineering, RAG, QLoRA, Agents**
 [Certificate](https://github.com/AlejandroFuentePinero/alejandrofuentepinero.github.io/blob/master/files/ai_engineer.pdf)
@@ -41,7 +39,7 @@ Building and deploying reusable agent skills; Claude API integration; code execu
 
 ---
 
-## Machine Learning and Data Science
+## Machine Learning and Data Science certifications
 
 **Machine Learning Specialisation — DeepLearning.AI (Andrew Ng)**
 [Certificate](https://learn.deeplearning.ai/certificates/3384e7df-ec7d-4ec6-9314-973855530059?usp=sharing)
@@ -52,12 +50,12 @@ Supervised learning, advanced learning algorithms, unsupervised learning, anomal
 pandas, NumPy, scikit-learn (regression, classification, clustering), deep learning with Keras/TensorFlow, intro NLP, recommenders, PCA.
 
 **The Complete Python Bootcamp: From Zero to Hero in Python**
-[Certificate](https://github.com/AlejandroFuentePinero/alejandrofuentepinero.github.io/blob/master/files/python%20bootcamp.pdf)
+[Certificate](https://github.com/Alejandrofupi/alejandrofuentepinero.github.io/blob/master/files/python%20bootcamp.pdf)
 Core Python, OOP, file I/O, web scraping, automation scripting.
 
 ---
 
-## SQL and Databases
+## SQL and Databases certifications
 
 **The Complete SQL Bootcamp: PostgreSQL & pgAdmin**
 [Certificate](https://github.com/AlejandroFuentePinero/alejandrofuentepinero.github.io/blob/master/files/sql_basic.pdf)
@@ -79,7 +77,7 @@ Advanced joins, CTEs (including recursive), window functions (ROW_NUMBER, RANK, 
 
 ---
 
-## Version Control and Cloud
+## Version Control and Cloud certifications
 
 **The Git & GitHub Bootcamp**
 [Certificate](https://github.com/AlejandroFuentePinero/alejandrofuentepinero.github.io/blob/master/files/git_github.pdf)
