@@ -28,6 +28,35 @@
 
 ---
 
+## Session 8 (2026-04-28) — Interaction Logger
+
+### What was built
+
+**`src/logger.py`** — append-only JSONL interaction logger. One record per `answer_with_guardrail` call: `timestamp`, `session_id`, `question`, `answer`, `is_acceptable`, `knew_answer`, `retry_count`. Creates `data/logs/` on first write. `data/logs/` is gitignored.
+
+**`src/answer.py` updates:**
+- `GAP_PHRASE` extracted as a named constant (must match the phrase in `SYSTEM_PROMPT` exactly)
+- `answer_with_guardrail` gains `session_id: str | None` param
+- `retry_count` tracked through the loop
+- `log_interaction` called at every exit point (first-attempt accept, post-retry accept, canned refusal)
+- `knew_answer` checked against the last generated answer (not `CANNED_REFUSAL`) so it reflects whether the KB had the information, not whether the guardrail accepted
+
+**`tests/test_logger.py`** — 13 tests using `tmp_path` + `monkeypatch` to redirect `LOG_PATH`. Covers: field presence, value correctness, timestamp format, `knew_answer` detection, append behaviour, valid JSON per line, directory auto-creation, retry_count, is_acceptable.
+
+**`tests/test_answer.py`** — 4 existing `answer_with_guardrail` tests patched to mock `log_interaction`; 4 new tests: logs once per call, logs correct retry_count, logs `knew_answer=False` for gap phrase, passes session_id through.
+
+**All 77 tests passing.**
+
+### Design decisions
+
+**No agent layer needed.** The retry loop already lives in `answer_with_guardrail`, so logging can wire directly there. `agent.py` stays planned for tool-calling (contact capture, user details) but is not required for usage tracking.
+
+**Local JSONL now, HF Dataset later.** Single function to replace when deploying; no other code changes needed.
+
+**`knew_answer` checked on the generated answer, not `CANNED_REFUSAL`.** When the canned refusal is returned it's because the guardrail repeatedly rejected, not necessarily because the KB lacked information. Checking the last generated answer gives the correct signal.
+
+---
+
 ## Session 7 (2026-04-28) — Guardrail Agent and Retry Loop
 
 ### What was built

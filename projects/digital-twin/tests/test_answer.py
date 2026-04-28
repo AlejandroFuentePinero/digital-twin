@@ -391,6 +391,7 @@ def test_answer_with_guardrail_returns_on_first_acceptable_answer():
         patch("answer.fetch_context", return_value=chunks),
         patch("answer.completion", return_value=mock_completion("good answer")),
         patch("answer.evaluate", return_value=make_evaluation(True)),
+        patch("answer.log_interaction"),
     ):
         answer, returned_chunks = answer_with_guardrail("question")
 
@@ -404,13 +405,13 @@ def test_answer_with_guardrail_retries_on_rejection():
 
     def fake_evaluate(*args, **kwargs):
         evaluate_calls.append(1)
-        # Reject first call, accept second
         return make_evaluation(len(evaluate_calls) > 1)
 
     with (
         patch("answer.fetch_context", return_value=chunks),
         patch("answer.completion", return_value=mock_completion("answer")),
         patch("answer.evaluate", side_effect=fake_evaluate),
+        patch("answer.log_interaction"),
     ):
         answer, _ = answer_with_guardrail("question")
 
@@ -423,6 +424,7 @@ def test_answer_with_guardrail_returns_canned_refusal_after_max_retries():
         patch("answer.fetch_context", return_value=chunks),
         patch("answer.completion", return_value=mock_completion("bad answer")),
         patch("answer.evaluate", return_value=make_evaluation(False, "still wrong")),
+        patch("answer.log_interaction"),
     ):
         answer, _ = answer_with_guardrail("question")
 
@@ -441,7 +443,70 @@ def test_answer_with_guardrail_evaluates_at_most_max_retries_plus_one_times():
         patch("answer.fetch_context", return_value=chunks),
         patch("answer.completion", return_value=mock_completion("answer")),
         patch("answer.evaluate", side_effect=fake_evaluate),
+        patch("answer.log_interaction"),
     ):
         answer_with_guardrail("question")
 
     assert len(evaluate_calls) == MAX_RETRIES + 1
+
+
+def test_answer_with_guardrail_logs_once_per_call():
+    chunks = [make_chunk("context")]
+    with (
+        patch("answer.fetch_context", return_value=chunks),
+        patch("answer.completion", return_value=mock_completion("good answer")),
+        patch("answer.evaluate", return_value=make_evaluation(True)),
+        patch("answer.log_interaction") as mock_log,
+    ):
+        answer_with_guardrail("question")
+
+    assert mock_log.call_count == 1
+
+
+def test_answer_with_guardrail_logs_retry_count():
+    chunks = [make_chunk("context")]
+    evaluate_calls = []
+
+    def fake_evaluate(*args, **kwargs):
+        evaluate_calls.append(1)
+        return make_evaluation(len(evaluate_calls) > 1)
+
+    with (
+        patch("answer.fetch_context", return_value=chunks),
+        patch("answer.completion", return_value=mock_completion("answer")),
+        patch("answer.evaluate", side_effect=fake_evaluate),
+        patch("answer.log_interaction") as mock_log,
+    ):
+        answer_with_guardrail("question")
+
+    _, _, _, _, retry_count, _ = mock_log.call_args[0]
+    assert retry_count == 1
+
+
+def test_answer_with_guardrail_logs_knew_answer_false_for_gap_phrase():
+    chunks = [make_chunk("context")]
+    gap_answer = "I don't have that information in my knowledge base."
+    with (
+        patch("answer.fetch_context", return_value=chunks),
+        patch("answer.completion", return_value=mock_completion(gap_answer)),
+        patch("answer.evaluate", return_value=make_evaluation(True)),
+        patch("answer.log_interaction") as mock_log,
+    ):
+        answer_with_guardrail("question")
+
+    _, _, _, knew_answer, _, _ = mock_log.call_args[0]
+    assert knew_answer is False
+
+
+def test_answer_with_guardrail_passes_session_id_to_log():
+    chunks = [make_chunk("context")]
+    with (
+        patch("answer.fetch_context", return_value=chunks),
+        patch("answer.completion", return_value=mock_completion("answer")),
+        patch("answer.evaluate", return_value=make_evaluation(True)),
+        patch("answer.log_interaction") as mock_log,
+    ):
+        answer_with_guardrail("question", session_id="test-session")
+
+    _, _, _, _, _, session_id = mock_log.call_args[0]
+    assert session_id == "test-session"

@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from tenacity import retry, wait_exponential
 
 from guardrail import evaluate
+from logger import log_interaction
 
 load_dotenv(override=True)
 
@@ -34,6 +35,8 @@ CANNED_REFUSAL = (
     "I'm sorry, I wasn't able to give you a satisfactory answer. "
     "Please reach out to Alejandro directly at alejandrofuentepinero@gmail.com."
 )
+# Must match the phrase in SYSTEM_PROMPT exactly — used to detect knowledge gaps in the log
+GAP_PHRASE = "I don't have that information in my knowledge base."
 
 wait = wait_exponential(multiplier=1, min=10, max=120)
 
@@ -281,14 +284,16 @@ def _rerun(
 
 
 def answer_with_guardrail(
-    question: str, history: list[dict] | None = None
+    question: str,
+    history: list[dict] | None = None,
+    session_id: str | None = None,
 ) -> tuple[str, list[Chunk]]:
     """
     Answer a question using RAG with a guardrail retry loop.
 
     Evaluates each answer before returning it. On rejection, reruns with feedback
     appended to the system prompt (max MAX_RETRIES retries). Returns a canned
-    refusal if all attempts fail evaluation.
+    refusal if all attempts fail evaluation. Every call is logged to disk.
 
     Returns:
         answer: accepted answer string, or CANNED_REFUSAL
@@ -300,12 +305,19 @@ def answer_with_guardrail(
     messages = make_rag_messages(question, history, chunks)
     answer = completion(model=MODEL, messages=messages).choices[0].message.content
 
+    retry_count = 0
     for _ in range(MAX_RETRIES):
         evaluation = evaluate(question, answer, history, context)
         if evaluation.is_acceptable:
+            log_interaction(question, answer, True, GAP_PHRASE not in answer, retry_count, session_id)
             return answer, chunks
+        retry_count += 1
         answer = _rerun(question, history, chunks, answer, evaluation.feedback)
 
     if evaluate(question, answer, history, context).is_acceptable:
+        log_interaction(question, answer, True, GAP_PHRASE not in answer, retry_count, session_id)
         return answer, chunks
+
+    # knew_answer checked against last generated answer, not the canned refusal
+    log_interaction(question, CANNED_REFUSAL, False, GAP_PHRASE not in answer, retry_count, session_id)
     return CANNED_REFUSAL, chunks

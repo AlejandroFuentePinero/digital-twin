@@ -25,14 +25,15 @@ projects/digital-twin/
 │   ├── answer.py              # ✅ Retrieval + generation + guardrail retry loop
 │   ├── agent.py               # 🔲 Main agent (tools, retry loop)
 │   ├── guardrail.py           # ✅ Quality gate evaluator
-│   ├── logger.py              # 🔲 HuggingFace Dataset logging
+│   ├── logger.py              # ✅ Append-only JSONL interaction logger
 │   └── app.py                 # 🔲 Gradio chat UI
 │
 ├── tests/
 │   ├── conftest.py            # ✅ sys.path injection for src/
 │   ├── test_ingest.py         # ✅ 16 tests for ingest.py
 │   ├── test_answer.py         # ✅ 31 tests for answer.py
-│   └── test_guardrail.py      # ✅ 13 tests for guardrail.py
+│   ├── test_guardrail.py      # ✅ 13 tests for guardrail.py
+│   └── test_logger.py         # ✅ 13 tests for logger.py
 │
 └── docs/
     ├── ARCHITECTURE.md        # This file
@@ -160,12 +161,28 @@ Called by `answer_with_guardrail` in `answer.py`. Returns `Evaluation`. On `is_a
 
 ---
 
-### `src/logger.py` 🔲
+### `src/logger.py` ✅
 
-Writes to three append-only JSONL logs in a private HuggingFace Dataset repository:
-- `user_sessions.jsonl` — session ID, question history, contact details, per-answer outcomes
-- `unknown_questions.jsonl` — question text, session ID, timestamp
-- `unacceptable_answers.jsonl` — question, answer attempts, guardrail feedback, final outcome
+Appends one record per `answer_with_guardrail` call to `data/logs/interactions.jsonl` (gitignored).
+
+**Record schema:**
+```json
+{
+  "timestamp": "2026-04-28T12:00:00+00:00",
+  "session_id": "abc-123",
+  "question": "What are his skills?",
+  "answer": "He knows Python...",
+  "is_acceptable": true,
+  "knew_answer": true,
+  "retry_count": 0
+}
+```
+
+- `knew_answer`: `false` when the answer contains `GAP_PHRASE` ("I don't have that information in my knowledge base.") — the signal for questions the KB cannot answer
+- `retry_count`: number of guardrail-rejected attempts before the final answer (0 = first attempt accepted)
+- `session_id`: optional; passed by `app.py` to link multi-turn conversation records
+
+**Production note:** local JSONL is the current storage. Replace `log_interaction` with a HuggingFace Dataset append when deploying to HF Spaces.
 
 ---
 

@@ -70,9 +70,10 @@ One deferred item:
 
 - [x] Guardrail agent: `{is_acceptable: bool, feedback: str}` after every answer
 - [x] Retry loop in `answer_with_guardrail` (max 2 retries, canned refusal on exhaustion)
-- [ ] `log_unknown_question` tool wired to HF Dataset JSONL
+- [x] Interaction logger: append-only JSONL at `data/logs/interactions.jsonl` — every call
+  logged with question, answer, is_acceptable, knew_answer, retry_count, session_id
+  TODO (production): replace local JSONL with HuggingFace Dataset write when deploying to HF Spaces
 - [ ] `log_user_details` tool with Pydantic model (name, company, role, email, phone — all optional)
-- [ ] All three HF Dataset logs writing correctly; session linkage intact
 
 ---
 
