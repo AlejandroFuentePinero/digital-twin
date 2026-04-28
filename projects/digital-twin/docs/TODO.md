@@ -4,7 +4,7 @@ Current project state and active task list. Updated each session.
 For architectural decisions and session logs see `DECISIONS.md`. For component design see `PLAN.md`.
 
 **Last updated:** 2026-04-28  
-**Current phase:** Phase 1 — Core RAG pipeline
+**Current phase:** Phase 1 complete → Phase 2 (eval baseline) + Phase 3 (guardrail) in progress
 
 ---
 
@@ -37,18 +37,20 @@ One deferred item:
 - [x] `tests/test_ingest.py` — 17 tests covering chunking, unsplit behaviour, metadata, enrichment, prompt context, and `enrich_all` order preservation (all passing)
 - [x] Verified: 106 chunks across 14 categories; SUMMARY.md and INDEX.md confirmed as un-split whole-document chunks
 
-### Retrieval and generation (`answer.py`)
+### Retrieval and generation (`answer.py`) — **done**
 
-- [ ] Query function: embed query with `text-embedding-3-small`, retrieve top-k chunks from ChromaDB
-- [ ] Rewrite query with LLM, run second retrieval pass, merge + deduplicate results
-- [ ] LLM rerank merged results against original question, select final top-k
-- [ ] System prompt establishing persona: "You are Alejandro de la Fuente's digital twin..."
-- [ ] Generation: pass top-k chunks + conversation history + system prompt to `gpt-4.1-nano` via `litellm`
-- [ ] Response structure: direct answer → supporting detail → relevant link (if available)
+- [x] `fetch_context_unranked` — embed query with `text-embedding-3-large`, retrieve top-20 chunks
+- [x] `rewrite_query` — LLM rewrites query for KB search; uses last 2 conversation turns for context
+- [x] `fetch_context` — dual retrieval (original + rewritten), merge + deduplicate, LLM rerank, return top-10
+- [x] `rerank` — structured output (`RankOrder`) with out-of-range / duplicate ID guard
+- [x] System prompt — scoped to professional background only; explicit in/out-of-scope lists; injection-resistant (named attack patterns, context-as-information-only rule)
+- [x] `make_rag_messages` — context labelled with `source_file` + `section_heading`; history threaded through
+- [x] `answer_question(question, history)` — main entry point; returns `(answer_str, chunks)` for eval
+- [x] `tenacity` retry on all LLM calls (`wait_exponential`, max 120s)
 
 ### Chat UI (`app.py`)
 
-- [ ] Gradio chat interface wrapping the answer function
+- [ ] Gradio chat interface wrapping `answer_with_guardrail`
 - [ ] Stateful conversation (pass history each turn)
 - [ ] Run locally, smoke test with 5–10 questions from the eval set
 
@@ -66,8 +68,8 @@ One deferred item:
 
 ## Phase 3 — Guardrail and agent tooling
 
-- [ ] Guardrail agent: `{is_acceptable: bool, feedback: str}` after every answer
-- [ ] Retry loop in main agent (max 2 retries); UX message during retry
+- [x] Guardrail agent: `{is_acceptable: bool, feedback: str}` after every answer
+- [x] Retry loop in `answer_with_guardrail` (max 2 retries, canned refusal on exhaustion)
 - [ ] `log_unknown_question` tool wired to HF Dataset JSONL
 - [ ] `log_user_details` tool with Pydantic model (name, company, role, email, phone — all optional)
 - [ ] All three HF Dataset logs writing correctly; session linkage intact

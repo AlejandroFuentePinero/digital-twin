@@ -28,6 +28,36 @@
 
 ---
 
+## Session 7 (2026-04-28) — Guardrail Agent and Retry Loop
+
+### What was built
+
+**`src/guardrail.py`** — Lightweight LLM evaluator. Receives the question, generated answer, conversation history, and the formatted context string passed to the answer model. Returns `Evaluation(is_acceptable: bool, feedback: str)`. Structured output via Pydantic + `response_format`. Six evaluation criteria: factual accuracy, scope, no fabrication, honesty about gaps, professional tone, injection resistance.
+
+Key design: evaluator receives the **same context string used by the answer model** so it can fact-check claims against KB content rather than general knowledge.
+
+**`src/answer.py` updates:**
+- `SYSTEM_PROMPT` — "say so directly: 'I don't have that information in my knowledge base.'" added as the explicit gap-signal phrase; tracked for unknown question logging
+- `MAX_RETRIES = 2`, `CANNED_REFUSAL` constant added
+- `_rerun(question, history, chunks, previous_answer, feedback)` — retry generation with previous answer + feedback appended to the system prompt under `## Previous answer rejected`
+- `answer_with_guardrail(question, history)` — full pipeline: generate → evaluate → rerun up to MAX_RETRIES times → final evaluate → canned refusal on exhaustion
+
+**`tests/test_guardrail.py`** — 13 tests: 6 for `_build_user_prompt` (content inclusion, history role labels, empty history), 7 for `evaluate` (return type, accept/reject paths, prompt content, system message position, response_format kwarg).
+
+**`tests/test_answer.py`** — expanded with 8 new tests: 4 for `_rerun` (feedback and previous answer in system prompt, history threading, return value), 4 for `answer_with_guardrail` retry loop (returns on first accept, retries on rejection, canned refusal after exhaustion, evaluation call count bounded by MAX_RETRIES + 1).
+
+**All 61 tests passing.**
+
+### Design decisions
+
+**Guardrail receives formatted context string, not raw chunks.** The evaluator needs to check factual claims against actual KB content. Passing the same formatted context string the answer model saw is the simplest way to achieve this without re-embedding.
+
+**`_rerun` appends to system prompt, not as a separate message.** Keeping rejection context in the system message avoids polluting the conversation history that the answer model will see, and ensures the model treats it as instructions rather than conversation.
+
+**Explicit gap phrase.** "I don't have that information in my knowledge base." is a trackable string — future logging can detect it and route questions to `log_unknown_question` without LLM classification overhead.
+
+---
+
 ## Session 5 (2026-04-25) — Full raw_me Audit and Link Completeness
 
 ### What was audited
