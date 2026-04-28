@@ -28,6 +28,44 @@
 
 ---
 
+## Session 9 (2026-04-28) — Evaluation Pipeline
+
+### What was built
+
+**`eval/run_eval.py`** — full evaluation pipeline. Loads `tests.jsonl`, runs every question through retrieval and answer pipelines, computes metrics, and writes a versioned result file.
+
+**Retrieval metrics (per question, per category, overall):**
+- MRR (Mean Reciprocal Rank) — average across all keywords in the test question
+- nDCG (Normalised Discounted Cumulative Gain, binary relevance, k=10) — average across keywords
+- Keyword coverage — percentage of keywords found anywhere in the top-k results
+
+**Answer metrics (LLM-as-judge, 1–5):**
+- Accuracy — factual correctness vs reference answer; any factual error scores 1
+- Completeness — covers all information in the reference answer
+- Relevance — directly answers the question with no padding
+
+**Gap rate** — fraction of questions where the system responded with `GAP_PHRASE` ("I don't know"); tracked in summary alongside answer quality.
+
+**Result file:** `eval/results/v{N}_{date}.json`. Auto-versioned (max existing N + 1). Includes full architecture snapshot (model, embed model, RETRIEVAL_K, FINAL_K, chunk count from ChromaDB, KB files from disk, notes). Snapshots are runtime-generated — never stale.
+
+**System prompt hardened**: "I don't know" instruction now says "use this exact wording verbatim — it is used for logging and gap tracking" to prevent paraphrasing that would break gap detection.
+
+**`tests/test_eval.py`** — 26 tests. Covers: `_reciprocal_rank` (case-insensitive, position, empty), `_dcg` (rank weighting, k cutoff), `_ndcg` (perfect, zero, partial), `_mean`, `_agg_retrieval/_agg_answer`, `_next_version` (versioning logic), `load_tests` (JSONL parse, blank lines), `eval_retrieval` (mocked fetch_context).
+
+**All 103 tests passing.**
+
+### Design decisions
+
+**`EvalQuestion` not `TestQuestion`** — renamed to avoid pytest treating it as a test class (warning suppression).
+
+**`answer_question` not `answer_with_guardrail` for eval** — the guardrail is a safety gate, not a quality improvement. Evaluating raw answer quality gives a cleaner signal; guardrail acceptance rate is a separate concern.
+
+**Architecture snapshot at runtime** — chunk count from live ChromaDB, KB files from disk. This is always accurate and removes the risk of stale documentation diverging from reality.
+
+**Gap rate in summary** — surfaces knowledge gaps immediately in the printed output, without needing to scan per-question records.
+
+---
+
 ## Session 8 (2026-04-28) — Interaction Logger
 
 ### What was built

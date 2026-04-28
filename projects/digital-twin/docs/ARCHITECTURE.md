@@ -17,7 +17,8 @@ projects/digital-twin/
 │   ├── raw_me/                # Source material — never ingested directly
 │   └── eval/
 │       ├── tests.jsonl        # 149 Q&A pairs across 7 categories
-│       └── results/           # Versioned eval output files (planned)
+│       ├── run_eval.py        # ✅ Evaluation pipeline (MRR, nDCG, LLM-as-judge)
+│       └── results/           # Versioned eval output files (v{N}_{date}.json)
 │
 ├── src/
 │   ├── ingest.py              # ✅ KB → ChromaDB ingestion pipeline
@@ -125,6 +126,31 @@ from answer import answer_question
 ans, chunks = answer_question('What AI projects has Alejandro built?')
 print(ans)
 "
+```
+
+---
+
+### `eval/run_eval.py` ✅
+
+Evaluation pipeline. Runs all 149 test questions through the retrieval and answer pipeline; writes a versioned JSON result file to `eval/results/`.
+
+**Metrics computed:**
+- Retrieval: MRR, nDCG, keyword coverage — per question, per category, overall
+- Answer: accuracy, completeness, relevance (1–5 LLM-as-judge) — per question, per category, overall
+- Gap rate: fraction of questions where the system responded with the gap phrase
+
+**Result file schema:** `run_id`, `timestamp`, `architecture` snapshot (model, embed model, RETRIEVAL_K, FINAL_K, chunk count, KB files, notes), `summary`, `by_category`, `per_question` (full detail).
+
+**Architecture snapshot** is auto-generated at run time by querying ChromaDB and listing KB files — always accurate, never stale.
+
+**Versioning:** files are named `v{N}_{date}.json` where N auto-increments. Commit result files to track performance over time.
+
+**Run:**
+```bash
+uv run projects/digital-twin/eval/run_eval.py
+uv run projects/digital-twin/eval/run_eval.py --notes "after reranker change"
+uv run projects/digital-twin/eval/run_eval.py --retrieval-only   # skip LLM judge
+uv run projects/digital-twin/eval/run_eval.py --answer-only      # skip retrieval
 ```
 
 ---

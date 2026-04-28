@@ -58,10 +58,12 @@ One deferred item:
 
 ## Phase 2 — Evaluation baseline
 
-- [ ] Write `eval/run_eval.py`: iterate over `tests.jsonl`, call answer pipeline, collect outputs
-- [ ] Retrieval metrics: MRR, nDCG, keyword coverage (per category + aggregate)
-- [ ] Answer metrics: LLM-as-judge (accuracy, completeness, relevance, appropriateness — 1–5)
-- [ ] Write results to `eval/results/v1_{date}.json` with architecture notes field
+- [x] Write `eval/run_eval.py`: iterate over `tests.jsonl`, call answer pipeline, collect outputs
+- [x] Retrieval metrics: MRR, nDCG, keyword coverage (per category + aggregate)
+- [x] Answer metrics: LLM-as-judge (accuracy, completeness, relevance — 1–5)
+- [x] Results written to `eval/results/v{N}_{date}.json` — auto-versioned with full architecture snapshot
+- [x] Gap rate tracked: fraction of questions where system responded "I don't know"
+- [ ] Run baseline eval and commit v1 results
 - [ ] Review results, identify weakest categories
 
 ---
