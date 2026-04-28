@@ -38,6 +38,9 @@ RESULTS_DIR = Path(__file__).parent / "results"
 DB_PATH = str(Path(__file__).parent.parent / "data" / "preprocessed_db")
 KB_DIR = Path(__file__).parent.parent / "data" / "knowledge_base"
 
+# Separate model for judging — should be stronger than the model under evaluation
+JUDGE_MODEL = "openai/gpt-4.1"
+
 wait = wait_exponential(multiplier=1, min=10, max=120)
 
 # ---------------------------------------------------------------------------
@@ -137,7 +140,7 @@ def eval_answer(test: EvalQuestion) -> tuple[AnswerResult, str]:
             ),
         },
     ]
-    response = completion(model=MODEL, messages=messages, response_format=AnswerResult)
+    response = completion(model=JUDGE_MODEL, messages=messages, response_format=AnswerResult)
     result = AnswerResult.model_validate_json(response.choices[0].message.content)
     return result, generated
 
@@ -170,6 +173,7 @@ def _architecture_snapshot(notes: str) -> dict:
     kb_files = sorted(p.name for p in KB_DIR.glob("*.md"))
     return {
         "model": MODEL,
+        "judge_model": JUDGE_MODEL,
         "embed_model": "text-embedding-3-large",
         "retrieval_k": RETRIEVAL_K,
         "final_k": FINAL_K,
@@ -217,7 +221,7 @@ def run_eval(notes: str = "", retrieval_only: bool = False, answer_only: bool = 
     run_id = f"v{version}_{date}"
 
     print(f"\nEval run: {run_id}  ({len(tests)} questions)")
-    print(f"Model: {MODEL}  RETRIEVAL_K={RETRIEVAL_K}  FINAL_K={FINAL_K}")
+    print(f"Answer model: {MODEL}  Judge: {JUDGE_MODEL}  RETRIEVAL_K={RETRIEVAL_K}  FINAL_K={FINAL_K}")
     if notes:
         print(f"Notes: {notes}")
     print()
