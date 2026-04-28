@@ -1,6 +1,6 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
-from ingest import ChunkEnrichment, enrich_chunk, load_chunks, split_on_headings
+from ingest import ChunkEnrichment, enrich_all, enrich_chunk, load_chunks, split_on_headings
 
 
 # --- split_on_headings ---
@@ -19,7 +19,6 @@ def test_h2_sections_become_separate_chunks():
 def test_h3_headings_are_kept_as_content_within_h2_chunk():
     text = "# Title\n\n## Parent\n\n### Sub A\nContent A.\n\n### Sub B\nContent B.\n"
     chunks = split_on_headings(text, "test.md", "test")
-    # ### headings are body content inside the ## section, not split points
     assert len(chunks) == 1
     assert chunks[0]["section_heading"] == "Parent"
     assert chunks[0]["heading_level"] == 2
@@ -62,16 +61,30 @@ def test_h4_headings_do_not_cause_splits():
     assert "#### Deep heading" in chunks[0]["text"]
 
 
-def test_editorial_services_section_is_captured():
-    # A real but short section — ensures no length-based filtering
+def test_short_section_is_not_filtered_out():
+    # No minimum word count — short but real sections must be kept
     text = (
         "# Education\n\n"
         "## Editorial Services (peer reviewer)\n"
-        "Functional Ecology · PeerJ · Biodiversity and Conservation · One Earth · Ecology and Evolution\n"
+        "Functional Ecology · PeerJ · Biodiversity and Conservation\n"
     )
     chunks = split_on_headings(text, "education.md", "education")
     assert len(chunks) == 1
     assert chunks[0]["section_heading"] == "Editorial Services (peer reviewer)"
+
+
+def test_each_chunk_contains_only_its_own_section_content():
+    # Section One's content must not bleed into Section Two and vice versa
+    text = (
+        "# Title\n\n"
+        "## Section One\nExclusive content A.\n\n"
+        "## Section Two\nExclusive content B.\n"
+    )
+    chunks = split_on_headings(text, "test.md", "test")
+    assert "Exclusive content A" in chunks[0]["text"]
+    assert "Exclusive content A" not in chunks[1]["text"]
+    assert "Exclusive content B" in chunks[1]["text"]
+    assert "Exclusive content B" not in chunks[0]["text"]
 
 
 # --- load_chunks ---
@@ -89,11 +102,12 @@ def test_index_is_a_single_unsplit_chunk():
     assert len(index) == 1
 
 
-def test_other_files_are_split_into_multiple_chunks():
+def test_multi_section_files_are_split():
     chunks = load_chunks()
-    # publications.md has 7 first-author papers as ### sections plus co-authored section
-    pub_chunks = [c for c in chunks if c["source_file"] == "publications.md"]
-    assert len(pub_chunks) > 5
+    # Both research files have many ## sections — verify they're not stored whole
+    for filename in ("publications.md", "research_projects_detail.md", "experience.md"):
+        file_chunks = [c for c in chunks if c["source_file"] == filename]
+        assert len(file_chunks) > 1, f"{filename} should produce multiple chunks"
 
 
 def test_all_chunks_have_required_metadata():
@@ -113,13 +127,15 @@ def test_category_mapping_is_correct():
     assert by_file["INDEX.md"] == "index"
     assert by_file["publications.md"] == "publications"
     assert by_file["projects_ai_flagship.md"] == "projects"
+    assert by_file["projects_skill_labs.md"] == "projects"
     assert by_file["research_overview.md"] == "research"
+    assert by_file["research_projects_detail.md"] == "research"
 
 
 # --- enrich_chunk ---
 
 
-def test_enrich_chunk_adds_headline_and_summary():
+def test_enrich_chunk_output_merges_enrichment_with_original():
     chunk = {
         "text": "Alejandro speaks Spanish natively and English professionally.",
         "section_heading": "Languages",
@@ -129,52 +145,61 @@ def test_enrich_chunk_adds_headline_and_summary():
     }
     mock_response = MagicMock()
     mock_response.choices[0].message.parsed = ChunkEnrichment(
-        headline="Languages Alejandro speaks",
-        summary="Alejandro is a native Spanish speaker with professional-level English.",
+        headline="What languages does Alejandro speak?",
+        summary="Alejandro is a native Spanish speaker with professional English.",
     )
     with patch("ingest.client.beta.chat.completions.parse", return_value=mock_response):
         enriched = enrich_chunk(chunk)
 
-    assert enriched["headline"] == "Languages Alejandro speaks"
-    assert enriched["summary"] == "Alejandro is a native Spanish speaker with professional-level English."
+    # Enrichment fields added
+    assert enriched["headline"] == "What languages does Alejandro speak?"
+    assert enriched["summary"] == "Alejandro is a native Spanish speaker with professional English."
+    # Original fields preserved unchanged
+    assert enriched["text"] == chunk["text"]
+    assert enriched["section_heading"] == "Languages"
+    assert enriched["heading_level"] == 2
+    assert enriched["source_file"] == "skills.md"
+    assert enriched["category"] == "skills"
 
 
-def test_enrich_chunk_preserves_original_text():
-    original_text = "Some original content that must not be altered."
+def test_enrich_chunk_includes_source_context_in_prompt():
+    # The prompt must include source_file and section_heading so the LLM can
+    # generate contextually appropriate headlines — dropping either would degrade quality
     chunk = {
-        "text": original_text,
-        "section_heading": "Test",
+        "text": "Some content.",
+        "section_heading": "Key Research Skills",
         "heading_level": 2,
-        "source_file": "test.md",
-        "category": "test",
+        "source_file": "skills.md",
+        "category": "skills",
     }
     mock_response = MagicMock()
-    mock_response.choices[0].message.parsed = ChunkEnrichment(
-        headline="Test headline",
-        summary="One sentence summary.",
-    )
-    with patch("ingest.client.beta.chat.completions.parse", return_value=mock_response):
-        enriched = enrich_chunk(chunk)
+    mock_response.choices[0].message.parsed = ChunkEnrichment(headline="h", summary="s")
 
-    assert enriched["text"] == original_text
+    with patch("ingest.client.beta.chat.completions.parse", return_value=mock_response) as mock_call:
+        enrich_chunk(chunk)
+
+    prompt = mock_call.call_args[1]["messages"][0]["content"]
+    assert "skills.md" in prompt
+    assert "Key Research Skills" in prompt
 
 
-def test_enrich_chunk_preserves_all_metadata():
-    chunk = {
-        "text": "Content.",
-        "section_heading": "My Section",
-        "heading_level": 3,
-        "source_file": "identity.md",
-        "category": "identity",
-    }
-    mock_response = MagicMock()
-    mock_response.choices[0].message.parsed = ChunkEnrichment(
-        headline="Headline", summary="Summary."
-    )
-    with patch("ingest.client.beta.chat.completions.parse", return_value=mock_response):
-        enriched = enrich_chunk(chunk)
+# --- enrich_all ---
 
-    assert enriched["section_heading"] == "My Section"
-    assert enriched["heading_level"] == 3
-    assert enriched["source_file"] == "identity.md"
-    assert enriched["category"] == "identity"
+
+def test_enrich_all_preserves_input_order():
+    # enrich_all uses ThreadPoolExecutor and as_completed, which completes futures in
+    # arbitrary order. The indexing logic must write results back to their original position.
+    chunks = [
+        {"id": i, "text": f"chunk {i}", "section_heading": f"s{i}",
+         "heading_level": 2, "source_file": "test.md", "category": "test"}
+        for i in range(10)
+    ]
+
+    def mock_enrich(chunk):
+        return {**chunk, "headline": f"h{chunk['id']}", "summary": f"s{chunk['id']}"}
+
+    with patch("ingest.enrich_chunk", side_effect=mock_enrich):
+        result = enrich_all(chunks)
+
+    assert [c["id"] for c in result] == list(range(10))
+    assert [c["headline"] for c in result] == [f"h{i}" for i in range(10)]

@@ -83,7 +83,7 @@ Inserts `src/` into `sys.path` so test files can import from `src/` without pack
 
 ### `tests/test_ingest.py` ✅
 
-16 tests covering `split_on_headings`, `load_chunks`, and `enrich_chunk`. Tests verify: `##` splits, preamble handling, `###` stays as body content, `UNSPLIT` files are not split, all metadata fields present, category mapping correct, enrichment adds headline/summary without altering original text.
+17 tests covering `split_on_headings`, `load_chunks`, `enrich_chunk`, and `enrich_all`. Tests verify: `##` splits, section content boundaries, preamble handling, `###` stays as body content, `UNSPLIT` files are not split, all metadata fields present, category mapping correct, enrichment merges headline/summary without altering original fields, prompt includes source context, and `enrich_all` preserves input order despite concurrent completion.
 
 Run: `uv run pytest projects/digital-twin/tests/test_ingest.py -v`
 

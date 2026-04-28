@@ -34,7 +34,7 @@ One deferred item:
   - [x] Stored in ChromaDB `PersistentClient` at `data/preprocessed_db/`, collection `digital_twin`
   - [x] Re-ingest is idempotent (delete + recreate collection)
 - [x] `sample_chunks.py` — inspection utility: sample N random chunks with optional `--category` / `--source` / `--seed` filters
-- [x] `tests/test_ingest.py` — 16 tests covering chunking, unsplit behaviour, metadata, and enrichment (all passing)
+- [x] `tests/test_ingest.py` — 17 tests covering chunking, unsplit behaviour, metadata, enrichment, prompt context, and `enrich_all` order preservation (all passing)
 - [x] Verified: 106 chunks across 14 categories; SUMMARY.md and INDEX.md confirmed as un-split whole-document chunks
 
 ### Retrieval and generation (`answer.py`)
