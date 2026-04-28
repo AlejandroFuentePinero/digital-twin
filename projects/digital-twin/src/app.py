@@ -11,6 +11,8 @@ from pathlib import Path
 import gradio as gr
 from dotenv import load_dotenv
 
+MAX_HISTORY_TURNS = 10  # keep last N user+assistant pairs to cap context window
+
 load_dotenv(override=True)
 
 import sys
@@ -21,7 +23,7 @@ def respond(message: str, history: list[dict], session_id: str) -> tuple[str, li
     """Called on every user message. Maintains history in Gradio's messages format."""
     chat_history = [
         {"role": m["role"], "content": m["content"]}
-        for m in history
+        for m in history[-(MAX_HISTORY_TURNS * 2):]  # each turn = 1 user + 1 assistant msg
     ]
     reply, _ = answer_with_guardrail(message, chat_history, session_id=session_id)
     history.append({"role": "user", "content": message})

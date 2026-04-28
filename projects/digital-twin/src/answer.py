@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 from litellm import completion
 from openai import OpenAI
 from pydantic import BaseModel, Field
-from tenacity import retry, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from guardrail import evaluate
 from logger import log_interaction
@@ -27,10 +27,11 @@ load_dotenv(override=True)
 DB_PATH = str(Path(__file__).parent.parent / "data" / "preprocessed_db")
 COLLECTION = "digital_twin"
 EMBED_MODEL = "text-embedding-3-large"
-MODEL = "openai/gpt-4.1-nano"
+MODEL = "openai/gpt-4.1"
+REWRITE_MODEL = "openai/gpt-4.1-nano"
 RETRIEVAL_K = 20
 FINAL_K = 10
-MAX_RETRIES = 2
+MAX_ATTEMPTS = 3  # total generation attempts (1 initial + 2 retries)
 CANNED_REFUSAL = (
     "I'm sorry, I wasn't able to give you a satisfactory answer. "
     "Please reach out to Alejandro directly at alejandrofuentepinero@gmail.com."
@@ -39,6 +40,7 @@ CANNED_REFUSAL = (
 GAP_PHRASE = "I don't have that information in my knowledge base."
 
 wait = wait_exponential(multiplier=1, min=10, max=120)
+stop = stop_after_attempt(5)
 
 openai_client = OpenAI()
 chroma = PersistentClient(path=DB_PATH)
@@ -156,7 +158,7 @@ def merge_chunks(primary: list[Chunk], secondary: list[Chunk]) -> list[Chunk]:
     return primary + [c for c in secondary if c.page_content not in seen]
 
 
-@retry(wait=wait)
+@retry(wait=wait, stop=stop)
 def rewrite_query(question: str, history: list[dict] | None = None) -> str:
     """Rewrite the user's question as a short, search-optimised KB query."""
     history_text = ""
@@ -178,11 +180,11 @@ Write a short, precise search query (under 15 words) that will surface the most 
 content from the knowledge base. Focus on specific skills, projects, roles, or topics named \
 in the question. Respond with the query only — no explanation, no punctuation at the end."""
 
-    response = completion(model=MODEL, messages=[{"role": "user", "content": prompt}])
+    response = completion(model=REWRITE_MODEL, messages=[{"role": "user", "content": prompt}])
     return response.choices[0].message.content.strip()
 
 
-@retry(wait=wait)
+@retry(wait=wait, stop=stop)
 def rerank(question: str, chunks: list[Chunk]) -> list[Chunk]:
     """Reorder chunks by relevance to the original question."""
     system = (
@@ -240,9 +242,9 @@ def _format_context(chunks: list[Chunk]) -> str:
 
 
 def make_rag_messages(
-    question: str, history: list[dict], chunks: list[Chunk]
+    question: str, history: list[dict], context: str
 ) -> list[dict]:
-    system = SYSTEM_PROMPT.format(context=_format_context(chunks))
+    system = SYSTEM_PROMPT.format(context=context)
     return (
         [{"role": "system", "content": system}]
         + history
@@ -250,7 +252,7 @@ def make_rag_messages(
     )
 
 
-@retry(wait=wait)
+@retry(wait=wait, stop=stop)
 def answer_question(
     question: str, history: list[dict] | None = None
 ) -> tuple[str, list[Chunk]]:
@@ -263,22 +265,23 @@ def answer_question(
     """
     history = history or []
     chunks = fetch_context(question, history)
-    messages = make_rag_messages(question, history, chunks)
+    context = _format_context(chunks)
+    messages = make_rag_messages(question, history, context)
     response = completion(model=MODEL, messages=messages)
     return response.choices[0].message.content, chunks
 
 
-@retry(wait=wait)
+@retry(wait=wait, stop=stop)
 def _rerun(
     question: str,
     history: list[dict],
-    chunks: list[Chunk],
+    context: str,
     previous_answer: str,
     feedback: str,
 ) -> str:
     """Retry generation with guardrail feedback appended to the system prompt."""
     updated_system = (
-        SYSTEM_PROMPT.format(context=_format_context(chunks))
+        SYSTEM_PROMPT.format(context=context)
         + "\n\n## Previous answer rejected\n"
         "Your previous response did not meet quality standards. "
         "Review the feedback and improve your answer.\n\n"
@@ -303,7 +306,7 @@ def answer_with_guardrail(
     Answer a question using RAG with a guardrail retry loop.
 
     Evaluates each answer before returning it. On rejection, reruns with feedback
-    appended to the system prompt (max MAX_RETRIES retries). Returns a canned
+    appended to the system prompt (up to MAX_ATTEMPTS total). Returns a canned
     refusal if all attempts fail evaluation. Every call is logged to disk.
 
     Returns:
@@ -313,22 +316,18 @@ def answer_with_guardrail(
     history = history or []
     chunks = fetch_context(question, history)
     context = _format_context(chunks)
-    messages = make_rag_messages(question, history, chunks)
-    answer = completion(model=MODEL, messages=messages).choices[0].message.content
+    answer = completion(
+        model=MODEL, messages=make_rag_messages(question, history, context)
+    ).choices[0].message.content
 
-    retry_count = 0
-    for _ in range(MAX_RETRIES):
+    for attempt in range(MAX_ATTEMPTS):
         evaluation = evaluate(question, answer, history, context)
         if evaluation.is_acceptable:
-            log_interaction(question, answer, True, GAP_PHRASE not in answer, retry_count, session_id)
+            log_interaction(question, answer, True, GAP_PHRASE not in answer, attempt, session_id)
             return answer, chunks
-        retry_count += 1
-        answer = _rerun(question, history, chunks, answer, evaluation.feedback)
-
-    if evaluate(question, answer, history, context).is_acceptable:
-        log_interaction(question, answer, True, GAP_PHRASE not in answer, retry_count, session_id)
-        return answer, chunks
+        if attempt < MAX_ATTEMPTS - 1:
+            answer = _rerun(question, history, context, answer, evaluation.feedback)
 
     # knew_answer checked against last generated answer, not the canned refusal
-    log_interaction(question, CANNED_REFUSAL, False, GAP_PHRASE not in answer, retry_count, session_id)
+    log_interaction(question, CANNED_REFUSAL, False, GAP_PHRASE not in answer, MAX_ATTEMPTS, session_id)
     return CANNED_REFUSAL, chunks

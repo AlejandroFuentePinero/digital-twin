@@ -26,7 +26,7 @@ from chromadb import PersistentClient
 from dotenv import load_dotenv
 from litellm import completion
 from pydantic import BaseModel, Field
-from tenacity import retry, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from answer import FINAL_K, GAP_PHRASE, MODEL, RETRIEVAL_K, answer_question, fetch_context
@@ -42,6 +42,7 @@ KB_DIR = Path(__file__).parent.parent / "data" / "knowledge_base"
 JUDGE_MODEL = "openai/gpt-4.1"
 
 wait = wait_exponential(multiplier=1, min=10, max=120)
+stop = stop_after_attempt(5)
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -114,7 +115,7 @@ def eval_retrieval(test: EvalQuestion) -> RetrievalResult:
 # ---------------------------------------------------------------------------
 
 
-@retry(wait=wait)
+@retry(wait=wait, stop=stop)
 def eval_answer(test: EvalQuestion) -> tuple[AnswerResult, str]:
     generated, _ = answer_question(test.question)
     messages = [

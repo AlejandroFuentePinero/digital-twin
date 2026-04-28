@@ -28,6 +28,72 @@
 
 ---
 
+## Session 11 (2026-04-28) — Model Upgrades, Code Quality Fixes, Eval v2/v3, Comparison Plot
+
+### What was built
+
+**Model upgrades:**
+- Answer model: `gpt-4.1-nano` → `gpt-4.1` — big quality jump; gap rate collapsed from 14.1% to 0%
+- Guardrail model: `gpt-4.1-nano` → `anthropic/claude-sonnet-4-6` — different model family to avoid sycophancy and correlated evaluation failures. Interview story: "I deliberately use a different model family for the judge."
+- Query rewrite model: kept at `gpt-4.1-nano` — simple task that doesn't benefit from a stronger model; cost saving
+- Reranking stays on `gpt-4.1` — this is where quality is most sensitive
+
+**Code quality fixes (from Opus architectural review):**
+- `stop_after_attempt(5)` added to all `@retry` decorators in `answer.py`, `guardrail.py`, `run_eval.py` — previously would loop forever on persistent API errors
+- `_format_context` double-call eliminated: `answer_with_guardrail` now formats context once and passes the string through to both the guardrail and generation calls. `make_rag_messages` and `_rerun` signatures changed from `chunks: list[Chunk]` to `context: str`
+- `MAX_RETRIES` → `MAX_ATTEMPTS = 3`: the old loop had a duplicated final `evaluate()` call outside the loop (fragile). Consolidated into a single `for attempt in range(MAX_ATTEMPTS)` loop; rerun only fires if `attempt < MAX_ATTEMPTS - 1`
+- `REWRITE_MODEL = "openai/gpt-4.1-nano"` extracted as a separate constant — makes model assignment explicit
+- History truncation in `app.py`: last 10 turns only passed to the pipeline, preventing silent context-window exhaustion on long sessions
+
+**Eval runs:**
+- v2 (gpt-4.1 + reasoning prompt + KB fixes): MRR=0.865, acc=4.48, gap=0.0%
+- v3 (Claude Sonnet guardrail + fresh ingest + all code fixes): MRR=0.868, acc=4.46, gap=0.7%
+- Tiny score variance v2→v3 is expected judge variability (different model family, different calibration)
+
+**Cross-run comparison plot:** `eval/plot_eval.py` — loads all `v*.json` result files, produces a 3×3 grid: retrieval metrics (MRR, nDCG, coverage) × categories, answer metrics (accuracy, completeness, relevance) × categories, plus overall trend lines and gap rate bar chart. `--runs` and `--output` flags. Saved to `eval/results/comparison.png`.
+
+### Architectural decisions
+
+**Skipped from Opus review:**
+- Hybrid BM25 + cross-encoder: KB is 107 chunks, MRR already 0.868. BM25 adds a separate index to maintain with marginal gain on a small curated corpus. Cross-encoder adds a model dependency. Both become relevant if the KB grows to thousands of chunks or if retrieval starts degrading.
+- Full async pipeline: single-user portfolio app, sequential adds ~200ms, not felt.
+- Streaming: valid UX improvement, deferred to deployment phase.
+- Rate limiting, PII handling, HF Dataset migration: all deployment-phase concerns.
+
+### Weakness analysis from eval data
+- **Holistic MRR 0.727 is a metric artifact.** Answer quality is 4.67/5 — the system handles holistic questions well. MRR penalises queries whose keywords are naturally distributed across the KB. No fix needed.
+- **Temporal MRR 0.783, coverage 80% — KB structure issue.** Dates buried in prose don't surface in chunk headlines. Fix: dedicated timeline section with explicit year anchors.
+- **Numerical completeness 3.94/5 — generation behaviour.** Retrieval is finding the right chunks (MRR 0.863). Model drops specific numbers in answers. Fix: targeted SYSTEM_PROMPT instruction.
+
+---
+
+## Session 10 (2026-04-28) — Agentic AI Retrieval Fix + System Prompt Reasoning Unlock
+
+### Problem
+Two related issues caused the system to fail on valid, in-scope questions:
+
+1. **Over-constrained system prompt.** Framing the model as a "lookup tool" with strict "answer only from retrieved context" wording prevented synthesis queries like "what are Alejandro's top publications?" and regional queries like "experience in South America". The model refused rather than reasoned.
+
+2. **Chunk headline mismatch for agentic AI content.** The `projects_ai_flagship.md` LLM Price Predictor `##` section had 7 numbered stages; the autonomous agent system was stage 6. The LLM enrichment headline for that chunk read "An end-to-end ML system forecasting Amazon prices using RAG and ensemble modeling" — no agentic signal. For "tell me about a project using agentic AI", the reranker surfaced "Flight Booking Agentic Tool" (rank 2 via "Other Supporting Projects" chunk) instead of the actual flagship autonomous agent system.
+
+### Fixes
+
+**KB fix — `experience.md`:** Added "South America" to section headings for Bolivia, Chile, and Peru roles (e.g. `**2017 – 2018 | Bolivia, South America**`) and to "Peru (South America)" in field experience. Regional query now surfaces the correct chunks.
+
+**KB fix — `projects_ai_flagship.md`:** Added a dedicated `## LLM Price Predictor — Autonomous Agent System` section between LLM Price Predictor and Expert Knowledge Worker. This section describes the AutonomousPlanningAgent, ScannerAgent, EnsembleAgent, MessagingAgent, and agentic design patterns (LLM-as-planner, tool use, continuous operation, observability). At re-ingest, this gets its own chunk with its own enriched headline — now rank 1 for "agentic AI" queries.
+
+**System prompt rewrite (`src/answer.py`):** Replaced lookup-tool framing with reasoning-agent framing. Key changes:
+- "use it to think, synthesise, and give genuinely useful answers" instead of "answer solely from the retrieved context"
+- `## How to answer` section added: reason over context, use partial context, gap phrase as last resort only, no fabrication
+- Gap phrase instruction changed from "say so directly" to "last resort only — only if retrieved context contains nothing relevant at all"
+
+**Re-ingest:** 107 chunks (up from 106); projects category grew from 13 to 14 chunks. Verified: "tell me about a project using agentic AI" retrieves autonomous agent chunk as rank 1 and generates a correct, detailed answer naming ScannerAgent/EnsembleAgent/AutonomousPlanningAgent.
+
+### Eval v2 needed
+Both the prompt rewrite and KB changes justify a v2 eval run to quantify improvement in gap rate and answer quality.
+
+---
+
 ## Session 9 (2026-04-28) — Evaluation Pipeline
 
 ### What was built

@@ -15,7 +15,7 @@ import pytest
 from answer import (
     CANNED_REFUSAL,
     FINAL_K,
-    MAX_RETRIES,
+    MAX_ATTEMPTS,
     Chunk,
     RankOrder,
     _format_context,
@@ -139,12 +139,11 @@ def test_format_context_handles_missing_metadata_gracefully():
 
 
 def test_make_rag_messages_structure():
-    chunks = [make_chunk("some context")]
     history = [
         {"role": "user", "content": "previous question"},
         {"role": "assistant", "content": "previous answer"},
     ]
-    messages = make_rag_messages("current question", history, chunks)
+    messages = make_rag_messages("current question", history, "some context")
 
     assert messages[0]["role"] == "system"
     assert messages[1]["role"] == "user"
@@ -155,16 +154,14 @@ def test_make_rag_messages_structure():
 
 
 def test_make_rag_messages_context_appears_in_system_prompt():
-    chunks = [make_chunk("Alejandro's PhD was at James Cook University.")]
-    messages = make_rag_messages("Where did he study?", [], chunks)
+    messages = make_rag_messages("Where did he study?", [], "Alejandro's PhD was at James Cook University.")
 
     system_content = messages[0]["content"]
     assert "James Cook University" in system_content
 
 
 def test_make_rag_messages_with_no_history():
-    chunks = [make_chunk("context")]
-    messages = make_rag_messages("question", [], chunks)
+    messages = make_rag_messages("question", [], "context")
 
     assert len(messages) == 2  # system + user
     assert messages[0]["role"] == "system"
@@ -339,18 +336,16 @@ def test_answer_question_limits_context_to_final_k():
 
 
 def test_rerun_appends_previous_answer_to_system_prompt():
-    chunks = [make_chunk("context")]
     with patch("answer.completion", return_value=mock_completion("revised answer")) as mock_call:
-        _rerun("question", [], chunks, "bad answer", "Answer was off-topic.")
+        _rerun("question", [], "context text", "bad answer", "Answer was off-topic.")
 
     system_content = mock_call.call_args[1]["messages"][0]["content"]
     assert "bad answer" in system_content
 
 
 def test_rerun_appends_feedback_to_system_prompt():
-    chunks = [make_chunk("context")]
     with patch("answer.completion", return_value=mock_completion("revised answer")) as mock_call:
-        _rerun("question", [], chunks, "bad answer", "Answer was off-topic.")
+        _rerun("question", [], "context text", "bad answer", "Answer was off-topic.")
 
     system_content = mock_call.call_args[1]["messages"][0]["content"]
     assert "Answer was off-topic." in system_content
@@ -358,9 +353,8 @@ def test_rerun_appends_feedback_to_system_prompt():
 
 def test_rerun_threads_history_into_messages():
     history = [{"role": "user", "content": "prev"}, {"role": "assistant", "content": "reply"}]
-    chunks = [make_chunk("context")]
     with patch("answer.completion", return_value=mock_completion("revised")) as mock_call:
-        _rerun("question", history, chunks, "bad answer", "feedback")
+        _rerun("question", history, "context text", "bad answer", "feedback")
 
     messages = mock_call.call_args[1]["messages"]
     roles = [m["role"] for m in messages]
@@ -368,9 +362,8 @@ def test_rerun_threads_history_into_messages():
 
 
 def test_rerun_returns_new_answer_string():
-    chunks = [make_chunk("context")]
     with patch("answer.completion", return_value=mock_completion("revised answer")):
-        result = _rerun("question", [], chunks, "old answer", "feedback")
+        result = _rerun("question", [], "context text", "old answer", "feedback")
 
     assert result == "revised answer"
 
@@ -431,7 +424,7 @@ def test_answer_with_guardrail_returns_canned_refusal_after_max_retries():
     assert answer == CANNED_REFUSAL
 
 
-def test_answer_with_guardrail_evaluates_at_most_max_retries_plus_one_times():
+def test_answer_with_guardrail_evaluates_at_most_max_attempts_times():
     chunks = [make_chunk("context")]
     evaluate_calls = []
 
@@ -447,7 +440,7 @@ def test_answer_with_guardrail_evaluates_at_most_max_retries_plus_one_times():
     ):
         answer_with_guardrail("question")
 
-    assert len(evaluate_calls) == MAX_RETRIES + 1
+    assert len(evaluate_calls) == MAX_ATTEMPTS
 
 
 def test_answer_with_guardrail_logs_once_per_call():

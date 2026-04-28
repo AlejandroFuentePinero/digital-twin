@@ -31,6 +31,28 @@ An end-to-end ML system that predicts Amazon product prices from natural languag
 
 ---
 
+## LLM Price Predictor — Autonomous Agent System
+*Part of LLM Engineering Lab — flagship project*
+
+The autonomous layer of the LLM Price Predictor is a production agentic AI system where an LLM orchestrates specialised agents in a continuous, self-directed deal-monitoring loop.
+
+**AutonomousPlanningAgent** equips GPT-5.1 with three callable tools and lets it plan the workflow autonomously — no hard-coded routing or fixed step order. The model decides when to scan for deals, when to price them, and when to send notifications.
+
+**Three specialised agents:**
+- **ScannerAgent** — monitors live RSS deal feeds for new Amazon product listings
+- **EnsembleAgent** — prices each deal via the full ensemble (GPT-5.1+RAG 80%, fine-tuned Modal specialist 10%, DNN 10%)
+- **MessagingAgent** — pushes real-time price-alert notifications when deals are flagged
+
+**Agentic design patterns demonstrated:**
+- **LLM-as-planner:** the orchestration model has no fixed workflow; it reasons about which tool to call next and in what order
+- **Tool use:** planning agent is given three callable tools that wrap the specialised agents
+- **Continuous operation:** the loop runs autonomously, auto-refreshing on a schedule
+- **Observability:** agent decision logs stream in real time to a live Gradio dashboard; results displayed in an inspectable dataframe
+
+**Stack:** Python · GPT-5.1 · tool calling · Modal (serverless fine-tuned specialist) · Gradio
+
+---
+
 ## Expert Knowledge Worker (RAG Chatbot)
 *Part of LLM Engineering Lab — most technically sophisticated supporting project*
 

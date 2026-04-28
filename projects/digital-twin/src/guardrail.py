@@ -10,10 +10,13 @@ fact-check claims against the actual KB content rather than relying on general k
 
 from litellm import completion
 from pydantic import BaseModel
-from tenacity import retry, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-MODEL = "openai/gpt-4.1-nano"
+# Deliberately a different model family from the generator (answer.py uses OpenAI)
+# to avoid correlated failures and sycophancy in self-evaluation.
+MODEL = "anthropic/claude-sonnet-4-6"
 wait = wait_exponential(multiplier=1, min=10, max=120)
+stop = stop_after_attempt(5)
 
 SYSTEM_PROMPT = """\
 You are a quality evaluator for a professional digital twin assistant representing \
@@ -71,7 +74,7 @@ def _build_user_prompt(
     )
 
 
-@retry(wait=wait)
+@retry(wait=wait, stop=stop)
 def evaluate(
     question: str,
     answer: str,
