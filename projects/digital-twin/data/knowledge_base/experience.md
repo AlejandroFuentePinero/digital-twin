@@ -40,14 +40,14 @@ Built reproducible workflows to estimate rainforest bird population trends from 
 ---
 
 ## Research and Conservation Leader — Kaa-Iya National Park
-**2017 – 2018 | Bolivia**
+**2017 – 2018 | Bolivia, South America**
 
 Led research and conservation operations in Bolivia's Kaa-Iya National Park (with support from University of Florida and WCS). Big cat monitoring, biodiversity surveys, training of local rangers in monitoring techniques.
 
 ---
 
 ## Head Biologist — CONAF (Puyehue National Park)
-**2016 – 2017 | Chile**
+**2016 – 2017 | Chile, South America**
 
 Head biologist at a Chilean national park. Exploration and description of Andean flora and fauna; population monitoring; training of local rangers in biodiversity monitoring, community engagement, and science communication. Also conducted the first description of a synchronous bamboo flowering event (published in Bosque, 2017).
 
@@ -55,7 +55,7 @@ Head biologist at a Chilean national park. Exploration and description of Andean
 
 ## Field and Conservation Experience (selected)
 - **Wet Tropics vertebrate monitoring** — James Cook University, Australia, 2019–present
-- **Yellow-tailed woolly monkey surveys** — Neotropical Primate Conservation / Lush Cosmetics, Peru, 2018–2019
+- **Yellow-tailed woolly monkey surveys** — Neotropical Primate Conservation / Lush Cosmetics, Peru (South America), 2018–2019
 - **Breeding bird survey** — RSPB, Fairburn Ings, UK, 2018
 - **Puyehue National Park flora/fauna surveys** — CONAF, Chile, 2016–2017
 - **Darwin's Frog monitoring** — Andres Bello University, Chile, 2017
