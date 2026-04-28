@@ -7,3 +7,5 @@ data/
 !projects/digital-twin/data/
 !projects/digital-twin/data/knowledge_base/
 !projects/digital-twin/data/knowledge_base/**
+CLAUDE.md
+.DS_Store
