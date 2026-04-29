@@ -1,7 +1,55 @@
 # Digital Twin — Decisions Log
 
 **Project:** AI chat system representing Alejandro de la Fuente professionally  
-**Core concept:** A RAG system that answers recruiter and professional questions about skills, experience, projects, and research — with enough depth to be genuinely useful, and links to go deeper.
+**Core concept:** A conversational agent that answers recruiter and professional questions about skills, experience, projects, and research — with enough depth to be genuinely useful, and links to go deeper.
+
+---
+
+## Session 12 (2026-04-29) — Architectural Redesign: Classify-then-Route
+
+**Status:** This session is the project's tipping point. The existing codebase (Sessions 1–11) is treated as pre-redesign and will be substantially rewritten. See `feedback_redesign_over_patching.md` in auto-memory for the persistent rule.
+
+### What was decided
+
+A multi-hour interview session (`/grill-with-docs`) walked the entire design tree and produced a unified architecture. Canonical artifacts:
+
+- **[`CONTEXT.md`](../../../CONTEXT.md)** — 18-term glossary covering Visitor, Gap question, Broader skill, Active learning, Gap-aware response, Gap phrase, Knowledge base, Guardrail, Always-on profile, Frame, Substance, Calibration ladder, Deflection, Sentinel, Interaction log, Branch, Classifier, Tool registry, Contact-provided flag.
+- **[`docs/adr/0001-always-on-profile-and-kb-as-depth.md`](../../../docs/adr/0001-always-on-profile-and-kb-as-depth.md)** — Frame/Substance split. `profile.md` is the always-on Frame (~2–2.5k tokens); KB is retrieved Substance. Source files are content-separated (profile carries patterns; SUMMARY carries numbers; positioning carries parallels) so there is no duplicate source of truth. *Partially superseded by ADR-0003 on the injection mechanism — see below.*
+- **[`docs/adr/0002-hf-dataset-as-canonical-log-store.md`](../../../docs/adr/0002-hf-dataset-as-canonical-log-store.md)** — HuggingFace Dataset is the production log store. Local JSONL is dev-only. `LogReader` abstraction supports both backends.
+- **[`docs/adr/0003-classify-then-route-orchestration.md`](../../../docs/adr/0003-classify-then-route-orchestration.md)** — A cheap classifier picks one of five branches (`GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGISTICAL`) per turn. Each branch loads its own `profile.md` sections, retrieval depth, and tools. Replaces the monolithic system prompt to direct attention and bound cognitive load on cheaper models — a known failure mode from prior projects.
+
+### Key rules established this session
+
+1. **Bar for content:** would Alejandro say this verbatim to a recruiter on a phone call? If no, deflect. Never invent stories or credentials.
+2. **Calibration ladder** (soft, taught in prompt, not enforced verb-by-verb): KB evidence pattern → claim verb. `skill + project + role → expertise`; `skill + project → hands-on`; `skill + course only → trained`; `skill listed only → exposure`; `nothing in KB → gap phrase`. Domain (research vs AI) is *not* split — academic skills are presented as transferable.
+3. **Gap-aware response:** for known gaps, lead with the broader skill the question probes (with named, KB-verifiable evidence), then honestly state the specific gap with explicit exposure phrasing, then name active learning with concrete credentials. Never deflect, never inflate.
+4. **Deflection** is reserved for behavioural-story requests (failure, conflict, pressure) where Alejandro has not authorised a specific story for the agent to tell. Distinct from the Gap phrase (KB has nothing) and from a Gap-aware response (KB has structured info on a known gap).
+5. **`log_user_details` invitation triggers:** (a) attached to deflection, (b) once at turn 3 of a session, integrated into the answer naturally. Both paths suppressed once `contact_provided = True`.
+6. **Eval questions must be KB-grounded.** Recruiter / behavioural questions land in eval only after corresponding KB content exists.
+
+### Phase plan
+
+The 5-phase plan in `PLAN.md` is replaced by a 7-phase plan in `TODO.md`:
+
+1. Profile + KB content rewrites
+2. Routing + new pipeline (rewrites of `answer.py`, `guardrail.py`, `logger.py`; new `classifier.py`, branch composers, `LogReader`, tool)
+3. Re-eval baseline (v4)
+4. Sentinel + LLM failure summaries
+5. Break the live system (probe + targeted KB additions)
+6. HF Dataset migration
+7. Deploy
+
+### What survives from the pre-redesign codebase
+
+- `ingest.py` and the chunking strategy (build on)
+- KB folder structure and most KB files (most build on; some rewrites)
+- `eval/run_eval.py` and `eval/tests.jsonl` (build on; result schema gains a `branch` column)
+- ChromaDB store (rebuilt on profile.md changes)
+- `tests/test_ingest.py` (survives; ~70% of the rest of the test suite is rebuilt)
+
+### Closing context
+
+Alejandro will review the codebase next, applying the redesign-over-patching rule from auto-memory. The four pre-redesign docs in `projects/digital-twin/docs/` are kept as historical record; `TODO.md` is the active source of truth, with ADRs and CONTEXT.md as canonical references.
 
 ---
 

@@ -1,5 +1,16 @@
 # Digital Twin — Implementation Plan
 
+> **Status:** **Pre-redesign (2026-04-29).** Partially superseded by the routing architecture established in [ADR-0003](../../../docs/adr/0003-classify-then-route-orchestration.md). Specific points superseded:
+>
+> - **Component 4 (Main Agent)** — the agent does *not* expose a model-callable "RAG tool"; retrieval is orchestration-driven per branch. The `log_unknown_question` tool is replaced by the `event_type = "gap"` discriminator in the enriched interaction log.
+> - **Component 6 (Logging)** — three separate JSONL files (`user_sessions`, `unknown_questions`, `unacceptable_answers`) are replaced by a single enriched log per [ADR-0002](../../../docs/adr/0002-hf-dataset-as-canonical-log-store.md).
+> - **Phases** — the 5-phase plan below is replaced by the 7-phase plan in [TODO.md](./TODO.md).
+>
+> Kept as a historical record of the original component design and rationale. The Frame/Substance split (ADR-0001) and the eval-first principle still hold; everything else should be read against the ADRs and CONTEXT.md as canonical.
+
+---
+
+
 **Purpose:** An AI agent that represents Alejandro de la Fuente professionally. It answers questions from recruiters and professional contacts about his experience, skills, research, and projects with accuracy, appropriate depth, and a professional tone.
 
 **Audience for this document:** Future sessions building this system. Directional, not instructional — describes what each component is, why it exists, and how components relate. Implementation details belong in code.

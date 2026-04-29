@@ -1,125 +1,165 @@
 # Digital Twin — TODO
 
-Current project state and active task list. Updated each session.  
-For architectural decisions and session logs see `DECISIONS.md`. For component design see `PLAN.md`.
+Active task list for the post-redesign rebuild. Updated each session.
+For the canonical glossary see [`CONTEXT.md`](../../../CONTEXT.md). For architectural decisions see [`docs/adr/`](../../../docs/adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-04-28  
-**Current phase:** Phase 2 + 3 complete → Phase 4 (tuning + KB enrichment)
-
----
-
-## Knowledge base — status
-
-The KB is complete and restructured. All 16 files are in `data/knowledge_base/` and the eval set has 149 Q&A pairs in `eval/tests.jsonl`.
-
-KB restructuring completed (session 6): every `##` section is now a self-contained retrieval unit. Five files were restructured — `education.md`, `positioning.md`, `publications.md`, `projects_ai_flagship.md`, `research_projects_detail.md`. `###` subsections were either promoted to `##` or converted to bold inline labels within their parent section.
-
-One deferred item:
-- [ ] `agentic_ai_lab.md` — add once the digital twin has a working demo or public form
+**Last updated:** 2026-04-29
+**Current phase:** Phase 1 (Profile + KB content rewrites) — ready to start
 
 ---
 
-## Phase 1 — Core RAG pipeline
+## Pre-redesign baseline (v3)
 
-### Ingestion (`ingest.py`) — **done**
+The system that exists in the codebase today predates the 2026-04-29 redesign. Eval baseline:
+- MRR: 0.868 / nDCG: 0.838 / coverage: 89%
+- Answer accuracy 4.46 / completeness 4.30 / relevance 4.66 / gap rate 0.7%
+- Weaknesses: temporal MRR 0.783, numerical completeness 3.94/5
 
-- [x] Created `projects/digital-twin/src/` for source files
-- [x] `ingest.py` written and verified:
-  - [x] `SUMMARY.md` and `INDEX.md` stored as single un-split chunks
-  - [x] All other files split on `##` boundaries only (no `###` splits — KB restructured to match)
-  - [x] Each chunk enriched with LLM-generated `headline` + one-sentence `summary` (via `gpt-4.1-nano`, parallel with `ThreadPoolExecutor`)
-  - [x] Embedded document: `headline + summary + original_text` (retrieval boost + generation context)
-  - [x] Metadata: `source_file`, `section_heading`, `heading_level`, `category`, `headline`, `summary`
-  - [x] Embedded with `text-embedding-3-large`
-  - [x] Stored in ChromaDB `PersistentClient` at `data/preprocessed_db/`, collection `digital_twin`
-  - [x] Re-ingest is idempotent (delete + recreate collection)
-- [x] `sample_chunks.py` — inspection utility: sample N random chunks with optional `--category` / `--source` / `--seed` filters
-- [x] `tests/test_ingest.py` — 17 tests covering chunking, unsplit behaviour, metadata, enrichment, prompt context, and `enrich_all` order preservation (all passing)
-- [x] Verified: 106 chunks across 14 categories; SUMMARY.md and INDEX.md confirmed as un-split whole-document chunks
-
-### Retrieval and generation (`answer.py`) — **done**
-
-- [x] `fetch_context_unranked` — embed query with `text-embedding-3-large`, retrieve top-20 chunks
-- [x] `rewrite_query` — LLM rewrites query for KB search; uses last 2 conversation turns for context
-- [x] `fetch_context` — dual retrieval (original + rewritten), merge + deduplicate, LLM rerank, return top-10
-- [x] `rerank` — structured output (`RankOrder`) with out-of-range / duplicate ID guard
-- [x] System prompt — scoped to professional background only; explicit in/out-of-scope lists; injection-resistant (named attack patterns, context-as-information-only rule)
-- [x] `make_rag_messages` — context labelled with `source_file` + `section_heading`; history threaded through
-- [x] `answer_question(question, history)` — main entry point; returns `(answer_str, chunks)` for eval
-- [x] `tenacity` retry on all LLM calls (`wait_exponential`, max 120s)
-
-### Chat UI (`app.py`) — **done**
-
-- [x] Gradio chat interface wrapping `answer_with_guardrail`
-- [x] Stateful conversation (pass history each turn)
-- [x] History truncated to last 10 turns to cap context window
-- [x] Smoke tested locally
+Per the persistent feedback memory (`feedback_redesign_over_patching.md`), the answer/guardrail/logger/app modules are rewritten — not patched — in Phase 2. `ingest.py`, the KB structure, and the eval pipeline are built on.
 
 ---
 
-## Phase 2 — Evaluation baseline
+## Phase 1 — Profile + KB content rewrites
 
-- [x] Write `eval/run_eval.py`: iterate over `tests.jsonl`, call answer pipeline, collect outputs
-- [x] Retrieval metrics: MRR, nDCG, keyword coverage (per category + aggregate)
-- [x] Answer metrics: LLM-as-judge (accuracy, completeness, relevance — 1–5)
-- [x] Results written to `eval/results/v{N}_{date}.json` — auto-versioned with full architecture snapshot
-- [x] Gap rate tracked: fraction of questions where system responded "I don't know"
-- [x] v1 baseline (gpt-4.1-nano): MRR=0.804, acc=3.95, gap=14.1%
-- [x] v2 (gpt-4.1 + reasoning prompt + KB fixes): MRR=0.865, acc=4.48, gap=0.0%
-- [x] v3 (Claude Sonnet guardrail + fresh ingest): MRR=0.868, acc=4.46, gap=0.7%
-- [x] Cross-run category comparison plot: `eval/results/comparison.png`
-- [x] Weaknesses identified: temporal (MRR 0.78, cov 80%), numerical completeness (3.94/5)
+Content-only phase. No code changes. Sets up the **Frame** (loaded by branches in Phase 2) and addresses the two KB-structure weaknesses identified in v3 eval.
 
----
+- [ ] Write `projects/digital-twin/data/profile.md` (~2,000–2,500 tokens), structured as named `##` sections:
+  - [ ] `## identity` (~150 tokens) — one-paragraph identity block
+  - [ ] `## narrative_summary` (~500 tokens) — career arc, what he does, how he frames himself
+  - [ ] `## transfer_principles` (~400 tokens) — 5 transfer mechanisms, prose-only (no parallels table; that stays in `positioning.md`)
+  - [ ] `## gap_inventory` (~500 tokens) — 5–7 known gaps with broader skill, exposure level, active learning specifics, KB cross-reference
+  - [ ] `## logistics` (~200 tokens) — location, availability, languages, how to discuss salary
+  - [ ] `## personal_stories` (~400 tokens, **placeholder until Phase 5**) — 1–2 STAR-format anecdotes; only added when Alejandro confirms the wording
+- [ ] Rewrite `data/knowledge_base/positioning.md` — remove transfer-principle prose that moves to `profile.md`. Keep parallels table, worked examples, "what he doesn't bring."
+- [ ] Add `## Career Timeline` section to `data/knowledge_base/experience.md` — explicit start/end years per role so chunk headlines surface dates. Fixes temporal retrieval (v3 MRR 0.783).
+- [ ] Re-ingest KB. `profile.md` is naturally skipped (lives outside `data/knowledge_base/`). Verify chunk count and category distribution.
+- [ ] Sample-check chunks via `sample_chunks.py` — confirm temporal chunks now have dates in headlines.
 
-## Phase 3 — Guardrail and agent tooling
-
-- [x] Guardrail agent: `{is_acceptable: bool, feedback: str}` after every answer
-- [x] Guardrail switched to Claude Sonnet 4.6 — different model family from GPT-4.1 generator to avoid sycophancy/correlated failures
-- [x] Retry loop consolidated into single `for attempt in range(MAX_ATTEMPTS=3)` loop
-- [x] Interaction logger: append-only JSONL at `data/logs/interactions.jsonl` — every call
-  logged with question, answer, is_acceptable, knew_answer, retry_count, session_id
-  TODO (production): replace local JSONL with HuggingFace Dataset write when deploying to HF Spaces
-- [x] `stop_after_attempt(5)` added to all tenacity retry decorators — prevents infinite loops on persistent API errors
-- [x] Query rewriting downgraded to `gpt-4.1-nano` (simple task; full model kept for generation and reranking)
-- [ ] `log_user_details` tool with Pydantic model (name, company, role, email, phone — all optional)
+Phase 1 deliverable: `profile.md` is content-complete (minus `personal_stories`), KB rewrites are merged, ChromaDB is re-ingested. No code changes.
 
 ---
 
-## Phase 4 — KB Enrichment and Tuning
+## Phase 2 — Routing + new pipeline (rewrites)
 
-### KB gaps identified from eval (priority order)
+Per ADR-0003. The current `answer.py`, `guardrail.py`, and `logger.py` are replaced. New modules added for the classifier and branch dispatch.
 
-- [ ] **Temporal retrieval (MRR 0.783, coverage 80%)** — Add `## Career Timeline` section to `experience.md` or a dedicated `timeline.md` listing every role with explicit start/end years so dates surface in chunk headlines. Current prose buries dates.
-- [ ] **Numerical completeness (3.94/5)** — Add one line to SYSTEM_PROMPT: when a question asks for counts or metrics, include the specific numbers. Generation is finding the chunks but omitting figures.
+### Rewrites
+- [ ] **`logger.py`** — new enriched record schema:
+  ```
+  timestamp, session_id, turn_index, question, event_type, branch, classification_confidence,
+  attempts: [{answer, is_acceptable, guardrail_feedback}],
+  retrieved_chunks: [{source_file, section_heading}],
+  tool_calls: [{name, args, status}],
+  latency_ms: {classifier, retrieval, generation, guardrail, total},
+  knew_answer, contact_offered, contact_provided
+  ```
+  Old `data/logs/interactions.jsonl` is nuked (dev-only data).
+- [ ] **`answer.py`** — replaced. New control flow: classifier → branch dispatch → generator (with tool loop in TECHNICAL) → guardrail → log. Composed-from-constants prompt pattern (Q11 (C)).
+- [ ] **`guardrail.py`** — replaced. Branch-aware rules. Calibration ladder, deflection rule, scope, and security rules imported from shared constants used by both `answer.py` and `guardrail.py` (drift prevention).
 
-### New KB file: `strengths_and_gaps.md`
+### New modules
+- [ ] `classifier.py` — cheap classifier (`gpt-4.1-nano`) returning `{labels, confidence}`; sees last 2 turns + current question; defaults to GENERIC on low confidence.
+- [ ] Branch composers (one module or `src/branches/`) — one named function per branch (GAP, BEHAVIOURAL, TECHNICAL, GENERIC, LOGISTICAL). Each composes its system prompt from shared constants + selected `profile.md` sections + retrieval results.
+- [ ] `LogReader` abstraction — `LocalReader` (JSONL) + `HFReader` (placeholder, real impl in Phase 6). Used by Sentinel.
+- [ ] `tools/fetch_project_readme.py` — registry-driven tool with `Literal[*REGISTRY.keys()]` enum.
+- [ ] `data/readmes/registry.json` + 5–8 cached project READMEs.
 
-The most important missing KB file for recruiter conversations. Should cover:
+### Universal rules (loaded in every branch)
+- [ ] Persona block.
+- [ ] Scope (in/out) — inherits from current `SYSTEM_PROMPT` content, refined.
+- [ ] Security / injection-defence — universal; never per-branch.
+- [ ] Numerical-completeness rule: *"For numerical questions, include specific numbers from the context — don't paraphrase quantities away."*
 
-- [ ] **Verified strengths** — what Alejandro demonstrably does better than most candidates at his level (uncertainty quantification, eval-first engineering, cross-domain synthesis, scientific rigour applied to ML). Concrete evidence for each.
-- [ ] **Explicit CV gaps with honest framing** — frontend/React, DevOps/CI-CD pipelines, cloud platforms (AWS/GCP/Azure production deployment). For each: current state, what he has done in adjacent areas, what he is actively working on. The system should surface these proactively when relevant rather than waiting to be asked.
-- [ ] **Guardrail update** — when a question touches a known gap area, the system should acknowledge it directly and give the "actively working on" context rather than deflecting or staying silent.
+### Tests
+- [ ] `tests/test_classifier.py` (new) — confidence behaviour, history-aware disambiguation, multi-label, default-to-GENERIC.
+- [ ] `tests/test_branches.py` (new) — per-branch composition correctness; section selection.
+- [ ] `tests/test_readme_registry.py` (new) — registry/disk drift detection.
+- [ ] `tests/test_answer.py` (rebuild) — full routed pipeline integration; existing tests are tied to `answer_with_guardrail`'s monolithic shape and become stale.
+- [ ] `tests/test_guardrail.py` (rebuild) — branch-aware evaluation.
+- [ ] `tests/test_logger.py` (rebuild) — enriched schema, all event types.
+- [ ] `tests/test_eval.py` (build on; surgical updates) — metric tests (`_reciprocal_rank`, `_dcg`, `_ndcg`, `_mean`, aggregation, versioning, `load_tests`) are pure functions that survive intact. The single `eval_retrieval` integration test updates to pass a branch label.
+- [ ] `tests/test_ingest.py` (survives unchanged).
 
-### New eval questions: recruiter and behavioural
-
-The current eval set (149 questions) covers factual retrieval well but has no recruiter-style or behavioural questions. Add a new batch covering:
-
-- [ ] **Behavioural** — "Tell me about a time you failed and what you learned", "Describe a conflict with a collaborator and how you resolved it", "What's your biggest professional weakness?", "Tell me about a time you had to deliver under pressure"
-- [ ] **Tricky/positioning** — "Why are you transitioning from ecology to AI?", "You have no industry experience — why should we hire you over someone who does?", "What does a team look like where you do your best work?", "Where do you see yourself in 5 years?", "Why no frontend or cloud experience?", "Have you ever shipped something to production used by real users?"
-- [ ] **Gap-aware** — "Do you have experience with AWS/GCP?", "Have you worked with Docker/Kubernetes?", "Do you have React or frontend experience?" — these should trigger the proactive gap acknowledgement with active-learning framing
-- [ ] **Salary/logistics** — out-of-scope questions should redirect gracefully, not refuse bluntly
-
-### Tuning
-
-- [ ] Tune retrieval-k and final-k once recruiter questions are in the eval set
-- [ ] Re-run eval and version results after each meaningful change
+### `app.py` updates (build on existing scaffold)
+The current `app.py` already has: UUID `session_id`, Gradio `gr.State` for session/history, history truncation to last 10 turns, chat-input + new-conversation button, avatar. Additions only:
+- [ ] Per-session state: `turn_counter`, `contact_provided` flag (alongside existing `session_id` and `history`).
+- [ ] Periodic invitation hook at turn 3 (single-fire), suppressed when `contact_provided=True`.
+- [ ] `log_user_details` form affordance: collapsible row at the bottom of the chat, persistently visible after first invitation.
+- [ ] `new_session()` resets the new flags too.
+- [ ] Wire to the routed `answer` entry point (was `answer_with_guardrail`).
 
 ---
 
-## Phase 5 — Deployment
+## Phase 3 — Re-eval baseline (v4)
 
-- [ ] Package for HuggingFace Spaces
-- [ ] Configure Space secrets (OPENAI_API_KEY, HF write token)
-- [ ] Smoke test full flow (guardrail, logging, latency)
-- [ ] Link Space from portfolio
+Build on the existing eval pipeline; the metric and aggregation code is reused. The interface change is real but contained.
+
+- [ ] Update `eval/run_eval.py`:
+  - [ ] `eval_retrieval` classifies each question first, then calls a branch-aware retrieval (`fetch_context_for_branch(question, branch)`). The classifier becomes a confounder in retrieval metrics — note this in `notes`.
+  - [ ] `eval_answer` calls the routed `answer` entry point (still no guardrail in eval — Session 9 decision: raw answer quality is the cleaner signal).
+  - [ ] Per-question record gains: `branch`, `classification_confidence`, optional secondary label.
+  - [ ] Result aggregation gains: `by_branch` (mirroring `by_category`) and a `category × branch` cross-tab so we can see how branches handle different question categories.
+- [ ] `eval/plot_eval.py` survives as-is. Schema additions are optional fields it'll ignore.
+- [ ] Run on the existing 149 questions only — no new categories yet.
+- [ ] Commit `v4_*.json`. Note in `notes` that v3 → v4 has comparability caveats (routing reshapes retrieval).
+- [ ] Compare: targets MRR/nDCG ≥ v3, accuracy ≥ v3, gap rate ≤ v3.
+
+---
+
+## Phase 4 — Sentinel + LLM failure summaries
+
+- [ ] `src/sentinel.py` — local Gradio app, 5 panels + 3-flag panel:
+  1. Health overview (today / 7d / 30d)
+  2. Trend chart
+  3. Failure feed (recent unacceptable answers, all attempts, feedback)
+  4. Gap clusters
+  5. Deflection feed
+- [ ] `cluster_gaps.py` — weekly batch script; clusters gap-phrase questions with LLM labels; writes `data/logs/gap_clusters.json`.
+- [ ] `summarize_failures.py` — three weekly LLM passes, one per failure-mode group (unacceptable, deflection, gap). Output cached as Markdown reports under `data/logs/summaries/`.
+- [ ] Sentinel reads precomputed cluster/summary files (no live LLM calls in dashboard).
+
+---
+
+## Phase 5 — Break the live system
+
+- [ ] Local probe session — try recruiter probes, behavioural questions, gap questions, edge cases.
+- [ ] Identify actual failure modes (informed by Sentinel signals when log is non-trivial).
+- [ ] Add 1–2 STAR-format stories to `profile.md`'s `personal_stories` section — only ones Alejandro would say verbatim live.
+- [ ] Add ≤10 KB-grounded recruiter eval questions (only after corresponding KB content exists). Run v5 eval.
+
+---
+
+## Phase 6 — HF Dataset migration
+
+- [ ] Implement `HFReader` and `HFWriter` in `LogReader` abstraction.
+- [ ] Buffered append: local JSONL buffer, batch flush every N writes or M minutes.
+- [ ] Schema versioning: `schema_version` field on every record; reader handles version skew.
+- [ ] HF write token in Space secrets; rotation procedure documented.
+- [ ] Sentinel auto-detects backend (HF token present → HFReader; else LocalReader).
+
+---
+
+## Phase 7 — Deploy to HuggingFace Spaces
+
+- [ ] Package `app.py` for HF Spaces.
+- [ ] Configure Space secrets: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `HF_WRITE_TOKEN`.
+- [ ] Smoke test: classifier, all 5 branches, guardrail+retry, log writes, deflection, periodic invitation, contact form.
+- [ ] Latency baseline check (p50/p95).
+- [ ] Link Space from portfolio.
+
+---
+
+## Open implementation details (not blocking architecture)
+
+- Final phrasing for: deflection rule, periodic-invitation closing line, contact-form copy.
+- Selection of 5–8 flagship project READMEs to cache in `data/readmes/`.
+- Formal test plan (one document covering all phases — written when test surface is concrete).
+- Gradio UI polish: welcome message, theme, mobile responsiveness.
+
+---
+
+## Three ground rules (governance)
+
+1. **The bar for putting content in the agent's mouth is "would Alejandro say this verbatim to a recruiter on a phone call?"** — content lands on observed failure, not speculation.
+2. **Frame is loaded by branch; Substance is retrieved.** No duplicate sources of truth.
+3. **Eval questions must be KB-grounded.** Adding eval before content measures absence.

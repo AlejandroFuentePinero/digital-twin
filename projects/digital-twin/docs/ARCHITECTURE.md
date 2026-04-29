@@ -1,5 +1,12 @@
 # Digital Twin — Module Architecture
 
+> **Status:** **Pre-redesign (2026-04-29).** Snapshots the module layout that exists in the codebase today, before the routing architecture ([ADR-0003](../../../docs/adr/0003-classify-then-route-orchestration.md)) is built. Many of the modules described below — `answer.py`, `guardrail.py`, `logger.py`, most tests — are scheduled for full rewrite in Phase 2 (see [TODO.md](./TODO.md)). New modules (`classifier.py`, branch composers, `LogReader`, `tools/fetch_project_readme.py`, `sentinel.py`, `cluster_gaps.py`, `summarize_failures.py`) will be added.
+>
+> This file is kept as a record of the pre-tipping-point structure. After Phase 2 lands, this file is rewritten to reflect the new module layout. Until then, treat the ADRs and CONTEXT.md as canonical for *what should be built*; this file describes *what currently exists*.
+
+---
+
+
 Describes the file and module structure of the project: what exists, what each file does, how they relate, and what is still planned. For component design and rationale see `PLAN.md`. For session history and decisions see `DECISIONS.md`.
 
 **Status key:** ✅ built · 🔲 planned
