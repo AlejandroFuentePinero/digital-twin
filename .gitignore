@@ -13,3 +13,5 @@ __pycache__/
 *.pyc
 projects/digital-twin/data/preprocessed_db/
 projects/digital-twin/data/logs/
+.claude/
+CONTEXT.md

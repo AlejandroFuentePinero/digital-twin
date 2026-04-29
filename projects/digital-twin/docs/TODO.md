@@ -84,7 +84,7 @@ Per ADR-0003. The current `answer.py`, `guardrail.py`, and `logger.py` are repla
 The current `app.py` already has: UUID `session_id`, Gradio `gr.State` for session/history, history truncation to last 10 turns, chat-input + new-conversation button, avatar. Additions only:
 - [ ] Per-session state: `turn_counter`, `contact_provided` flag (alongside existing `session_id` and `history`).
 - [ ] Periodic invitation hook at turn 3 (single-fire), suppressed when `contact_provided=True`.
-- [ ] `log_user_details` form affordance: collapsible row at the bottom of the chat, persistently visible after first invitation.
+- [ ] `log_user_details` form affordance: collapsible row at the bottom of the chat, persistently visible after first invitation. On submit, write a record stamped with `session_id`, `turn_index`, `timestamp`, and the form fields, so the submission can be joined back to the enriched interaction log on `session_id` to reconstruct the conversation that led to the contact request.
 - [ ] `new_session()` resets the new flags too.
 - [ ] Wire to the routed `answer` entry point (was `answer_with_guardrail`).
 
