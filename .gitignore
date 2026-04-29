@@ -15,3 +15,4 @@ projects/digital-twin/data/preprocessed_db/
 projects/digital-twin/data/logs/
 .claude/
 CONTEXT.md
+.module_health_report.json
