@@ -1,6 +1,6 @@
 # Digital Twin — Module Architecture
 
-> **Status:** **Pre-redesign (2026-04-29).** Snapshots the module layout that exists in the codebase today, before the routing architecture ([ADR-0003](../../../docs/adr/0003-classify-then-route-orchestration.md)) is built. Many of the modules described below — `answer.py`, `guardrail.py`, `logger.py`, most tests — are scheduled for full rewrite in Phase 2 (see [TODO.md](./TODO.md)). New modules (`classifier.py`, branch composers, `LogReader`, `tools/fetch_project_readme.py`, `sentinel.py`, `cluster_gaps.py`, `summarize_failures.py`) will be added.
+> **Status:** **Pre-redesign (2026-04-29).** Snapshots the module layout that exists in the codebase today, before the routing architecture ([ADR-0003](./adr/0003-classify-then-route-orchestration.md)) is built. Many of the modules described below — `answer.py`, `guardrail.py`, `logger.py`, most tests — are scheduled for full rewrite in Phase 2 (see [TODO.md](./TODO.md)). New modules (`classifier.py`, branch composers, `LogReader`, `tools/fetch_project_readme.py`, `sentinel.py`, `cluster_gaps.py`, `summarize_failures.py`) will be added.
 >
 > This file is kept as a record of the pre-tipping-point structure. After Phase 2 lands, this file is rewritten to reflect the new module layout. Until then, treat the ADRs and CONTEXT.md as canonical for *what should be built*; this file describes *what currently exists*.
 
@@ -16,39 +16,49 @@ Describes the file and module structure of the project: what exists, what each f
 ## Directory layout
 
 ```
-
+digital-twin/
 │
 ├── data/
 │   ├── knowledge_base/        # 16 curated Markdown files — the only ingestion source
 │   ├── preprocessed_db/       # ChromaDB on-disk store (gitignored — generated artifact)
 │   ├── raw_me/                # Source material — never ingested directly
-│   └── eval/
-│       ├── tests.jsonl        # 149 Q&A pairs across 7 categories
-│       ├── run_eval.py        # ✅ Evaluation pipeline (MRR, nDCG, LLM-as-judge)
-│       └── results/           # Versioned eval output files (v{N}_{date}.json)
+│   └── logs/                  # interactions.jsonl (gitignored — dev log)
+│
+├── eval/
+│   ├── tests.jsonl            # 149 Q&A pairs across 7 categories
+│   ├── run_eval.py            # ✅ Evaluation pipeline (MRR, nDCG, LLM-as-judge)
+│   ├── plot_eval.py           # ✅ Cross-run comparison plot (matplotlib)
+│   └── results/               # Versioned eval output files (v{N}_{date}.json)
 │
 ├── src/
 │   ├── ingest.py              # ✅ KB → ChromaDB ingestion pipeline
 │   ├── sample_chunks.py       # ✅ Chunk inspection utility
 │   ├── answer.py              # ✅ Retrieval + generation + guardrail retry loop
-│   ├── agent.py               # 🔲 Main agent (tools, retry loop)
 │   ├── guardrail.py           # ✅ Quality gate evaluator
 │   ├── logger.py              # ✅ Append-only JSONL interaction logger
-│   └── app.py                 # 🔲 Gradio chat UI
+│   ├── app.py                 # ✅ Gradio chat UI (session state, history truncation)
+│   └── module_health.py       # ✅ Local Gradio dashboard for the test suite
 │
 ├── tests/
 │   ├── conftest.py            # ✅ sys.path injection for src/
-│   ├── test_ingest.py         # ✅ 16 tests for ingest.py
-│   ├── test_answer.py         # ✅ 31 tests for answer.py
+│   ├── test_ingest.py         # ✅ 17 tests for ingest.py
+│   ├── test_answer.py         # ✅ 35 tests for answer.py
 │   ├── test_guardrail.py      # ✅ 13 tests for guardrail.py
-│   └── test_logger.py         # ✅ 13 tests for logger.py
+│   ├── test_logger.py         # ✅ 12 tests for logger.py
+│   ├── test_eval.py           # ✅ 26 tests for eval/run_eval.py
+│   └── test_module_health.py  # ✅ 7 tests for module_health.py helpers
 │
 └── docs/
     ├── ARCHITECTURE.md        # This file
-    ├── PLAN.md                # Component design and rationale
+    ├── TESTING.md             # Testing convention (matching test_<module>.py rule)
+    ├── PLAN.md                # Component design and rationale (pre-redesign archive)
     ├── DECISIONS.md           # Session logs and architectural decisions
-    └── TODO.md                # Active task list by phase
+    ├── TODO.md                # Active task list by phase
+    ├── adr/                   # Architectural Decision Records (0001–0003)
+    └── agents/                # Agent skill guides (issue tracker, triage, domain)
 ```
+
+Total: **110 tests across 6 modules** (last green run, post-flatten). The suite is the contract for what each module is allowed to do; see `docs/TESTING.md` for the convention and `src/module_health.py` for the live dashboard view.
 
 ---
 
@@ -72,6 +82,25 @@ uv run src/ingest.py
 
 ---
 
+### `src/module_health.py` ✅
+
+**What it does:** Local Gradio dashboard for at-a-glance test-suite health. On launch, runs the suite via subprocess (`pytest --json-report --json-report-file=.module_health_report.json --tb=short`), parses the JSON report into `Module` / `Test` domain types, and renders one always-visible block per `test_*.py` with a header `<module> · X/Y` and a coloured `PASS` / `FAIL` / `ERROR` / `SKIP` badge per test.
+
+**Why subprocess, not library:** the dashboard should reflect what `pytest` would say at the command line, not inherit its plugin state when imported.
+
+**Filename:** intentionally avoids `test_*.py` / `*_test.py` so `uv run pytest` does not auto-collect this file and accidentally launch the Gradio app.
+
+**New `test_*.py` files appear automatically** — filename discovery, no registration step. The convention that depends on this is documented in [`TESTING.md`](./TESTING.md).
+
+**Run:**
+```bash
+uv run python src/module_health.py
+```
+
+**Background:** PRD [`#7`](https://github.com/AlejandroFuentePinero/digital-twin/issues/7); slices [`#8`](https://github.com/AlejandroFuentePinero/digital-twin/issues/8) (MVP) and [`#12`](https://github.com/AlejandroFuentePinero/digital-twin/issues/12) (convention). See `docs/DECISIONS.md` Session 13.
+
+---
+
 ### `src/sample_chunks.py` ✅
 
 **What it does:** Queries ChromaDB and prints a random sample of chunks for review. Used to inspect retrieval content quality after ingestion.
@@ -87,19 +116,23 @@ uv run src/sample_chunks.py --seed 42    # reproducible sample
 
 ---
 
-### `tests/conftest.py` ✅
+### Tests ✅
 
-Inserts `src/` into `sys.path` so test files can import from `src/` without package installation.
+The full suite is **110 tests across 6 modules** — see [`TESTING.md`](./TESTING.md) for the convention (matching `test_<module>.py` rule, mock-at-boundary policy, no-LLM-API-calls rule, exemption list) and `module_health.py` above for the live dashboard.
 
-### `tests/test_ingest.py` ✅
+| File | Count | Covers |
+| --- | ---: | --- |
+| `tests/conftest.py` | — | `sys.path` injection for `src/` |
+| `tests/test_ingest.py` | 17 | `split_on_headings`, `load_chunks`, `enrich_chunk`, `enrich_all` (concurrency, ordering, metadata, prompt content, malformed-response failure path) |
+| `tests/test_answer.py` | 35 | retrieval, rerank, prompt assembly, `answer_with_guardrail` retry loop, gap signal, session id pass-through |
+| `tests/test_guardrail.py` | 13 | `evaluate` accept/reject paths, prompt content, response format, malformed-response failure path |
+| `tests/test_logger.py` | 12 | record schema, append behaviour, `knew_answer` detection, dir auto-creation |
+| `tests/test_eval.py` | 26 | metric helpers (pure functions), aggregation, versioning, `load_tests`, `eval_retrieval` (mocked fetch) |
+| `tests/test_module_health.py` | 7 | `humanize`, `parse_report` |
 
-17 tests covering `split_on_headings`, `load_chunks`, `enrich_chunk`, and `enrich_all`. Tests verify: `##` splits, section content boundaries, preamble handling, `###` stays as body content, `UNSPLIT` files are not split, all metadata fields present, category mapping correct, enrichment merges headline/summary without altering original fields, prompt includes source context, and `enrich_all` preserves input order despite concurrent completion.
-
-Run: `uv run pytest tests/test_ingest.py -v`
+Run the full suite: `uv run pytest tests/ -q`. Run with the dashboard: `uv run python src/module_health.py`.
 
 ---
-
-## Planned modules
 
 ### `src/answer.py` ✅
 
@@ -162,16 +195,9 @@ uv run eval/run_eval.py --answer-only      # skip retrieval
 
 ---
 
-### `src/agent.py` 🔲
+### `src/agent.py` (superseded — never built)
 
-The main agent. Owns the conversation, calls `answer.py`, receives guardrail feedback, and decides whether to retry.
-
-**Tools available to the agent:**
-- `rag_tool` — fetches additional context from ChromaDB when a retry needs more information
-- `log_unknown_question` — called when the agent cannot answer from available context; records the question to the HF log
-- `log_user_details` — called at conversation end to optionally capture visitor contact details
-
-**Retry logic:** if the guardrail returns `is_acceptable = False`, the agent reattempts (max 2 retries); on persistent failure, returns a canned refusal.
+Originally planned as a tool-calling coordinator wrapping `answer.py`. **Superseded by [ADR-0003](./adr/0003-classify-then-route-orchestration.md):** the routing pipeline orchestrates per-branch retrieval directly, and the model-callable tool surface collapses to a single `fetch_project_readme` available only in the TECHNICAL branch. Retry logic lives in `answer_with_guardrail` and will live in the routed `answer` entry point.
 
 ---
 
@@ -219,9 +245,16 @@ Appends one record per `answer_with_guardrail` call to `data/logs/interactions.j
 
 ---
 
-### `src/app.py` 🔲
+### `src/app.py` ✅
 
-Gradio chat interface wrapping the full agent pipeline. Stateful conversation (history passed each turn). Simple chat window — no retrieval context panel in the user-facing UI.
+Gradio chat interface wrapping `answer_with_guardrail`. Per-session UUID `session_id` and `gr.State`-held `history`; history truncated to the last 10 user+assistant turns to cap the context window. Chat input + "New conversation" button + initials avatar.
+
+**Run:**
+```bash
+uv run src/app.py
+```
+
+Phase 2 (TODO.md) extends this scaffold with `turn_counter` / `contact_provided` flags, a periodic invitation hook at turn 3, and a `log_user_details` form. The wiring rewrites `answer_with_guardrail` → routed `answer` entry point.
 
 ---
 

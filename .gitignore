@@ -12,3 +12,4 @@ CONTEXT.md
 .module_health_report.json
 data/preprocessed_db/
 data/logs/
+.pytest_cache

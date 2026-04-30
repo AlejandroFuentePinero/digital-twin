@@ -297,7 +297,7 @@ def run_eval(notes: str = "", retrieval_only: bool = False, answer_only: bool = 
     # --- Print summary ---
     w = 62
     print(f"\n{'=' * w}")
-    print(f"  Saved → {out_path.relative_to(Path(__file__).parent.parent.parent.parent)}")
+    print(f"  Saved → {out_path.relative_to(Path(__file__).parent.parent)}")
     print(f"{'=' * w}")
     print("  SUMMARY")
     print(f"{'=' * w}")

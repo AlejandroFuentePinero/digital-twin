@@ -5,6 +5,61 @@
 
 ---
 
+## Session 14 (2026-04-30) — Repo flatten to standalone, dependency prune
+
+**Status:** Infrastructure cleanup. No code logic changed.
+
+### What was done
+
+- **Flattened `projects/digital-twin/*` to repo root** (commit `dcac88a`). The project now lives in its own `digital-twin` repo instead of nested under `portfolio/AI-projects/projects/digital-twin/`. Triggered VSCode reload, which triggered `uv sync`, which failed building `av` (PyAV needs ffmpeg7 + pkg-config) and gutted the venv.
+- **Pruned `pyproject.toml`** from 30 → 11 runtime deps. Removed course leftovers that were never imported by `src/`, `tests/`, or `eval/`: `autogen-*`, `langchain-*`, `langgraph*`, `mcp*`, `openai-agents`, `playwright`, `polygon-api-client`, `semantic-kernel`, `sendgrid`, `smithery`, `speedtest-cli`, `wikipedia`, `bs4`, `lxml`, `pypdf*`, `ipywidgets`. The `av` build chain is gone with `semantic-kernel`. Cross-checked against `grep -rohE "^(from|import)"` over `src/`, `tests/`, `eval/`. `uv.lock` shrank by ~2,300 lines.
+- **Fixed `eval/run_eval.py:300`** — `Path(__file__).parent.parent.parent.parent` (correct under the old depth-4 location) walked past the new repo root. Reduced to `parent.parent`.
+- **Fixed cross-doc relative links** in `docs/TODO.md`, `docs/ARCHITECTURE.md`, `docs/PLAN.md`, `docs/DECISIONS.md` — `../../../CONTEXT.md` → `../CONTEXT.md` and `../../../docs/adr/...` → `./adr/...`.
+
+### Why
+
+The flatten was not a refactor; it was a packaging move so the project can ship as its own GitHub repo. The dependency prune was forced by the venv breakage but is the right state regardless: every removed package was dead weight from the course-era `example/rag-example/` reference implementation.
+
+### Verified
+
+- `uv run python -m pytest tests/ -q` → **110 passed in 13.52s** (same as the last green run pre-flatten).
+- `module_health` pipeline: 110/110 across 6 modules (answer 35, eval 26, ingest 17, guardrail 13, logger 12, module_health 7).
+- All `Path(__file__).parent.parent / "data" / ...` constants resolve to real dirs at the new depth.
+
+---
+
+## Session 13 (2026-04-29) — Test-status dashboard + testing convention
+
+**Status:** Developer-experience layer added on top of the architecture established in Session 12. Does not change any of the ADRs.
+
+### What was decided
+
+A local Gradio dashboard for at-a-glance suite health, plus a written testing convention. Driven by [`#7`](https://github.com/AlejandroFuentePinero/digital-twin/issues/7) (PRD), shipped as two slices [`#8`](https://github.com/AlejandroFuentePinero/digital-twin/issues/8) (MVP dashboard) and [`#12`](https://github.com/AlejandroFuentePinero/digital-twin/issues/12) (convention codified). Both closed in commit `966bdfc`.
+
+**Motivation (from #7):** as the system grows module-by-module, regressions in older modules slip through unnoticed when the only signal is a terminal `pytest` output read once per change. The dashboard makes the whole suite always-visible.
+
+### What shipped
+
+- **`src/module_health.py`** — single-file Gradio app. On launch, runs `pytest --json-report --json-report-file=.module_health_report.json --tb=short` via subprocess (does not import pytest as a library), parses the JSON report into Module/Test domain types, and renders one always-visible block per `test_*.py` with a header `<module> · X/Y` and a coloured `PASS` / `FAIL` / `ERROR` / `SKIP` badge per test. Filename intentionally avoids `test_*.py` / `*_test.py` so pytest doesn't auto-collect it and accidentally launch the Gradio app. Cached report at `.module_health_report.json` (gitignored).
+- **`docs/TESTING.md`** — written-down convention: every `*.py` under `src/` and `eval/` has a matching `tests/test_<module>.py` with at least one functional test; mock only at I/O boundaries; pure functions tested directly with no mocks; **no LLM API calls in any test under any circumstances**; new `test_*.py` files appear in the dashboard automatically (filename discovery, no registration). Exemption list: `app.py`, `sample_chunks.py`, `plot_eval.py` (pure glue); `module_health.py` is a partial exemption (pure helpers tested, Gradio/subprocess wiring not).
+- **`CLAUDE.md`** — gained a one-line pointer to `docs/TESTING.md` and the dashboard command.
+- **Two failure-path tests added** to bring the suite up to the convention: malformed-response handling for `guardrail.evaluate` and for `ingest.enrich_chunk`.
+
+### Design decisions
+
+- **Subprocess over library invocation.** Importing pytest as a library would mean inheriting its plugin state and obscuring whether the suite genuinely passes when run the normal way. Subprocess matches the developer's mental model: "the dashboard shows what `pytest` would tell me."
+- **Filename-driven discovery, no config list.** A new `test_*.py` file appears in the dashboard with no registration step. Forces naming discipline in exchange for zero ongoing maintenance.
+- **No tests for `module_health.py` as a whole.** The dashboard is tooling, same exemption category as `app.py`. Pure helpers (`humanize`, `parse_report`) are covered in `tests/test_module_health.py`; Gradio rendering and subprocess wiring are not.
+- **Dashboard does not gate CI.** Local development tool, not infrastructure.
+- **Convention lives in two places by design.** Repo-root `CLAUDE.md` carries the pointer (so any future agent finds it); `docs/TESTING.md` carries the full treatment (so additions to the exemption list are visible in one canonical place). Brief in `CLAUDE.md`, full in `TESTING.md`, no duplication.
+
+### What survives unchanged
+
+- ADRs 0001–0003 — this layer is orthogonal to the routing redesign.
+- All existing test files. The two failure-path additions (#7 testing decisions) raised coverage without rewrites.
+
+---
+
 ## Session 12 (2026-04-29) — Architectural Redesign: Classify-then-Route
 
 **Status:** This session is the project's tipping point. The existing codebase (Sessions 1–11) is treated as pre-redesign and will be substantially rewritten. See `feedback_redesign_over_patching.md` in auto-memory for the persistent rule.
@@ -13,10 +68,10 @@
 
 A multi-hour interview session (`/grill-with-docs`) walked the entire design tree and produced a unified architecture. Canonical artifacts:
 
-- **[`CONTEXT.md`](../../../CONTEXT.md)** — 18-term glossary covering Visitor, Gap question, Broader skill, Active learning, Gap-aware response, Gap phrase, Knowledge base, Guardrail, Always-on profile, Frame, Substance, Calibration ladder, Deflection, Sentinel, Interaction log, Branch, Classifier, Tool registry, Contact-provided flag.
-- **[`docs/adr/0001-always-on-profile-and-kb-as-depth.md`](../../../docs/adr/0001-always-on-profile-and-kb-as-depth.md)** — Frame/Substance split. `profile.md` is the always-on Frame (~2–2.5k tokens); KB is retrieved Substance. Source files are content-separated (profile carries patterns; SUMMARY carries numbers; positioning carries parallels) so there is no duplicate source of truth. *Partially superseded by ADR-0003 on the injection mechanism — see below.*
-- **[`docs/adr/0002-hf-dataset-as-canonical-log-store.md`](../../../docs/adr/0002-hf-dataset-as-canonical-log-store.md)** — HuggingFace Dataset is the production log store. Local JSONL is dev-only. `LogReader` abstraction supports both backends.
-- **[`docs/adr/0003-classify-then-route-orchestration.md`](../../../docs/adr/0003-classify-then-route-orchestration.md)** — A cheap classifier picks one of five branches (`GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGISTICAL`) per turn. Each branch loads its own `profile.md` sections, retrieval depth, and tools. Replaces the monolithic system prompt to direct attention and bound cognitive load on cheaper models — a known failure mode from prior projects.
+- **[`CONTEXT.md`](../CONTEXT.md)** — 18-term glossary covering Visitor, Gap question, Broader skill, Active learning, Gap-aware response, Gap phrase, Knowledge base, Guardrail, Always-on profile, Frame, Substance, Calibration ladder, Deflection, Sentinel, Interaction log, Branch, Classifier, Tool registry, Contact-provided flag.
+- **[`docs/adr/0001-always-on-profile-and-kb-as-depth.md`](./adr/0001-always-on-profile-and-kb-as-depth.md)** — Frame/Substance split. `profile.md` is the always-on Frame (~2–2.5k tokens); KB is retrieved Substance. Source files are content-separated (profile carries patterns; SUMMARY carries numbers; positioning carries parallels) so there is no duplicate source of truth. *Partially superseded by ADR-0003 on the injection mechanism — see below.*
+- **[`docs/adr/0002-hf-dataset-as-canonical-log-store.md`](./adr/0002-hf-dataset-as-canonical-log-store.md)** — HuggingFace Dataset is the production log store. Local JSONL is dev-only. `LogReader` abstraction supports both backends.
+- **[`docs/adr/0003-classify-then-route-orchestration.md`](./adr/0003-classify-then-route-orchestration.md)** — A cheap classifier picks one of five branches (`GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGISTICAL`) per turn. Each branch loads its own `profile.md` sections, retrieval depth, and tools. Replaces the monolithic system prompt to direct attention and bound cognitive load on cheaper models — a known failure mode from prior projects.
 
 ### Key rules established this session
 

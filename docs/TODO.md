@@ -1,7 +1,7 @@
 # Digital Twin — TODO
 
 Active task list for the post-redesign rebuild. Updated each session.
-For the canonical glossary see [`CONTEXT.md`](../../../CONTEXT.md). For architectural decisions see [`docs/adr/`](../../../docs/adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
+For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
 **Last updated:** 2026-04-29
 **Current phase:** Phase 1 (Profile + KB content rewrites) — ready to start
@@ -71,6 +71,9 @@ Per ADR-0003. The current `answer.py`, `guardrail.py`, and `logger.py` are repla
 - [ ] Numerical-completeness rule: *"For numerical questions, include specific numbers from the context — don't paraphrase quantities away."*
 
 ### Tests
+
+All new and rebuilt test files follow the convention in [`TESTING.md`](./TESTING.md): matching `tests/test_<module>.py`, mock only at I/O boundaries, no LLM API calls. New `test_*.py` files appear in the `module_health` dashboard automatically.
+
 - [ ] `tests/test_classifier.py` (new) — confidence behaviour, history-aware disambiguation, multi-label, default-to-GENERIC.
 - [ ] `tests/test_branches.py` (new) — per-branch composition correctness; section selection.
 - [ ] `tests/test_readme_registry.py` (new) — registry/disk drift detection.
