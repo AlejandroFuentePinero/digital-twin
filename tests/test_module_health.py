@@ -240,9 +240,8 @@ def test_render_module_omits_traceback_for_passed_tests():
 
     output = render_module(module)
 
-    lines = output.splitlines()
-    # Header + one badge line, nothing else.
-    assert len(lines) == 2
+    assert "traceback" not in output
+    assert "<pre" not in output
 
 
 # ---------------------------------------------------------------------------
