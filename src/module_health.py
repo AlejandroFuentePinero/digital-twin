@@ -11,6 +11,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar
 
@@ -32,6 +33,20 @@ class Test:
     label: str
     status: str
     traceback: str | None = None
+
+
+@dataclass(frozen=True)
+class Summary:
+    passed: int
+    failed: int
+    error: int
+    skipped: int
+    duration: float
+    created: float
+
+    @property
+    def all_passed(self) -> bool:
+        return self.failed == 0 and self.error == 0
 
 
 @dataclass(frozen=True)
@@ -80,6 +95,18 @@ def _to_test(entry: dict, docstrings: dict[str, str]) -> Test:
     )
 
 
+def summarize(report: dict) -> Summary:
+    s = report.get("summary", {})
+    return Summary(
+        passed=s.get("passed", 0),
+        failed=s.get("failed", 0),
+        error=s.get("error", 0),
+        skipped=s.get("skipped", 0),
+        duration=report.get("duration", 0.0),
+        created=report.get("created", 0.0),
+    )
+
+
 def parse_report(report: dict, docstrings: dict[str, str] | None = None) -> list[Module]:
     docstrings = docstrings or {}
     grouped: dict[str, list[Test]] = defaultdict(list)
@@ -114,6 +141,22 @@ def _badge(status: str) -> str:
     )
 
 
+def _format_timestamp(created: float) -> str:
+    if not created:
+        return "—"
+    return datetime.fromtimestamp(created, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def render_summary(summary: Summary) -> str:
+    indicator = "✅" if summary.all_passed else "❌"
+    return (
+        f"### {indicator} "
+        f"PASS {summary.passed} · FAIL {summary.failed} · "
+        f"ERROR {summary.error} · SKIP {summary.skipped} · "
+        f"{summary.duration:.2f}s · {_format_timestamp(summary.created)}"
+    )
+
+
 def render_module(module: Module) -> str:
     lines = [f"### {module.name} · {module.passed}/{module.total}"]
     for t in module.tests:
@@ -143,12 +186,57 @@ def run_pytest() -> dict:
     return json.loads(_REPORT_PATH.read_text())
 
 
+_EMPTY_REPORT: dict = {"summary": {}, "tests": []}
+
+
+def gather_report(
+    runner=run_pytest, cache_path: Path = _REPORT_PATH
+) -> tuple[dict, str | None]:
+    """Run pytest; on launch failure fall back to the cached JSON on disk.
+
+    Returns (report, error). ``error`` is ``None`` when the runner succeeded;
+    otherwise it carries a short description of why pytest didn't run, so the
+    UI can surface it. If neither pytest nor the cache produce a usable
+    report, an empty report is returned so downstream renderers don't crash.
+    """
+    try:
+        return runner(), None
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        try:
+            return json.loads(cache_path.read_text()), error
+        except (FileNotFoundError, json.JSONDecodeError):
+            return _EMPTY_REPORT, error
+
+
+def _render_error(error: str | None) -> str:
+    if not error:
+        return ""
+    return (
+        f'<div style="background:#fee2e2;color:#991b1b;padding:8px 12px;'
+        f'border-radius:4px;margin:8px 0">⚠️ pytest failed to launch — showing '
+        f"cached report. {_escape(error)}</div>"
+    )
+
+
+def _refresh() -> tuple[str, str, str]:
+    report, error = gather_report()
+    docstrings = load_docstrings(_TESTS_DIR)
+    summary_md = render_summary(summarize(report))
+    modules = parse_report(report, docstrings=docstrings)
+    body_md = "\n\n".join(render_module(m) for m in modules)
+    return _render_error(error), summary_md, body_md
+
+
 def build_app() -> gr.Blocks:
-    modules = parse_report(run_pytest(), docstrings=load_docstrings(_TESTS_DIR))
+    error_text, summary_text, body_text = _refresh()
     with gr.Blocks(title="Digital Twin · Module Health") as app:
         gr.Markdown("# Digital Twin · Module Health")
-        for module in modules:
-            gr.Markdown(render_module(module))
+        error_md = gr.Markdown(error_text)
+        summary_md = gr.Markdown(summary_text)
+        run_all = gr.Button("Run all", variant="primary")
+        body_md = gr.Markdown(body_text)
+        run_all.click(fn=_refresh, outputs=[error_md, summary_md, body_md])
     return app
 
 

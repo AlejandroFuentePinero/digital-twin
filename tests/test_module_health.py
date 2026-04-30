@@ -1,12 +1,24 @@
 """Tests for the pure helpers in src/module_health.py.
 
-The Gradio rendering, subprocess invocation, and build_app() wiring are
-intentionally untested (see PRD #7) — they are tooling glue best verified by
-launching the dashboard. Only the pure helpers (humanize, parse_report) are
-covered here, and only without mocks.
+The Gradio rendering and build_app() wiring are intentionally untested
+(see PRD #7) — they are tooling glue best verified by launching the dashboard.
+Only the pure helpers are covered here.
 """
 
-from module_health import Module, Test, humanize, load_docstrings, parse_report, render_module
+import json
+
+from module_health import (
+    Module,
+    Summary,
+    Test,
+    gather_report,
+    humanize,
+    load_docstrings,
+    parse_report,
+    render_module,
+    render_summary,
+    summarize,
+)
 
 
 def _test_entry(
@@ -231,6 +243,140 @@ def test_render_module_omits_traceback_for_passed_tests():
     lines = output.splitlines()
     # Header + one badge line, nothing else.
     assert len(lines) == 2
+
+
+# ---------------------------------------------------------------------------
+# summarize — top-strip aggregation
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_extracts_pass_fail_error_skip_counts():
+    """summarize() pulls discrete counts out of the pytest-json-report summary block."""
+    report = {
+        "summary": {"passed": 9, "failed": 2, "error": 1, "skipped": 3, "total": 15},
+        "duration": 1.5,
+        "created": 1700000000.0,
+    }
+
+    s = summarize(report)
+
+    assert s.passed == 9
+    assert s.failed == 2
+    assert s.error == 1
+    assert s.skipped == 3
+
+
+def test_summarize_global_pass_when_no_failures_or_errors():
+    """The global indicator is True iff every test passed or skipped (no FAIL/ERROR)."""
+    report = {
+        "summary": {"passed": 5, "failed": 0, "error": 0, "skipped": 1},
+        "duration": 0.0,
+        "created": 0.0,
+    }
+
+    assert summarize(report).all_passed is True
+
+
+def test_summarize_global_fail_when_any_failure_or_error():
+    """A single FAIL or ERROR flips the global indicator."""
+    failing = {"summary": {"passed": 5, "failed": 1, "error": 0, "skipped": 0}}
+    erroring = {"summary": {"passed": 5, "failed": 0, "error": 1, "skipped": 0}}
+
+    assert summarize(failing).all_passed is False
+    assert summarize(erroring).all_passed is False
+
+
+def test_summarize_handles_missing_summary_keys():
+    """A pytest-json-report summary block omits keys with zero counts; summarize() defaults them."""
+    report = {"summary": {"passed": 3, "total": 3}, "duration": 0.5, "created": 0.0}
+
+    s = summarize(report)
+
+    assert s.failed == 0
+    assert s.error == 0
+    assert s.skipped == 0
+    assert s.all_passed is True
+
+
+# ---------------------------------------------------------------------------
+# render_summary — top-strip rendering
+# ---------------------------------------------------------------------------
+
+
+def test_render_summary_shows_four_counts_duration_and_timestamp():
+    """The top strip surfaces pass/fail/error/skip as discrete numbers, plus duration and timestamp."""
+    # 2026-04-30 12:00:00 UTC
+    summary = Summary(
+        passed=9, failed=2, error=1, skipped=3, duration=4.25, created=1777809600.0
+    )
+
+    output = render_summary(summary)
+
+    assert "9" in output  # passed
+    assert "2" in output  # failed
+    assert "1" in output  # error
+    assert "3" in output  # skipped
+    assert "4.25" in output or "4.3" in output  # duration in seconds
+    assert "2026" in output  # timestamp
+
+
+def test_render_summary_shows_check_when_all_passed():
+    """A green-light suite renders the global ✅ indicator."""
+    summary = Summary(passed=10, failed=0, error=0, skipped=0, duration=1.0, created=0.0)
+
+    assert "✅" in render_summary(summary)
+
+
+def test_render_summary_shows_x_when_any_failures():
+    """Any FAIL or ERROR flips the global indicator to ❌."""
+    summary = Summary(passed=10, failed=1, error=0, skipped=0, duration=1.0, created=0.0)
+
+    assert "❌" in render_summary(summary)
+
+
+# ---------------------------------------------------------------------------
+# gather_report — pytest with cached-report fallback
+# ---------------------------------------------------------------------------
+
+
+def test_gather_report_returns_runner_result_when_runner_succeeds(tmp_path):
+    """Happy path: runner returns a fresh report; no error surfaced."""
+    fresh = {"summary": {"passed": 1, "total": 1}, "tests": []}
+
+    report, error = gather_report(runner=lambda: fresh, cache_path=tmp_path / "missing.json")
+
+    assert report is fresh
+    assert error is None
+
+
+def test_gather_report_falls_back_to_cache_when_runner_fails(tmp_path):
+    """When the pytest subprocess fails to launch, gather_report reads the cached JSON from disk."""
+    cached = {"summary": {"passed": 7, "total": 7}, "tests": []}
+    cache_path = tmp_path / "cache.json"
+    cache_path.write_text(json.dumps(cached))
+
+    def boom():
+        raise FileNotFoundError("pytest binary not found")
+
+    report, error = gather_report(runner=boom, cache_path=cache_path)
+
+    assert report == cached
+    assert error is not None
+    assert "pytest binary not found" in error
+
+
+def test_gather_report_returns_empty_report_when_runner_fails_and_no_cache(tmp_path):
+    """No crash when the runner fails and there is no cached report on disk yet."""
+    def boom():
+        raise RuntimeError("kaboom")
+
+    report, error = gather_report(runner=boom, cache_path=tmp_path / "absent.json")
+
+    # parse_report and summarize must accept this without exploding.
+    assert parse_report(report) == []
+    assert summarize(report).passed == 0
+    assert error is not None
+    assert "kaboom" in error
 
 
 def test_load_docstrings_reads_test_docstrings_from_source(tmp_path):
