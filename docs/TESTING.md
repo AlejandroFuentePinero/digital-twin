@@ -29,11 +29,14 @@ These files have no matching `test_*.py` because they have no testable behavior:
 
 ## The dashboard
 
+Launched with `uv run python src/module_health.py` — auto-opens in the default browser.
+
 `src/module_health.py` runs the suite via subprocess on launch and renders:
 
-- A **top summary strip** with discrete pass / fail / error / skip counts, total suite duration, last-run timestamp, and a single global ✅/❌ indicator.
-- A **Run all button** that re-runs the full suite mid-session and refreshes both the strip and every module block.
-- One always-visible block per `test_*.py`, with a header `<module> · X/Y` and a coloured PASS / FAIL / ERROR / SKIP badge per test. Test labels come from each test function's docstring (humanized fallback when absent). Failed tests render their short traceback inline directly under the badge — no click required.
+- A **KPI strip** at the top: a status tile (✅ All passing / ❌ Failures present), discrete count tiles for pass / fail / error / skip with status colours (zeros dimmed), and meta tiles for total duration and last-run timestamp.
+- A small **Run all** button (top-right of the header) that re-runs the full suite mid-session and refreshes the KPI strip plus every module card.
+- One **collapsible card** per `test_*.py`, distributed across two columns balanced by test count (greedy bin-pack, not by module count). Cards are collapsed by default when all tests in the module pass and **auto-open when any test fails or errors**, so failures are immediately visible without clicking. The header shows a chevron, a status dot, the module name, and an `X/Y` count pill (green tint when all pass, red tint when any fail).
+- Inside an open card: one row per test with a subtle status pill (PASS / FAIL / ERROR / SKIP) and the test's docstring-derived label (humanized fallback when absent). Failed tests render their short traceback inline in a styled `<pre>` block with a red left-border accent.
 
 If pytest fails to launch (e.g. the binary moved, dependency broke), the dashboard falls back to rendering the cached `.module_health_report.json` from disk and surfaces the launch error in a banner. When no cached report exists yet, an empty dashboard renders without crashing. Cached report lives at `.module_health_report.json` (gitignored).
 
