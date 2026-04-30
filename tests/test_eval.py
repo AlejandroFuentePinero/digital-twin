@@ -57,26 +57,31 @@ def make_test(**kwargs) -> EvalQuestion:
 
 
 def test_rr_returns_1_when_keyword_in_first_doc():
+    """Reciprocal rank is 1.0 when the keyword hits the top-ranked doc."""
     docs = [make_doc("ecology methods"), make_doc("other content")]
     assert _reciprocal_rank("ecology", docs) == 1.0
 
 
 def test_rr_returns_half_when_keyword_in_second_doc():
+    """Reciprocal rank is 0.5 when the keyword first appears at rank 2."""
     docs = [make_doc("other content"), make_doc("ecology methods")]
     assert _reciprocal_rank("ecology", docs) == pytest.approx(0.5)
 
 
 def test_rr_returns_zero_when_keyword_not_found():
+    """Reciprocal rank is 0.0 when no retrieved doc contains the keyword."""
     docs = [make_doc("statistics"), make_doc("modelling")]
     assert _reciprocal_rank("ecology", docs) == 0.0
 
 
 def test_rr_is_case_insensitive():
+    """Reciprocal rank ignores keyword/document casing."""
     docs = [make_doc("ECOLOGY methods")]
     assert _reciprocal_rank("ecology", docs) == 1.0
 
 
 def test_rr_returns_zero_for_empty_docs():
+    """Reciprocal rank degrades gracefully to 0.0 on empty retrieval."""
     assert _reciprocal_rank("ecology", []) == 0.0
 
 
@@ -86,21 +91,22 @@ def test_rr_returns_zero_for_empty_docs():
 
 
 def test_dcg_with_single_relevant_at_rank_1():
-    # dcg = 1 / log2(2) = 1.0
+    """DCG=1.0 when the relevant doc is at rank 1 (1/log2(2))."""
     assert _dcg([1], k=1) == pytest.approx(1.0)
 
 
 def test_dcg_with_single_relevant_at_rank_2():
-    # dcg = 0 + 1/log2(3)
+    """DCG discounts a relevant doc at rank 2 by 1/log2(3)."""
     assert _dcg([0, 1], k=2) == pytest.approx(1.0 / math.log2(3))
 
 
 def test_dcg_with_all_zeros():
+    """DCG is 0.0 when no doc is relevant."""
     assert _dcg([0, 0, 0], k=3) == 0.0
 
 
 def test_dcg_respects_k_cutoff():
-    # Only first k items count
+    """Only the first k positions contribute to DCG; later relevance is ignored."""
     assert _dcg([0, 0, 1], k=2) == 0.0
 
 
@@ -110,22 +116,26 @@ def test_dcg_respects_k_cutoff():
 
 
 def test_ndcg_is_1_when_keyword_in_first_doc():
+    """nDCG saturates at 1.0 when retrieval is perfect."""
     docs = [make_doc("ecology methods")]
     assert _ndcg("ecology", docs, k=1) == pytest.approx(1.0)
 
 
 def test_ndcg_is_0_when_keyword_absent():
+    """nDCG is 0.0 when no retrieved doc is relevant."""
     docs = [make_doc("statistics"), make_doc("modelling")]
     assert _ndcg("ecology", docs, k=2) == 0.0
 
 
 def test_ndcg_is_less_than_1_when_keyword_not_at_rank_1():
+    """nDCG penalises late-rank relevance (<1.0 but >0.0)."""
     docs = [make_doc("other"), make_doc("ecology found here")]
     score = _ndcg("ecology", docs, k=2)
     assert 0.0 < score < 1.0
 
 
 def test_ndcg_returns_0_for_empty_docs():
+    """nDCG degrades gracefully to 0.0 on empty retrieval."""
     assert _ndcg("ecology", [], k=5) == 0.0
 
 
@@ -135,14 +145,17 @@ def test_ndcg_returns_0_for_empty_docs():
 
 
 def test_mean_of_values():
+    """_mean returns the arithmetic mean of a non-empty sequence."""
     assert _mean([1.0, 2.0, 3.0]) == pytest.approx(2.0)
 
 
 def test_mean_of_empty_list_is_zero():
+    """_mean returns 0.0 for an empty sequence rather than raising."""
     assert _mean([]) == 0.0
 
 
 def test_mean_rounds_to_4_decimal_places():
+    """_mean is rounded to 4 decimal places for stable result-file diffs."""
     result = _mean([1.0 / 3.0])
     assert result == pytest.approx(0.3333, abs=1e-4)
 
@@ -153,6 +166,7 @@ def test_mean_rounds_to_4_decimal_places():
 
 
 def test_agg_retrieval_averages_across_records():
+    """_agg_retrieval averages mrr/ndcg/keyword_coverage across all eval records."""
     records = [
         {"mrr": 0.5, "ndcg": 0.6, "keyword_coverage": 80.0},
         {"mrr": 1.0, "ndcg": 0.8, "keyword_coverage": 100.0},
@@ -164,6 +178,7 @@ def test_agg_retrieval_averages_across_records():
 
 
 def test_agg_answer_averages_across_records():
+    """_agg_answer averages accuracy/completeness/relevance across all eval records."""
     records = [
         {"accuracy": 4.0, "completeness": 3.0, "relevance": 5.0},
         {"accuracy": 2.0, "completeness": 5.0, "relevance": 3.0},
@@ -180,11 +195,13 @@ def test_agg_answer_averages_across_records():
 
 
 def test_next_version_returns_1_when_no_results_exist(tmp_path, monkeypatch):
+    """_next_version starts at 1 when no eval results have been written yet."""
     monkeypatch.setattr(E, "RESULTS_DIR", tmp_path)
     assert _next_version() == 1
 
 
 def test_next_version_increments_from_existing(tmp_path, monkeypatch):
+    """_next_version returns one above the highest existing v<N> result file."""
     monkeypatch.setattr(E, "RESULTS_DIR", tmp_path)
     (tmp_path / "v1_2026-04-28.json").write_text("{}")
     (tmp_path / "v2_2026-04-29.json").write_text("{}")
@@ -192,6 +209,7 @@ def test_next_version_increments_from_existing(tmp_path, monkeypatch):
 
 
 def test_next_version_ignores_non_versioned_files(tmp_path, monkeypatch):
+    """_next_version ignores files that don't match the v<N>_ pattern."""
     monkeypatch.setattr(E, "RESULTS_DIR", tmp_path)
     (tmp_path / "README.md").write_text("notes")
     assert _next_version() == 1
@@ -203,6 +221,7 @@ def test_next_version_ignores_non_versioned_files(tmp_path, monkeypatch):
 
 
 def test_load_tests_parses_jsonl(tmp_path, monkeypatch):
+    """load_tests parses each JSONL line into an EvalQuestion."""
     lines = [
         json.dumps({"question": "q1", "keywords": ["k1"], "reference_answer": "a1", "category": "direct_fact"}),
         json.dumps({"question": "q2", "keywords": ["k2"], "reference_answer": "a2", "category": "temporal"}),
@@ -218,6 +237,7 @@ def test_load_tests_parses_jsonl(tmp_path, monkeypatch):
 
 
 def test_load_tests_skips_blank_lines(tmp_path, monkeypatch):
+    """load_tests is tolerant of blank lines in the eval JSONL file."""
     line = json.dumps({"question": "q", "keywords": [], "reference_answer": "a", "category": "holistic"})
     f = tmp_path / "tests.jsonl"
     f.write_text(f"{line}\n\n{line}\n")
@@ -233,6 +253,7 @@ def test_load_tests_skips_blank_lines(tmp_path, monkeypatch):
 
 
 def test_eval_retrieval_returns_retrieval_result():
+    """eval_retrieval returns a RetrievalResult with keyword counts populated."""
     docs = [make_doc("ecology methods"), make_doc("JCU research")]
     test = make_test(keywords=["ecology", "JCU"])
     with patch("run_eval.fetch_context", return_value=docs):
@@ -243,7 +264,8 @@ def test_eval_retrieval_returns_retrieval_result():
 
 
 def test_eval_retrieval_keyword_coverage_is_percentage():
-    docs = [make_doc("ecology content")]  # only first keyword found
+    """keyword_coverage is reported as a percentage (50.0 not 0.5) for dashboard readability."""
+    docs = [make_doc("ecology content")]
     test = make_test(keywords=["ecology", "JCU"])
     with patch("run_eval.fetch_context", return_value=docs):
         result = eval_retrieval(test)
@@ -252,6 +274,7 @@ def test_eval_retrieval_keyword_coverage_is_percentage():
 
 
 def test_eval_retrieval_zero_when_no_keywords_found():
+    """All retrieval metrics collapse to 0.0 when no keywords are found."""
     docs = [make_doc("unrelated content")]
     test = make_test(keywords=["ecology", "JCU"])
     with patch("run_eval.fetch_context", return_value=docs):

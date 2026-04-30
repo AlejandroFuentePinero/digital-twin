@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, call, patch
 
+import pytest
+
 from ingest import ChunkEnrichment, enrich_all, enrich_chunk, load_chunks, split_on_headings
 
 
@@ -7,6 +9,7 @@ from ingest import ChunkEnrichment, enrich_all, enrich_chunk, load_chunks, split
 
 
 def test_h2_sections_become_separate_chunks():
+    """Each H2 heading starts a new chunk."""
     text = "# Title\n\n## Section One\nContent one.\n\n## Section Two\nContent two.\n"
     chunks = split_on_headings(text, "test.md", "test")
     assert len(chunks) == 2
@@ -17,6 +20,7 @@ def test_h2_sections_become_separate_chunks():
 
 
 def test_h3_headings_are_kept_as_content_within_h2_chunk():
+    """H3 headings stay inside the parent H2 chunk rather than starting a new one."""
     text = "# Title\n\n## Parent\n\n### Sub A\nContent A.\n\n### Sub B\nContent B.\n"
     chunks = split_on_headings(text, "test.md", "test")
     assert len(chunks) == 1
@@ -27,7 +31,7 @@ def test_h3_headings_are_kept_as_content_within_h2_chunk():
 
 
 def test_preamble_with_content_is_kept_as_chunk():
-    # publications.md has URLs in the preamble before the first ## heading
+    """Preamble text before the first H2 is preserved (e.g. publications.md URLs)."""
     text = "# Publications\n\nFull list: https://scholar.google.com/\nORCID: https://orcid.org/\n\n## First-author papers\nContent.\n"
     chunks = split_on_headings(text, "publications.md", "publications")
     assert len(chunks) == 2
@@ -35,6 +39,7 @@ def test_preamble_with_content_is_kept_as_chunk():
 
 
 def test_preamble_with_only_h1_title_is_discarded():
+    """A preamble that contains only the H1 title is dropped to avoid noise."""
     text = "# Skills\n\n## Core strength\nContent here.\n"
     chunks = split_on_headings(text, "skills.md", "skills")
     assert len(chunks) == 1
@@ -42,6 +47,7 @@ def test_preamble_with_only_h1_title_is_discarded():
 
 
 def test_file_with_no_headings_returns_single_chunk():
+    """A file with no H2 sections produces one chunk at heading_level=0."""
     text = "# Title\n\nJust some content with no subheadings."
     chunks = split_on_headings(text, "simple.md", "test")
     assert len(chunks) == 1
@@ -49,12 +55,14 @@ def test_file_with_no_headings_returns_single_chunk():
 
 
 def test_chunk_text_contains_its_heading():
+    """The H2 heading line is preserved inside the chunk text."""
     text = "# Title\n\n## My Section\nSome content under the section.\n"
     chunks = split_on_headings(text, "test.md", "test")
     assert "## My Section" in chunks[0]["text"]
 
 
 def test_h4_headings_do_not_cause_splits():
+    """H4 headings stay within their parent H2 chunk."""
     text = "# Title\n\n## Section\nContent.\n\n#### Deep heading\nMore content.\n"
     chunks = split_on_headings(text, "test.md", "test")
     assert len(chunks) == 1
@@ -62,7 +70,7 @@ def test_h4_headings_do_not_cause_splits():
 
 
 def test_short_section_is_not_filtered_out():
-    # No minimum word count — short but real sections must be kept
+    """Short H2 sections are kept — there is no minimum word count."""
     text = (
         "# Education\n\n"
         "## Editorial Services (peer reviewer)\n"
@@ -74,7 +82,7 @@ def test_short_section_is_not_filtered_out():
 
 
 def test_each_chunk_contains_only_its_own_section_content():
-    # Section One's content must not bleed into Section Two and vice versa
+    """Section content does not bleed across chunk boundaries."""
     text = (
         "# Title\n\n"
         "## Section One\nExclusive content A.\n\n"
@@ -91,26 +99,29 @@ def test_each_chunk_contains_only_its_own_section_content():
 
 
 def test_summary_is_a_single_unsplit_chunk():
+    """SUMMARY.md is loaded whole — it functions as a single retrievable unit."""
     chunks = load_chunks()
     summary = [c for c in chunks if c["source_file"] == "SUMMARY.md"]
     assert len(summary) == 1
 
 
 def test_index_is_a_single_unsplit_chunk():
+    """INDEX.md is loaded whole — it functions as a single retrievable unit."""
     chunks = load_chunks()
     index = [c for c in chunks if c["source_file"] == "INDEX.md"]
     assert len(index) == 1
 
 
 def test_multi_section_files_are_split():
+    """Multi-section knowledge-base files are split rather than stored whole."""
     chunks = load_chunks()
-    # Both research files have many ## sections — verify they're not stored whole
     for filename in ("publications.md", "research_projects_detail.md", "experience.md"):
         file_chunks = [c for c in chunks if c["source_file"] == filename]
         assert len(file_chunks) > 1, f"{filename} should produce multiple chunks"
 
 
 def test_all_chunks_have_required_metadata():
+    """Every loaded chunk carries the metadata downstream code relies on."""
     for chunk in load_chunks():
         assert "source_file" in chunk
         assert "section_heading" in chunk
@@ -121,6 +132,7 @@ def test_all_chunks_have_required_metadata():
 
 
 def test_category_mapping_is_correct():
+    """Each KB file maps to the expected category label used for branch routing."""
     chunks = load_chunks()
     by_file = {c["source_file"]: c["category"] for c in chunks}
     assert by_file["SUMMARY.md"] == "summary"
@@ -136,6 +148,7 @@ def test_category_mapping_is_correct():
 
 
 def test_enrich_chunk_output_merges_enrichment_with_original():
+    """enrich_chunk adds headline/summary while preserving every original field."""
     chunk = {
         "text": "Alejandro speaks Spanish natively and English professionally.",
         "section_heading": "Languages",
@@ -162,9 +175,46 @@ def test_enrich_chunk_output_merges_enrichment_with_original():
     assert enriched["category"] == "skills"
 
 
+def test_enrich_chunk_raises_when_parsed_output_is_none():
+    """enrich_chunk raises ValueError when the model returns no parsed output."""
+    chunk = {
+        "text": "Some content.",
+        "section_heading": "Section",
+        "heading_level": 2,
+        "source_file": "test.md",
+        "category": "test",
+    }
+    mock_response = MagicMock()
+    mock_response.choices[0].message.parsed = None
+
+    with patch("ingest.client.beta.chat.completions.parse", return_value=mock_response):
+        with pytest.raises(ValueError):
+            enrich_chunk(chunk)
+
+
+@pytest.mark.parametrize(
+    "headline,summary",
+    [("", "real summary"), ("real headline", ""), ("   ", "real summary"), ("real headline", "\t\n")],
+)
+def test_enrich_chunk_raises_when_headline_or_summary_is_empty(headline, summary):
+    """enrich_chunk raises ValueError when the model returns blank/whitespace headline or summary."""
+    chunk = {
+        "text": "Some content.",
+        "section_heading": "Section",
+        "heading_level": 2,
+        "source_file": "test.md",
+        "category": "test",
+    }
+    mock_response = MagicMock()
+    mock_response.choices[0].message.parsed = ChunkEnrichment(headline=headline, summary=summary)
+
+    with patch("ingest.client.beta.chat.completions.parse", return_value=mock_response):
+        with pytest.raises(ValueError):
+            enrich_chunk(chunk)
+
+
 def test_enrich_chunk_includes_source_context_in_prompt():
-    # The prompt must include source_file and section_heading so the LLM can
-    # generate contextually appropriate headlines — dropping either would degrade quality
+    """source_file and section_heading reach the LLM so headlines stay contextual."""
     chunk = {
         "text": "Some content.",
         "section_heading": "Key Research Skills",
@@ -187,8 +237,7 @@ def test_enrich_chunk_includes_source_context_in_prompt():
 
 
 def test_enrich_all_preserves_input_order():
-    # enrich_all uses ThreadPoolExecutor and as_completed, which completes futures in
-    # arbitrary order. The indexing logic must write results back to their original position.
+    """enrich_all writes parallel results back to their original positions despite as_completed reordering."""
     chunks = [
         {"id": i, "text": f"chunk {i}", "section_heading": f"s{i}",
          "heading_level": 2, "source_file": "test.md", "category": "test"}

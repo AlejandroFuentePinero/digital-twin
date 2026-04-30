@@ -50,9 +50,10 @@ def mock_completion(text: str) -> MagicMock:
 
 
 def test_merge_chunks_deduplicates_by_page_content():
+    """merge_chunks deduplicates so the LLM never sees the same content twice."""
     a = make_chunk("shared content")
     b = make_chunk("unique to primary")
-    c = make_chunk("shared content")  # duplicate of a
+    c = make_chunk("shared content")
     d = make_chunk("unique to secondary")
 
     result = merge_chunks([a, b], [c, d])
@@ -64,12 +65,14 @@ def test_merge_chunks_deduplicates_by_page_content():
 
 
 def test_merge_chunks_preserves_primary_order():
+    """Primary chunks keep their relative order — rerank ordering is preserved."""
     chunks = [make_chunk(f"chunk {i}") for i in range(5)]
     result = merge_chunks(chunks, [])
     assert [r.page_content for r in result] == [c.page_content for c in chunks]
 
 
 def test_merge_chunks_appends_novel_secondary_chunks():
+    """Novel secondary chunks are appended after the primary list."""
     primary = [make_chunk("primary only")]
     secondary = [make_chunk("primary only"), make_chunk("secondary only")]
 
@@ -81,12 +84,14 @@ def test_merge_chunks_appends_novel_secondary_chunks():
 
 
 def test_merge_chunks_with_empty_secondary_returns_primary():
+    """An empty secondary list leaves the primary list unchanged."""
     primary = [make_chunk("a"), make_chunk("b")]
     result = merge_chunks(primary, [])
     assert result == primary
 
 
 def test_merge_chunks_with_empty_primary_returns_all_secondary():
+    """An empty primary list lets every secondary chunk through."""
     secondary = [make_chunk("x"), make_chunk("y")]
     result = merge_chunks([], secondary)
     assert len(result) == 2
@@ -98,6 +103,7 @@ def test_merge_chunks_with_empty_primary_returns_all_secondary():
 
 
 def test_format_context_labels_each_chunk_with_source_and_heading():
+    """_format_context labels every chunk with its source file and section heading."""
     chunks = [
         make_chunk("AI skills content", source="skills.md", heading="AI Stack"),
         make_chunk("Experience content", source="experience.md", heading="PhD Role"),
@@ -111,24 +117,25 @@ def test_format_context_labels_each_chunk_with_source_and_heading():
 
 
 def test_format_context_includes_page_content():
+    """_format_context includes each chunk's actual text, not just metadata."""
     chunk = make_chunk("The actual text of the chunk.")
     context = _format_context([chunk])
     assert "The actual text of the chunk." in context
 
 
 def test_format_context_separates_chunks():
+    """_format_context inserts a separator between chunks so the LLM can tell them apart."""
     chunks = [make_chunk(f"content {i}") for i in range(3)]
     context = _format_context(chunks)
-    # Each chunk should be findable, and there should be separators between them
     for i in range(3):
         assert f"content {i}" in context
     assert "---" in context
 
 
 def test_format_context_handles_missing_metadata_gracefully():
+    """_format_context falls back to '?' for missing metadata rather than raising."""
     chunk = Chunk(page_content="bare content", metadata={})
     context = _format_context([chunk])
-    # Should not raise — falls back to '?' for missing keys
     assert "bare content" in context
     assert "?" in context
 
@@ -139,6 +146,7 @@ def test_format_context_handles_missing_metadata_gracefully():
 
 
 def test_make_rag_messages_structure():
+    """make_rag_messages produces system → history turns → current question, in order."""
     history = [
         {"role": "user", "content": "previous question"},
         {"role": "assistant", "content": "previous answer"},
@@ -154,6 +162,7 @@ def test_make_rag_messages_structure():
 
 
 def test_make_rag_messages_context_appears_in_system_prompt():
+    """Retrieval context is embedded in the system prompt, not the user turn."""
     messages = make_rag_messages("Where did he study?", [], "Alejandro's PhD was at James Cook University.")
 
     system_content = messages[0]["content"]
@@ -161,9 +170,10 @@ def test_make_rag_messages_context_appears_in_system_prompt():
 
 
 def test_make_rag_messages_with_no_history():
+    """With no history, make_rag_messages emits just system + user."""
     messages = make_rag_messages("question", [], "context")
 
-    assert len(messages) == 2  # system + user
+    assert len(messages) == 2
     assert messages[0]["role"] == "system"
     assert messages[1]["role"] == "user"
 
@@ -174,8 +184,8 @@ def test_make_rag_messages_with_no_history():
 
 
 def test_rerank_reorders_chunks_by_returned_ids():
+    """rerank reorders chunks to match the order the model returned."""
     chunks = [make_chunk(f"chunk {i}") for i in range(3)]
-    # LLM returns [3, 1, 2] — third chunk first
     with patch("answer.completion", return_value=mock_completion(
         RankOrder(order=[3, 1, 2]).model_dump_json()
     )):
@@ -187,8 +197,8 @@ def test_rerank_reorders_chunks_by_returned_ids():
 
 
 def test_rerank_guard_drops_out_of_range_ids():
+    """rerank silently drops chunk IDs the model invented."""
     chunks = [make_chunk(f"chunk {i}") for i in range(3)]
-    # LLM returns an out-of-range ID (99) alongside valid ones
     with patch("answer.completion", return_value=mock_completion(
         RankOrder(order=[99, 1, 2, 3]).model_dump_json()
     )):
@@ -199,8 +209,8 @@ def test_rerank_guard_drops_out_of_range_ids():
 
 
 def test_rerank_guard_deduplicates_repeated_ids():
+    """rerank deduplicates IDs the model emitted twice."""
     chunks = [make_chunk(f"chunk {i}") for i in range(3)]
-    # LLM returns chunk 1 twice
     with patch("answer.completion", return_value=mock_completion(
         RankOrder(order=[1, 1, 2, 3]).model_dump_json()
     )):
@@ -212,15 +222,14 @@ def test_rerank_guard_deduplicates_repeated_ids():
 
 
 def test_rerank_guard_appends_chunks_omitted_by_model():
+    """rerank appends any chunk the model forgot, so no chunk is silently dropped."""
     chunks = [make_chunk(f"chunk {i}") for i in range(4)]
-    # LLM only returns 3 of 4 IDs — chunk 3 is missing
     with patch("answer.completion", return_value=mock_completion(
         RankOrder(order=[4, 1, 2]).model_dump_json()
     )):
         result = rerank("question", chunks)
 
     assert len(result) == 4
-    # chunk 2 (ID 3) should be appended at the end
     assert result[-1].page_content == "chunk 2"
 
 
@@ -230,6 +239,7 @@ def test_rerank_guard_appends_chunks_omitted_by_model():
 
 
 def test_rewrite_query_includes_question_in_prompt():
+    """rewrite_query passes the user's question into the rewrite prompt."""
     with patch("answer.completion", return_value=mock_completion("rewritten query")) as mock_call:
         rewrite_query("What Bayesian methods has Alejandro used?")
 
@@ -238,6 +248,7 @@ def test_rewrite_query_includes_question_in_prompt():
 
 
 def test_rewrite_query_includes_history_in_prompt():
+    """rewrite_query includes prior turns so follow-up references can be resolved."""
     history = [
         {"role": "user", "content": "Tell me about his PhD"},
         {"role": "assistant", "content": "He did his PhD at JCU"},
@@ -251,10 +262,11 @@ def test_rewrite_query_includes_history_in_prompt():
 
 
 def test_rewrite_query_returns_model_output():
+    """rewrite_query returns the model output stripped of surrounding whitespace."""
     with patch("answer.completion", return_value=mock_completion("  Bayesian ecology methods  ")):
         result = rewrite_query("question")
 
-    assert result == "Bayesian ecology methods"  # stripped
+    assert result == "Bayesian ecology methods"
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +275,7 @@ def test_rewrite_query_returns_model_output():
 
 
 def test_fetch_context_unranked_constructs_chunks_from_db_results():
+    """fetch_context_unranked converts ChromaDB rows into Chunk objects with metadata."""
     fake_results = {
         "documents": [["doc content A", "doc content B"]],
         "metadatas": [
@@ -289,6 +302,7 @@ def test_fetch_context_unranked_constructs_chunks_from_db_results():
 
 
 def test_answer_question_returns_answer_and_chunks():
+    """answer_question returns both the generated answer and the chunks used."""
     chunks = [make_chunk("relevant context", "skills.md", "AI Stack")]
 
     with (
@@ -303,6 +317,7 @@ def test_answer_question_returns_answer_and_chunks():
 
 
 def test_answer_question_threads_history_into_messages():
+    """answer_question threads prior conversation turns into the LLM messages."""
     history = [{"role": "user", "content": "previous"}, {"role": "assistant", "content": "reply"}]
     chunks = [make_chunk("context")]
 
@@ -318,7 +333,7 @@ def test_answer_question_threads_history_into_messages():
 
 
 def test_answer_question_limits_context_to_final_k():
-    # fetch_context should return at most FINAL_K chunks — verify pipeline respects the limit
+    """answer_question never feeds more than FINAL_K chunks to the LLM."""
     many_chunks = [make_chunk(f"chunk {i}") for i in range(FINAL_K + 5)]
 
     with (
@@ -336,6 +351,7 @@ def test_answer_question_limits_context_to_final_k():
 
 
 def test_rerun_appends_previous_answer_to_system_prompt():
+    """_rerun shows the rejected answer to the model so it can revise rather than restart."""
     with patch("answer.completion", return_value=mock_completion("revised answer")) as mock_call:
         _rerun("question", [], "context text", "bad answer", "Answer was off-topic.")
 
@@ -344,6 +360,7 @@ def test_rerun_appends_previous_answer_to_system_prompt():
 
 
 def test_rerun_appends_feedback_to_system_prompt():
+    """_rerun injects guardrail feedback into the system prompt to steer the revision."""
     with patch("answer.completion", return_value=mock_completion("revised answer")) as mock_call:
         _rerun("question", [], "context text", "bad answer", "Answer was off-topic.")
 
@@ -352,6 +369,7 @@ def test_rerun_appends_feedback_to_system_prompt():
 
 
 def test_rerun_threads_history_into_messages():
+    """_rerun preserves prior conversation turns when retrying a rejected answer."""
     history = [{"role": "user", "content": "prev"}, {"role": "assistant", "content": "reply"}]
     with patch("answer.completion", return_value=mock_completion("revised")) as mock_call:
         _rerun("question", history, "context text", "bad answer", "feedback")
@@ -362,6 +380,7 @@ def test_rerun_threads_history_into_messages():
 
 
 def test_rerun_returns_new_answer_string():
+    """_rerun returns the model's revised answer as a plain string."""
     with patch("answer.completion", return_value=mock_completion("revised answer")):
         result = _rerun("question", [], "context text", "old answer", "feedback")
 
@@ -379,6 +398,7 @@ def make_evaluation(is_acceptable: bool, feedback: str = ""):
 
 
 def test_answer_with_guardrail_returns_on_first_acceptable_answer():
+    """answer_with_guardrail short-circuits as soon as the guardrail accepts."""
     chunks = [make_chunk("context")]
     with (
         patch("answer.fetch_context", return_value=chunks),
@@ -393,6 +413,7 @@ def test_answer_with_guardrail_returns_on_first_acceptable_answer():
 
 
 def test_answer_with_guardrail_retries_on_rejection():
+    """answer_with_guardrail retries when the guardrail rejects the first answer."""
     chunks = [make_chunk("context")]
     evaluate_calls = []
 
@@ -412,6 +433,7 @@ def test_answer_with_guardrail_retries_on_rejection():
 
 
 def test_answer_with_guardrail_returns_canned_refusal_after_max_retries():
+    """After MAX_ATTEMPTS rejections, answer_with_guardrail returns the canned refusal."""
     chunks = [make_chunk("context")]
     with (
         patch("answer.fetch_context", return_value=chunks),
@@ -425,6 +447,7 @@ def test_answer_with_guardrail_returns_canned_refusal_after_max_retries():
 
 
 def test_answer_with_guardrail_evaluates_at_most_max_attempts_times():
+    """The guardrail retry loop is capped at MAX_ATTEMPTS evaluations."""
     chunks = [make_chunk("context")]
     evaluate_calls = []
 
@@ -444,6 +467,7 @@ def test_answer_with_guardrail_evaluates_at_most_max_attempts_times():
 
 
 def test_answer_with_guardrail_logs_once_per_call():
+    """Each answer_with_guardrail call writes exactly one interaction log entry."""
     chunks = [make_chunk("context")]
     with (
         patch("answer.fetch_context", return_value=chunks),
@@ -457,6 +481,7 @@ def test_answer_with_guardrail_logs_once_per_call():
 
 
 def test_answer_with_guardrail_logs_retry_count():
+    """The logged retry_count reflects how many times the guardrail rejected."""
     chunks = [make_chunk("context")]
     evaluate_calls = []
 
@@ -477,6 +502,7 @@ def test_answer_with_guardrail_logs_retry_count():
 
 
 def test_answer_with_guardrail_logs_knew_answer_false_for_gap_phrase():
+    """Gap-phrase answers are logged with knew_answer=False so KB gaps are visible."""
     chunks = [make_chunk("context")]
     gap_answer = "I don't have that information in my knowledge base."
     with (
@@ -492,6 +518,7 @@ def test_answer_with_guardrail_logs_knew_answer_false_for_gap_phrase():
 
 
 def test_answer_with_guardrail_passes_session_id_to_log():
+    """answer_with_guardrail forwards session_id to the interaction logger."""
     chunks = [make_chunk("context")]
     with (
         patch("answer.fetch_context", return_value=chunks),

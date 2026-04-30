@@ -4,12 +4,15 @@ Filename intentionally avoids `test_*.py` / `*_test.py` so pytest does not
 auto-collect this file.
 """
 
+import ast
+import html
 import json
 import subprocess
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 import gradio as gr
 
@@ -25,8 +28,10 @@ _STATUS = {"passed": "PASS", "failed": "FAIL", "error": "ERROR", "skipped": "SKI
 
 @dataclass(frozen=True)
 class Test:
+    __test__: ClassVar[bool] = False
     label: str
     status: str
+    traceback: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,17 +56,54 @@ def _module_name(path: str) -> str:
     return Path(path).stem.removeprefix("test_")
 
 
-def _to_test(entry: dict) -> Test:
+def _traceback_for(entry: dict) -> str | None:
+    for phase in ("call", "setup", "teardown"):
+        info = entry.get(phase) or {}
+        if info.get("outcome") == "failed" and info.get("longrepr"):
+            return info["longrepr"]
+    return None
+
+
+def _docstring_key(nodeid: str) -> str:
+    path, _, func_name = nodeid.partition("::")
+    return f"{Path(path).name}::{func_name}"
+
+
+def _to_test(entry: dict, docstrings: dict[str, str]) -> Test:
     _, _, func_name = entry["nodeid"].partition("::")
-    return Test(label=humanize(func_name), status=_STATUS[entry["outcome"]])
+    docstring = docstrings.get(_docstring_key(entry["nodeid"]))
+    label = docstring if docstring else humanize(func_name)
+    return Test(
+        label=label,
+        status=_STATUS[entry["outcome"]],
+        traceback=_traceback_for(entry),
+    )
 
 
-def parse_report(report: dict) -> list[Module]:
+def parse_report(report: dict, docstrings: dict[str, str] | None = None) -> list[Module]:
+    docstrings = docstrings or {}
     grouped: dict[str, list[Test]] = defaultdict(list)
     for entry in report.get("tests", []):
         path, _, _ = entry["nodeid"].partition("::")
-        grouped[path].append(_to_test(entry))
+        grouped[path].append(_to_test(entry, docstrings))
     return [Module(name=_module_name(path), tests=tests) for path, tests in grouped.items()]
+
+
+def load_docstrings(tests_dir: Path) -> dict[str, str]:
+    """Parse `test_*.py` files under `tests_dir` and return {filename::func: docstring}."""
+    result: dict[str, str] = {}
+    for path in sorted(tests_dir.glob("test_*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
+                doc = ast.get_docstring(node)
+                if doc:
+                    result[f"{path.name}::{node.name}"] = doc
+    return result
+
+
+def _escape(text: str) -> str:
+    return html.escape(text, quote=False)
 
 
 def _badge(status: str) -> str:
@@ -76,6 +118,11 @@ def render_module(module: Module) -> str:
     lines = [f"### {module.name} · {module.passed}/{module.total}"]
     for t in module.tests:
         lines.append(f"- {_badge(t.status)} {t.label}")
+        if t.traceback:
+            lines.append(f"<pre style=\"margin:4px 0 8px 24px;padding:8px;"
+                         f"background:#0f172a;color:#e2e8f0;border-radius:4px;"
+                         f"font-size:0.8em;white-space:pre-wrap;overflow-x:auto\">"
+                         f"{_escape(t.traceback)}</pre>")
     return "\n".join(lines)
 
 
@@ -97,7 +144,7 @@ def run_pytest() -> dict:
 
 
 def build_app() -> gr.Blocks:
-    modules = parse_report(run_pytest())
+    modules = parse_report(run_pytest(), docstrings=load_docstrings(_TESTS_DIR))
     with gr.Blocks(title="Digital Twin · Module Health") as app:
         gr.Markdown("# Digital Twin · Module Health")
         for module in modules:

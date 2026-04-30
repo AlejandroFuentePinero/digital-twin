@@ -140,6 +140,12 @@ def enrich_chunk(chunk: dict) -> dict:
         response_format=ChunkEnrichment,
     )
     enrichment = response.choices[0].message.parsed
+    if enrichment is None or not enrichment.headline.strip() or not enrichment.summary.strip():
+        raise ValueError(
+            f"Enrichment failed for {chunk['source_file']} / {chunk['section_heading']}: "
+            f"got headline={enrichment and enrichment.headline!r}, "
+            f"summary={enrichment and enrichment.summary!r}"
+        )
     return {**chunk, "headline": enrichment.headline, "summary": enrichment.summary}
 
 

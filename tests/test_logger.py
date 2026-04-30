@@ -32,6 +32,7 @@ def read_entries(tmp_log: Path) -> list[dict]:
 
 
 def test_log_interaction_writes_all_fields(tmp_log):
+    """Every required field is present in the persisted JSONL entry."""
     log_interaction("What are his skills?", "He knows Python.", True, True, 0)
     entry = read_entries(tmp_log)[0]
 
@@ -45,6 +46,7 @@ def test_log_interaction_writes_all_fields(tmp_log):
 
 
 def test_log_interaction_stores_correct_values(tmp_log):
+    """Field values round-trip exactly as supplied to log_interaction."""
     log_interaction("What is his PhD topic?", "Tropical ecology.", True, True, 0, "sess-1")
     entry = read_entries(tmp_log)[0]
 
@@ -57,15 +59,16 @@ def test_log_interaction_stores_correct_values(tmp_log):
 
 
 def test_log_interaction_session_id_none_when_omitted(tmp_log):
+    """session_id is recorded as null when caller does not supply one."""
     log_interaction("q", "a", True, True, 0)
     entry = read_entries(tmp_log)[0]
     assert entry["session_id"] is None
 
 
 def test_log_interaction_timestamp_is_iso_format(tmp_log):
+    """Timestamps are ISO 8601 — sortable and timezone-aware."""
     log_interaction("q", "a", True, True, 0)
     entry = read_entries(tmp_log)[0]
-    # ISO 8601 timestamps contain 'T' and '+' or 'Z'
     assert "T" in entry["timestamp"]
 
 
@@ -75,11 +78,13 @@ def test_log_interaction_timestamp_is_iso_format(tmp_log):
 
 
 def test_knew_answer_true_when_gap_phrase_absent(tmp_log):
+    """A confident answer logs knew_answer=True."""
     log_interaction("q", "He has a PhD in ecology.", True, True, 0)
     assert read_entries(tmp_log)[0]["knew_answer"] is True
 
 
 def test_knew_answer_false_when_gap_phrase_present(tmp_log):
+    """A gap-phrase answer logs knew_answer=False."""
     log_interaction("q", "I don't have that information in my knowledge base.", True, False, 0)
     assert read_entries(tmp_log)[0]["knew_answer"] is False
 
@@ -90,6 +95,7 @@ def test_knew_answer_false_when_gap_phrase_present(tmp_log):
 
 
 def test_each_call_appends_a_new_line(tmp_log):
+    """Successive calls append rather than overwrite — log grows monotonically."""
     log_interaction("q1", "a1", True, True, 0)
     log_interaction("q2", "a2", False, False, 2)
 
@@ -100,14 +106,16 @@ def test_each_call_appends_a_new_line(tmp_log):
 
 
 def test_each_line_is_valid_json(tmp_log):
+    """The log is strict JSONL — every line parses on its own."""
     log_interaction("q1", "a1", True, True, 0)
     log_interaction("q2", "a2", False, True, 1, "s")
 
     for line in tmp_log.read_text().splitlines():
-        json.loads(line)  # raises if invalid
+        json.loads(line)
 
 
 def test_log_creates_parent_directory_if_missing(tmp_path, monkeypatch):
+    """log_interaction creates missing parent directories rather than crashing."""
     nested = tmp_path / "new_dir" / "interactions.jsonl"
     monkeypatch.setattr(logger_module, "LOG_PATH", nested)
 
@@ -122,15 +130,18 @@ def test_log_creates_parent_directory_if_missing(tmp_path, monkeypatch):
 
 
 def test_retry_count_zero_on_first_attempt(tmp_log):
+    """retry_count=0 means the first generation passed the guardrail."""
     log_interaction("q", "a", True, True, 0)
     assert read_entries(tmp_log)[0]["retry_count"] == 0
 
 
 def test_retry_count_reflects_number_of_retries(tmp_log):
+    """retry_count is stored verbatim — used downstream by Sentinel diagnostics."""
     log_interaction("q", "a", True, True, 2)
     assert read_entries(tmp_log)[0]["retry_count"] == 2
 
 
 def test_is_acceptable_false_stored_correctly(tmp_log):
+    """is_acceptable=False (canned refusal) round-trips as False, not truthy."""
     log_interaction("q", "canned refusal", False, True, 2)
     assert read_entries(tmp_log)[0]["is_acceptable"] is False

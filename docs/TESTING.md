@@ -13,6 +13,7 @@ New `test_*.py` files appear automatically in the module-health dashboard (`uv r
 - **Real I/O when cheap** is preferred over mocking it — `tmp_path` for filesystem, real KB markdown files for ingest tests.
 - **Assertions describe externally observable behavior**, not implementation details. A test should survive an internal refactor.
 - **No LLM API calls in any test, under any circumstances.** The eval pipeline (`eval/run_eval.py` + `eval/tests.jsonl`) is the only place that hits real LLMs. Unit tests stay fast and deterministic so the suite can run on every save.
+- **Every test has a one-line docstring.** The module-health dashboard renders the docstring as the test's label, so it should read like a behaviour statement (e.g. `"merge_chunks deduplicates so the LLM never sees the same content twice."`). If a test has no docstring, the dashboard falls back to a humanized name — fine as a temporary state, not as a steady state.
 
 ## Exemptions
 
@@ -28,6 +29,6 @@ These files have no matching `test_*.py` because they have no testable behavior:
 
 ## The dashboard
 
-`src/module_health.py` runs the suite via subprocess on launch and renders one always-visible block per `test_*.py`, with a header `<module> · X/Y` and a coloured PASS / FAIL / ERROR / SKIP badge per test. Cached report lives at `.module_health_report.json` (gitignored).
+`src/module_health.py` runs the suite via subprocess on launch and renders one always-visible block per `test_*.py`, with a header `<module> · X/Y` and a coloured PASS / FAIL / ERROR / SKIP badge per test. Test labels come from each test function's docstring (humanized fallback when absent). Failed tests render their short traceback inline directly under the badge — no click required. Cached report lives at `.module_health_report.json` (gitignored).
 
 Filename intentionally avoids `test_*.py` / `*_test.py` so `uv run pytest` does not auto-collect it and accidentally launch the Gradio app.
