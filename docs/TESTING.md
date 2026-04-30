@@ -29,6 +29,12 @@ These files have no matching `test_*.py` because they have no testable behavior:
 
 ## The dashboard
 
-`src/module_health.py` runs the suite via subprocess on launch and renders one always-visible block per `test_*.py`, with a header `<module> · X/Y` and a coloured PASS / FAIL / ERROR / SKIP badge per test. Test labels come from each test function's docstring (humanized fallback when absent). Failed tests render their short traceback inline directly under the badge — no click required. Cached report lives at `.module_health_report.json` (gitignored).
+`src/module_health.py` runs the suite via subprocess on launch and renders:
+
+- A **top summary strip** with discrete pass / fail / error / skip counts, total suite duration, last-run timestamp, and a single global ✅/❌ indicator.
+- A **Run all button** that re-runs the full suite mid-session and refreshes both the strip and every module block.
+- One always-visible block per `test_*.py`, with a header `<module> · X/Y` and a coloured PASS / FAIL / ERROR / SKIP badge per test. Test labels come from each test function's docstring (humanized fallback when absent). Failed tests render their short traceback inline directly under the badge — no click required.
+
+If pytest fails to launch (e.g. the binary moved, dependency broke), the dashboard falls back to rendering the cached `.module_health_report.json` from disk and surfaces the launch error in a banner. When no cached report exists yet, an empty dashboard renders without crashing. Cached report lives at `.module_health_report.json` (gitignored).
 
 Filename intentionally avoids `test_*.py` / `*_test.py` so `uv run pytest` does not auto-collect it and accidentally launch the Gradio app.

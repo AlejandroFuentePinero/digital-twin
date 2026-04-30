@@ -3,8 +3,8 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-04-29
-**Current phase:** Phase 1 (Profile + KB content rewrites) — ready to start
+**Last updated:** 2026-04-30
+**Current phase:** Phase 1 (Profile + KB content rewrites) — ready to start. Developer-experience layer (PRD #7: module-health dashboard + testing convention) is closed.
 
 ---
 

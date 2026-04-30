@@ -5,6 +5,30 @@
 
 ---
 
+## Session 15 (2026-04-30) — Dashboard PRD #7 closed out
+
+**Status:** Wraps the developer-experience layer started in Session 13. PRD [`#7`](https://github.com/AlejandroFuentePinero/digital-twin/issues/7) and all five sub-issues now closed.
+
+### What shipped
+
+- **[`#10`](https://github.com/AlejandroFuentePinero/digital-twin/issues/10) — Docstring-driven labels + inline tracebacks** (commit `aa60c97`). Test labels resolve from each test function's docstring via `ast.parse`, with the humanized name as fallback. Failed tests render their short traceback inline under the badge in a styled `<pre>` block — no click required.
+- **[`#11`](https://github.com/AlejandroFuentePinero/digital-twin/issues/11) — Top strip, Run-all button, cached-report fallback** (commit `3512e09`). New pure helpers `summarize()` (counts/duration/timestamp/global indicator) and `render_summary()` (top-strip markdown). New `gather_report(runner, cache_path)` runs pytest and falls back to the cached JSON on launch failure, returning an empty report when no cache exists so the Gradio app cannot crash on cold start. `build_app()` rewired to expose error banner + summary + Run-all button + module body, all refreshed atomically on click.
+- **PRD [`#7`](https://github.com/AlejandroFuentePinero/digital-twin/issues/7) closed.** All five children done: #8 (MVP dashboard), #9 (failure-path tests), #10 (labels + tracebacks), #11 (strip + Run-all + fallback), #12 (testing convention). Every user story in the PRD is delivered.
+
+### Design decisions
+
+- **`gather_report` takes the runner as a parameter.** Keeps the cached-report fallback testable without spawning a real pytest subprocess. Default arg is `run_pytest`, so production callers don't notice.
+- **Empty-report sentinel (`{"summary": {}, "tests": []}`)** is the no-cache fallback rather than `None`. Both `summarize()` and `parse_report()` already tolerate it, so downstream renderers don't need a special-case branch.
+- **Wiring stays untested.** Per the convention codified in #12, `build_app()` and `run_pytest()` remain on the partial-exemption list. The 10 new tests all cover pure helpers (`summarize`, `render_summary`, `gather_report`).
+
+### Verified
+
+- Full suite: `uv run pytest tests/ -q` → **136 passed**. `tests/test_module_health.py` grew 17 → 27.
+- Smoke test: `gather_report(runner=lambda: ...)` happy path, runner-fails-with-cache fallback, runner-fails-without-cache no-crash.
+- Dashboard launches: `build_app()` returns a `gr.Blocks` instance with the new wiring (top strip, Run-all button, body, error banner).
+
+---
+
 ## Session 14 (2026-04-30) — Repo flatten to standalone, dependency prune
 
 **Status:** Infrastructure cleanup. No code logic changed.
