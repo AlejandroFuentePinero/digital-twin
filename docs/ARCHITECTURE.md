@@ -16,7 +16,7 @@ Describes the file and module structure of the project: what exists, what each f
 ## Directory layout
 
 ```
-projects/digital-twin/
+
 │
 ├── data/
 │   ├── knowledge_base/        # 16 curated Markdown files — the only ingestion source
@@ -67,7 +67,7 @@ projects/digital-twin/
 
 **Run:**
 ```bash
-uv run projects/digital-twin/src/ingest.py
+uv run src/ingest.py
 ```
 
 ---
@@ -78,11 +78,11 @@ uv run projects/digital-twin/src/ingest.py
 
 **Options:**
 ```bash
-uv run projects/digital-twin/src/sample_chunks.py              # 10 random chunks
-uv run projects/digital-twin/src/sample_chunks.py --n 5        # 5 random chunks
-uv run projects/digital-twin/src/sample_chunks.py --category research
-uv run projects/digital-twin/src/sample_chunks.py --source publications.md
-uv run projects/digital-twin/src/sample_chunks.py --seed 42    # reproducible sample
+uv run src/sample_chunks.py              # 10 random chunks
+uv run src/sample_chunks.py --n 5        # 5 random chunks
+uv run src/sample_chunks.py --category research
+uv run src/sample_chunks.py --source publications.md
+uv run src/sample_chunks.py --seed 42    # reproducible sample
 ```
 
 ---
@@ -95,7 +95,7 @@ Inserts `src/` into `sys.path` so test files can import from `src/` without pack
 
 17 tests covering `split_on_headings`, `load_chunks`, `enrich_chunk`, and `enrich_all`. Tests verify: `##` splits, section content boundaries, preamble handling, `###` stays as body content, `UNSPLIT` files are not split, all metadata fields present, category mapping correct, enrichment merges headline/summary without altering original fields, prompt includes source context, and `enrich_all` preserves input order despite concurrent completion.
 
-Run: `uv run pytest projects/digital-twin/tests/test_ingest.py -v`
+Run: `uv run pytest tests/test_ingest.py -v`
 
 ---
 
@@ -128,7 +128,7 @@ The retrieval and generation layer. Takes a user query and conversation history;
 **Run:**
 ```bash
 uv run python -c "
-import sys; sys.path.insert(0, 'projects/digital-twin/src')
+import sys; sys.path.insert(0, 'src')
 from answer import answer_question
 ans, chunks = answer_question('What AI projects has Alejandro built?')
 print(ans)
@@ -154,10 +154,10 @@ Evaluation pipeline. Runs all 149 test questions through the retrieval and answe
 
 **Run:**
 ```bash
-uv run projects/digital-twin/eval/run_eval.py
-uv run projects/digital-twin/eval/run_eval.py --notes "after reranker change"
-uv run projects/digital-twin/eval/run_eval.py --retrieval-only   # skip LLM judge
-uv run projects/digital-twin/eval/run_eval.py --answer-only      # skip retrieval
+uv run eval/run_eval.py
+uv run eval/run_eval.py --notes "after reranker change"
+uv run eval/run_eval.py --retrieval-only   # skip LLM judge
+uv run eval/run_eval.py --answer-only      # skip retrieval
 ```
 
 ---

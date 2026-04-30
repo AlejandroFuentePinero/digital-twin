@@ -34,7 +34,7 @@ The 16 curated Markdown files in `data/knowledge_base/`. The only ingestion sour
 A lightweight LLM evaluator (Claude Sonnet 4.6) that runs after every generated answer and returns `{is_acceptable, feedback}`. Rejects on factual error, scope violation, fabrication, dishonest gap handling, tone breach, or injection. Distinct model family from the generator (GPT-4.1) to avoid correlated failures.
 
 **Always-on profile**:
-A single curated file (`projects/digital-twin/data/profile.md`) injected into every system prompt. Holds the **Frame**: identity, narrative summary, transfer principles, gap inventory. Target size ~2,000–2,500 tokens. Iterated based on unacceptable answers. Excluded from retrieval. Complementary to `SUMMARY.md` (tabular detail, retrievable) — `profile.md` carries patterns, `SUMMARY.md` carries numbers.
+A single curated file (`data/profile.md`) injected into every system prompt. Holds the **Frame**: identity, narrative summary, transfer principles, gap inventory. Target size ~2,000–2,500 tokens. Iterated based on unacceptable answers. Excluded from retrieval. Complementary to `SUMMARY.md` (tabular detail, retrievable) — `profile.md` carries patterns, `SUMMARY.md` carries numbers.
 
 **Frame**:
 The information needed to reason holistically about any question — identity, headline aggregates, why research transfers to AI, where the gaps are. Lives in the **Always-on profile**.
@@ -49,7 +49,7 @@ A soft mapping from KB evidence pattern to claim verb (skill listed + project + 
 A system-prompt rule that triggers on behavioural questions Alejandro has not authorised the agent to answer in his name (e.g. unprompted failure stories, conflict anecdotes). Returns a graceful redirect to live conversation rather than inventing content. Logged with `event_type = "deflected"` so frequency and topic patterns are observable. Distinct from the **Gap phrase** (KB has no info) and from a **Gap-aware response** (KB has structured info on a known gap).
 
 **Sentinel**:
-A local Gradio app (`projects/digital-twin/src/sentinel.py`) for human review of system behaviour. Reads from the canonical log store (HF Dataset in production, local JSONL in dev) and surfaces health metrics, trends, recent failures, gap clusters, deflection patterns, and a small set of automatic flags (regressions vs prior week, new gap clusters, repeat failures). Run on demand; not deployed. Replaces ad-hoc log diving as the primary debugging surface.
+A local Gradio app (`src/sentinel.py`) for human review of system behaviour. Reads from the canonical log store (HF Dataset in production, local JSONL in dev) and surfaces health metrics, trends, recent failures, gap clusters, deflection patterns, and a small set of automatic flags (regressions vs prior week, new gap clusters, repeat failures). Run on demand; not deployed. Replaces ad-hoc log diving as the primary debugging surface.
 
 **Branch**:
 One of five orchestration paths the agent selects per turn: `GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGISTICAL`. Each branch loads its own subset of `profile.md` sections, sets its own `FINAL_K` for retrieval, exposes its own tools (only `TECHNICAL` has `fetch_project_readme`), and applies its own rule set in the system prompt. Selected by the **Classifier**.

@@ -2,7 +2,7 @@
 Gradio chat interface for the digital twin.
 
 Run:
-    uv run projects/digital-twin/src/app.py
+    uv run src/app.py
 """
 
 import uuid

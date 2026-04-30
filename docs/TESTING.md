@@ -2,9 +2,9 @@
 
 ## The rule
 
-Every `*.py` under `projects/digital-twin/src/` and `projects/digital-twin/eval/` has a matching `projects/digital-twin/tests/test_<module>.py` containing at least one functional test.
+Every `*.py` under `src/` and `eval/` has a matching `tests/test_<module>.py` containing at least one functional test.
 
-New `test_*.py` files appear automatically in the module-health dashboard (`uv run python projects/digital-twin/src/module_health.py`) — no registration step.
+New `test_*.py` files appear automatically in the module-health dashboard (`uv run python src/module_health.py`) — no registration step.
 
 ## What good tests look like here
 
@@ -28,6 +28,6 @@ These files have no matching `test_*.py` because they have no testable behavior:
 
 ## The dashboard
 
-`projects/digital-twin/src/module_health.py` runs the suite via subprocess on launch and renders one always-visible block per `test_*.py`, with a header `<module> · X/Y` and a coloured PASS / FAIL / ERROR / SKIP badge per test. Cached report lives at `.module_health_report.json` (gitignored).
+`src/module_health.py` runs the suite via subprocess on launch and renders one always-visible block per `test_*.py`, with a header `<module> · X/Y` and a coloured PASS / FAIL / ERROR / SKIP badge per test. Cached report lives at `.module_health_report.json` (gitignored).
 
 Filename intentionally avoids `test_*.py` / `*_test.py` so `uv run pytest` does not auto-collect it and accidentally launch the Gradio app.

@@ -2,9 +2,9 @@
 Plot eval results across runs.
 
 Usage:
-    uv run projects/digital-twin/eval/plot_eval.py
-    uv run projects/digital-twin/eval/plot_eval.py --runs v1 v2 v3
-    uv run projects/digital-twin/eval/plot_eval.py --output eval/results/comparison.png
+    uv run eval/plot_eval.py
+    uv run eval/plot_eval.py --runs v1 v2 v3
+    uv run eval/plot_eval.py --output eval/results/comparison.png
 """
 
 import argparse

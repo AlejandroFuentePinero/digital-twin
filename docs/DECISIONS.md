@@ -49,7 +49,7 @@ The 5-phase plan in `PLAN.md` is replaced by a 7-phase plan in `TODO.md`:
 
 ### Closing context
 
-Alejandro will review the codebase next, applying the redesign-over-patching rule from auto-memory. The four pre-redesign docs in `projects/digital-twin/docs/` are kept as historical record; `TODO.md` is the active source of truth, with ADRs and CONTEXT.md as canonical references.
+Alejandro will review the codebase next, applying the redesign-over-patching rule from auto-memory. The four pre-redesign docs in `docs/` are kept as historical record; `TODO.md` is the active source of truth, with ADRs and CONTEXT.md as canonical references.
 
 ---
 

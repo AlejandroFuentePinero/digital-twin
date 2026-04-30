@@ -9,10 +9,10 @@ Results are written to eval/results/v{N}_{date}.json with a full architecture
 snapshot so runs can be compared over time.
 
 Usage:
-    uv run projects/digital-twin/eval/run_eval.py
-    uv run projects/digital-twin/eval/run_eval.py --notes "after reranker prompt change"
-    uv run projects/digital-twin/eval/run_eval.py --retrieval-only
-    uv run projects/digital-twin/eval/run_eval.py --answer-only
+    uv run eval/run_eval.py
+    uv run eval/run_eval.py --notes "after reranker prompt change"
+    uv run eval/run_eval.py --retrieval-only
+    uv run eval/run_eval.py --answer-only
 """
 
 import argparse

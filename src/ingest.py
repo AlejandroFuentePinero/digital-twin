@@ -11,7 +11,7 @@ Chunking strategy:
   - Metadata per chunk: source_file, section_heading, heading_level, category, headline, summary.
 
 Run from the repo root:
-  uv run projects/digital-twin/src/ingest.py
+  uv run src/ingest.py
 """
 
 import re

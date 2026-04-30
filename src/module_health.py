@@ -13,8 +13,8 @@ from pathlib import Path
 
 import gradio as gr
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_TESTS_DIR = _REPO_ROOT / "projects" / "digital-twin" / "tests"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_TESTS_DIR = _REPO_ROOT / "tests"
 _REPORT_PATH = _REPO_ROOT / ".module_health_report.json"
 
 _BADGE_COLOR = {"PASS": "#16a34a", "FAIL": "#dc2626", "ERROR": "#ea580c", "SKIP": "#6b7280"}

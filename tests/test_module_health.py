@@ -40,9 +40,9 @@ def test_parse_report_groups_tests_by_source_file():
     """Each test_*.py file becomes its own Module."""
     report = {
         "tests": [
-            _test_entry("projects/digital-twin/tests/test_logger.py::test_a"),
-            _test_entry("projects/digital-twin/tests/test_logger.py::test_b"),
-            _test_entry("projects/digital-twin/tests/test_guardrail.py::test_c"),
+            _test_entry("tests/test_logger.py::test_a"),
+            _test_entry("tests/test_logger.py::test_b"),
+            _test_entry("tests/test_guardrail.py::test_c"),
         ]
     }
 
@@ -53,7 +53,7 @@ def test_parse_report_groups_tests_by_source_file():
 
 def test_parse_report_derives_module_name_from_filename():
     """test_guardrail.py becomes the module name 'guardrail'."""
-    report = {"tests": [_test_entry("projects/digital-twin/tests/test_guardrail.py::test_x")]}
+    report = {"tests": [_test_entry("tests/test_guardrail.py::test_x")]}
 
     modules = parse_report(report)
 

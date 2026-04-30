@@ -23,7 +23,7 @@ Per the persistent feedback memory (`feedback_redesign_over_patching.md`), the a
 
 Content-only phase. No code changes. Sets up the **Frame** (loaded by branches in Phase 2) and addresses the two KB-structure weaknesses identified in v3 eval.
 
-- [ ] Write `projects/digital-twin/data/profile.md` (~2,000–2,500 tokens), structured as named `##` sections:
+- [ ] Write `data/profile.md` (~2,000–2,500 tokens), structured as named `##` sections:
   - [ ] `## identity` (~150 tokens) — one-paragraph identity block
   - [ ] `## narrative_summary` (~500 tokens) — career arc, what he does, how he frames himself
   - [ ] `## transfer_principles` (~400 tokens) — 5 transfer mechanisms, prose-only (no parallels table; that stays in `positioning.md`)

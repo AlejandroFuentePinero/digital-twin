@@ -2,11 +2,11 @@
 Sample and inspect chunks from the ChromaDB knowledge base.
 
 Usage (from repo root):
-  uv run projects/digital-twin/src/inspect.py
-  uv run projects/digital-twin/src/inspect.py --n 5
-  uv run projects/digital-twin/src/inspect.py --n 5 --category research
-  uv run projects/digital-twin/src/inspect.py --n 5 --source publications.md
-  uv run projects/digital-twin/src/inspect.py --n 5 --seed 42
+  uv run src/inspect.py
+  uv run src/inspect.py --n 5
+  uv run src/inspect.py --n 5 --category research
+  uv run src/inspect.py --n 5 --source publications.md
+  uv run src/inspect.py --n 5 --seed 42
 """
 
 import argparse
