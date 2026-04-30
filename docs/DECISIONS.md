@@ -5,6 +5,46 @@
 
 ---
 
+## Session 16 (2026-04-30) — Pre-flight grill session, `profile.md` shipped
+
+**Status:** Issue [`#13`](https://github.com/AlejandroFuentePinero/digital-twin/issues/13) sequencing step 1 complete. `data/profile.md` (~2,650 words / ~3,500 tokens, six named `##` sections) is content-complete and committed. Steps 2–13 of issue #13 (KB log nuke, foundations, composer, LLM callers, retrieval extraction, logging, pipeline, app rewire) remain. Phase 1's other content sub-tasks (positioning.md rewrite, experience.md timeline, KB re-ingest) also remain.
+
+### What shipped
+
+- **`data/profile.md`** — six named `##` sections (`identity`, `narrative_summary`, `transfer_principles`, `gap_inventory`, `logistics`, `personal_stories`) parsed via the `^## ` literal-match rule per the `ProfileLoader` spec in issue #13. Lives outside `data/knowledge_base/` so `ingest.py` skips it.
+- **CONTEXT.md compliance.** `gap_inventory` restructured to follow the canonical **Gap-aware response** shape: each technical-skill gap has (1) specific gap with explicit **calibration-ladder** exposure rung (*trained / familiar*, *hands-on*, etc.), (2) **Broader skill** with named KB-verifiable evidence, (3) **Active learning** with concrete credentials and status. Vague active-learning claims removed; specific named courses (Ed Donner *AI Engineer Production Track: Deploy LLMs & Agents at Scale*, AWS Cloud Practitioner cert, Andrew Ng *Machine Learning Specialisation*, Udemy *Data Science Specialisation*) reinstated with status.
+- **Per-branch token budgets honoured** (vs ADR-0003 spec): GENERIC ~2.6k vs ~2.9k ✓; GAP ~2.2k vs ~2.2k ✓; LOGISTICAL ~0.9k vs ~1.0k ✓; BEHAVIOURAL ~2.1k vs ~1.8k (over by ~17%, accepted — see Phase 5 deferral override below).
+- **Officeworks AI engineer offer** (start 2026-05-13) integrated across `identity`, `gap_inventory` entry 1, and `logistics`. Industry-experience gap closes structurally on the start date.
+
+### Design decisions
+
+- **`personal_stories` pulled forward from Phase 5 to Phase 1.** TODO.md scoped this section as a 1–2-story placeholder until live recruiter probes informed which stories matter (Phase 5). Override: the seven stories drafted in this session are already at "would say verbatim to a recruiter" quality (the governing rule per TODO.md), no benefit to delaying. Phase 5 may still trim or replace based on live failure modes; this is not a final freeze.
+- **Story 6 (origin — grandmother and rural Spain) gated tightly.** Inline routing instruction limits surfacing to questions like *"tell me something not in your CV that defines you"* / *"what drives you?"*. For other behavioural questions, the routing directive points to stories 1–5 or 7. This is the **Deflection** concept (CONTEXT.md) applied at story granularity rather than as a global behavioural-question rule.
+- **`transfer_principles` expanded from 5 to 6.** Sixth principle is "Critical evaluation of novel work — the AI governance instinct" (peer-review-as-judgment-without-benchmarks → AI eval/alignment work where no canonical benchmark exists). Replaced an initial "field-data realism" sixth principle that Alejandro flagged as the weakest. Justification: this principle is uniquely differentiated for an AI-engineer-with-research-background and lands in a topic (AI governance) increasingly recruited for.
+- **Routing table prepended to `personal_stories`** plus an explicit "redirect to" instruction in `logistics` for Officeworks-internal questions. Both make deflection patterns explicit (LLM no longer has to infer from titles alone) per the audit Alejandro requested mid-session.
+
+### Process notes
+
+- **Format:** one question at a time, brain-dump → condense to recruiter-bar prose. Six sections fully grilled in a single session. Iteration count per section: identity 3 versions, narrative_summary 1 version, transfer_principles 3 versions, gap_inventory 4 versions, logistics 1 version, personal_stories 2 versions. Then a final compaction + terminology pass.
+- **Sources read for grounding:** CONTEXT.md, ADR-0001, ADR-0003, TODO.md, plus 8 files from `data/raw_me/` (`about_me.md`, `about.md`, `datascience-skills.md`, `cv.md`, `delafuente_2025_GCB.md`, `forecasting-popviability-ringtails.md`, `dynamic-community-reshuffling.md`, `herbivory_awt_2024_oecologia.md`, `llm-engineering-lab.md`, `ai-jie.md`) and 2 from `data/knowledge_base/` (`positioning.md`, `experience.md`).
+- **Two policy conflicts surfaced and resolved mid-session:**
+  - (a) Earlier guidance to use "timeless framing without specific course names" for active-learning lines conflicted with CONTEXT.md's explicit *"vague claims do not qualify and should not be made"* rule for the **Active learning** concept. Resolved by re-introducing named credentials with concrete status (Ed Donner course in progress, AWS CCP achieved, Andrew Ng/Udemy specialisations completed).
+  - (b) "Deflect" / "Adjacent" used loosely throughout the gap_inventory conflicted with CONTEXT.md's reservation of **Deflection** for behavioural-question redirection and its explicit ban on "Adjacent skill" / "transferable skill" terminology. Resolved by replacing "deflect" with "redirect", "Adjacent" with **Broader skill**.
+
+### Verified
+
+- `grep -nE '^## ' data/profile.md` returns the six expected headings in order, no duplicates → `ProfileLoader` parser will not raise `ValueError`.
+- File at `data/profile.md` (outside `data/knowledge_base/`) → `ingest.py` glob naturally skips it.
+- Branch composition arithmetic against ADR-0003 budgets (above).
+
+### Outstanding
+
+- **Phase 1 remaining content sub-tasks:** rewrite `data/knowledge_base/positioning.md` (remove transfer-principle prose now in `profile.md`), add `## Career Timeline` to `data/knowledge_base/experience.md`, re-ingest KB.
+- **Issue #13 remaining sequencing steps (2–13):** `rm data/logs/interactions.jsonl`; foundations (`rules.py`, `branches.py`, `profile.py`); composer; LLM callers (`classifier.py` stub, `generator.py`, `guardrail.py` rebuild); retrieval extraction; `interaction_log.py`; `pipeline.py` + integration tests; `app.py` rewire; cleanup; module-health verify; manual smoke-test; close issue + strip `needs-triage`.
+- **Spec tightening for step 3 (`profile.py`):** issue #13's `profile.py` spec says the parser "splits only on `^## `" but does not explicitly state what happens to content before the first `## ` heading. The intended behavior is: **content before the first `## ` heading is discarded and not included in any section body.** This matters because `data/profile.md` has a level-1 title and a descriptive paragraph above the first `## identity`; if the parser were to attach this preamble to `identity`'s body, the LLM would receive ~30 stray tokens of meta-documentation in every branch's system prompt. Add `test_profile_loader_discards_pre_section_preamble` to `tests/test_profile.py` to lock the behavior.
+
+---
+
 ## Session 15 (2026-04-30) — Dashboard PRD #7 closed out
 
 **Status:** Wraps the developer-experience layer started in Session 13. PRD [`#7`](https://github.com/AlejandroFuentePinero/digital-twin/issues/7) and all five sub-issues now closed.

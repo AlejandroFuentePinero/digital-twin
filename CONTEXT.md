@@ -34,7 +34,7 @@ The 16 curated Markdown files in `data/knowledge_base/`. The only ingestion sour
 A lightweight LLM evaluator (Claude Sonnet 4.6) that runs after every generated answer and returns `{is_acceptable, feedback}`. Rejects on factual error, scope violation, fabrication, dishonest gap handling, tone breach, or injection. Distinct model family from the generator (GPT-4.1) to avoid correlated failures.
 
 **Always-on profile**:
-A single curated file (`data/profile.md`) injected into every system prompt. Holds the **Frame**: identity, narrative summary, transfer principles, gap inventory. Target size ~2,000–2,500 tokens. Iterated based on unacceptable answers. Excluded from retrieval. Complementary to `SUMMARY.md` (tabular detail, retrievable) — `profile.md` carries patterns, `SUMMARY.md` carries numbers.
+A single curated file (`data/profile.md`). Per ADR-0003 the file is sectioned by named `##` blocks and **loaded selectively per branch** — not injected whole into every system prompt. Holds the **Frame**: `identity`, `narrative_summary`, `transfer_principles`, `gap_inventory`, `logistics`, `personal_stories`. Only `identity` loads in every branch; the other five sections load only on the branches that need them, per the ADR-0003 composition table. Iterated based on unacceptable answers. Excluded from retrieval. Complementary to `SUMMARY.md` (tabular detail, retrievable) — `profile.md` carries patterns, `SUMMARY.md` carries numbers.
 
 **Frame**:
 The information needed to reason holistically about any question — identity, headline aggregates, why research transfers to AI, where the gaps are. Lives in the **Always-on profile**.

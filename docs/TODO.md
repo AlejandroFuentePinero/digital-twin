@@ -4,7 +4,7 @@ Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
 **Last updated:** 2026-04-30
-**Current phase:** Phase 1 (Profile + KB content rewrites) — ready to start. Developer-experience layer (PRD #7: module-health dashboard + testing convention) is closed.
+**Current phase:** Phase 1 (Profile + KB content rewrites) — `profile.md` shipped, KB rewrites pending. Developer-experience layer (PRD #7: module-health dashboard + testing convention) is closed.
 
 ---
 
@@ -23,19 +23,19 @@ Per the persistent feedback memory (`feedback_redesign_over_patching.md`), the a
 
 Content-only phase. No code changes. Sets up the **Frame** (loaded by branches in Phase 2) and addresses the two KB-structure weaknesses identified in v3 eval.
 
-- [ ] Write `data/profile.md` (~2,000–2,500 tokens), structured as named `##` sections:
-  - [ ] `## identity` (~150 tokens) — one-paragraph identity block
-  - [ ] `## narrative_summary` (~500 tokens) — career arc, what he does, how he frames himself
-  - [ ] `## transfer_principles` (~400 tokens) — 5 transfer mechanisms, prose-only (no parallels table; that stays in `positioning.md`)
-  - [ ] `## gap_inventory` (~500 tokens) — 5–7 known gaps with broader skill, exposure level, active learning specifics, KB cross-reference
-  - [ ] `## logistics` (~200 tokens) — location, availability, languages, how to discuss salary
-  - [ ] `## personal_stories` (~400 tokens, **placeholder until Phase 5**) — 1–2 STAR-format anecdotes; only added when Alejandro confirms the wording
+- [x] Write `data/profile.md` (~3,000 tokens, slightly over the original ~2,000–2,500 estimate; see deviations below), structured as named `##` sections:
+  - [x] `## identity` (~150 tokens) — one-paragraph identity block.
+  - [x] `## narrative_summary` (~580 tokens) — career arc, what he does, how he frames himself.
+  - [x] `## transfer_principles` (~430 tokens) — **6** transfer mechanisms, prose-only. Expanded from the planned 5 to add "Critical evaluation of novel work — the AI governance instinct" (peer-review-as-judgment-without-benchmarks → AI eval/alignment).
+  - [x] `## gap_inventory` (~630 tokens) — **5** gaps in the canonical CONTEXT.md Gap-aware response shape: specific gap with **calibration-ladder** exposure rung + **Broader skill** with named KB-verifiable evidence + **Active learning** with concrete credentials and status. Industry experience, DevOps, cloud, frontend, deep learning. Officeworks AI engineer offer (start 13 May 2026) closes the industry-experience gap structurally.
+  - [x] `## logistics` (~195 tokens) — Melbourne, AU PR full work rights, Officeworks AI engineer 13 May 2026 (hybrid), industry exclusions, comp/travel opt-out, Officeworks-confidentiality redirect.
+  - [x] `## personal_stories` (~980 tokens) — **pulled forward from Phase 5 to Phase 1.** Seven recruiter-bar stories with explicit routing table. Story 6 (origin — grandmother and rural Spain) gated to surface only on "tell me something not in your CV that defines you" / "what drives you" prompts. Override of the Phase 5 deferral was Alejandro's call: the work is done at recruiter-bar, no benefit to delaying.
 - [ ] Rewrite `data/knowledge_base/positioning.md` — remove transfer-principle prose that moves to `profile.md`. Keep parallels table, worked examples, "what he doesn't bring."
 - [ ] Add `## Career Timeline` section to `data/knowledge_base/experience.md` — explicit start/end years per role so chunk headlines surface dates. Fixes temporal retrieval (v3 MRR 0.783).
 - [ ] Re-ingest KB. `profile.md` is naturally skipped (lives outside `data/knowledge_base/`). Verify chunk count and category distribution.
 - [ ] Sample-check chunks via `sample_chunks.py` — confirm temporal chunks now have dates in headlines.
 
-Phase 1 deliverable: `profile.md` is content-complete (minus `personal_stories`), KB rewrites are merged, ChromaDB is re-ingested. No code changes.
+Phase 1 deliverable: `profile.md` is content-complete (**including** `personal_stories` — pulled forward from Phase 5), KB rewrites are merged, ChromaDB is re-ingested. No code changes.
 
 ---
 
