@@ -19,10 +19,35 @@ def fixture_profile(tmp_path):
     return ProfileLoader(p)
 
 
+def test_gap_single_branch_loads_calibration_ladder_and_gap_inventory(fixture_profile):
+    """compose(['GAP']) includes the calibration_ladder rule and the gap_inventory section."""
+    composer = PromptComposer(fixture_profile, REGISTRY)
+    prompt = composer.compose(["GAP"], "generator")
+    assert "Calibration ladder" in prompt, "GAP's branch_rule (calibration_ladder) must be loaded"
+    assert "GAP-MARKER" in prompt, "GAP's profile section (gap_inventory) must be loaded"
+    # GENERIC-only sections must not leak in
+    assert "NARRATIVE-MARKER" not in prompt
+    assert "TRANSFER-MARKER" not in prompt
+
+
+def test_multi_branch_unions_sections_and_rules_dedup_identity(fixture_profile):
+    """compose(['GAP', 'GENERIC']) unions both branches' rules and sections; identity dedupes."""
+    composer = PromptComposer(fixture_profile, REGISTRY)
+    prompt = composer.compose(["GAP", "GENERIC"], "generator")
+    # Both branches' rule and section content present
+    assert "Calibration ladder" in prompt
+    assert "IDENTITY-MARKER" in prompt
+    assert "GAP-MARKER" in prompt
+    assert "NARRATIVE-MARKER" in prompt
+    assert "TRANSFER-MARKER" in prompt
+    # identity appears in both branches' profile_sections — must dedupe (single occurrence)
+    assert prompt.count("IDENTITY-MARKER") == 1, "identity section must dedupe across branches"
+
+
 def test_generator_prompt_contains_universal_rules_and_generic_profile_sections(fixture_profile):
     """compose('GENERIC', 'generator') concatenates the four universal rules and the three GENERIC profile sections."""
     composer = PromptComposer(fixture_profile, REGISTRY)
-    prompt = composer.compose("GENERIC", "generator")
+    prompt = composer.compose(["GENERIC"], "generator")
 
     for key in UNIVERSAL:
         # Each universal rule's text appears in the prompt
@@ -36,8 +61,8 @@ def test_generator_prompt_contains_universal_rules_and_generic_profile_sections(
 def test_generator_and_guardrail_roles_produce_different_prompts(fixture_profile):
     """Same branch, different role — outputs differ and carry role-appropriate task framing."""
     composer = PromptComposer(fixture_profile, REGISTRY)
-    gen = composer.compose("GENERIC", "generator")
-    judge = composer.compose("GENERIC", "guardrail")
+    gen = composer.compose(["GENERIC"], "generator")
+    judge = composer.compose(["GENERIC"], "guardrail")
 
     assert gen != judge, "generator and guardrail prompts must differ in role framing"
     # Generator framing tells the model to answer; guardrail tells it to evaluate.
@@ -51,7 +76,7 @@ def test_retrieved_context_appears_verbatim_when_provided(fixture_profile):
     """Retrieved context is embedded verbatim in the prompt under a `## Retrieved context` header."""
     composer = PromptComposer(fixture_profile, REGISTRY)
     ctx = "[publications.md — Iriarte 2021]\nViscacha population dynamics in the Andes."
-    prompt = composer.compose("GENERIC", "generator", retrieved_context=ctx)
+    prompt = composer.compose(["GENERIC"], "generator", retrieved_context=ctx)
     assert ctx in prompt
     assert "## Retrieved context" in prompt
 
@@ -59,14 +84,14 @@ def test_retrieved_context_appears_verbatim_when_provided(fixture_profile):
 def test_no_retrieved_context_header_when_default_empty(fixture_profile):
     """No `## Retrieved context` header is emitted when retrieved_context is unset."""
     composer = PromptComposer(fixture_profile, REGISTRY)
-    prompt = composer.compose("GENERIC", "generator")
+    prompt = composer.compose(["GENERIC"], "generator")
     assert "## Retrieved context" not in prompt
 
 
 def test_sections_outside_branch_spec_do_not_leak_into_prompt(fixture_profile):
     """GENERIC's `profile_sections` excludes `gap_inventory`, so its body must not appear in the prompt."""
     composer = PromptComposer(fixture_profile, REGISTRY)
-    prompt = composer.compose("GENERIC", "generator")
+    prompt = composer.compose(["GENERIC"], "generator")
     assert "GAP-MARKER" not in prompt, "gap_inventory body leaked into GENERIC prompt"
 
 
@@ -74,4 +99,4 @@ def test_unknown_branch_raises_keyerror(fixture_profile):
     """compose() on a branch not in the registry raises KeyError — fail loudly on bad config."""
     composer = PromptComposer(fixture_profile, REGISTRY)
     with pytest.raises(KeyError):
-        composer.compose("DOES_NOT_EXIST", "generator")
+        composer.compose(["DOES_NOT_EXIST"], "generator")

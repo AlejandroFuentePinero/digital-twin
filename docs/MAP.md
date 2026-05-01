@@ -89,7 +89,9 @@ graph LR
   pipeline --> guardrail
   pipeline --> interaction_log
   pipeline --> retrieval
+  pipeline --> rules
   app --> ext_Gradio__UI_
+  classifier --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   generator --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   guardrail --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   ingest --> ext_ChromaDB

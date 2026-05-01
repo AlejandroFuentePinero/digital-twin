@@ -53,12 +53,13 @@ class FakeGuardrail:
 
 @pytest.fixture
 def real_composer(tmp_path):
-    """A real PromptComposer wired to a minimal profile fixture and the real REGISTRY (GENERIC)."""
+    """A real PromptComposer wired to a minimal profile fixture covering every section any registered branch loads."""
     p = tmp_path / "profile.md"
     p.write_text(
         "## identity\nIDENTITY body.\n\n"
         "## narrative_summary\nNARRATIVE body.\n\n"
-        "## transfer_principles\nTRANSFER body.\n"
+        "## transfer_principles\nTRANSFER body.\n\n"
+        "## gap_inventory\nGAP-INVENTORY body.\n"
     )
     return PromptComposer(ProfileLoader(p), REGISTRY)
 
@@ -165,6 +166,71 @@ def test_retrieval_called_once_per_turn_even_with_retries(real_composer, fake_ch
     assert len(guardrail.calls) == MAX_ATTEMPTS
 
 
+def test_gap_classification_routes_to_gap_branch_with_calibration_ladder_and_gap_inventory(real_composer, fake_chunks, tmp_path):
+    """End-to-end: classifier predicts GAP → generator's system prompt carries the calibration_ladder rule and the gap_inventory section."""
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["GAP"], confidence=0.9))
+    generator = FakeGenerator(answers=["A"])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run("Do you have AWS experience?", history=[], session_id="s1", turn_index=0)
+
+    sys_prompt = generator.calls[0]["system_prompt"]
+    assert "Calibration ladder" in sys_prompt, "GAP branch_rule (calibration_ladder) must reach the generator"
+    assert "GAP-INVENTORY" in sys_prompt, "GAP profile section (gap_inventory marker) must reach the generator"
+    record = LogReader(log_path).read_all()[0]
+    assert record["branch"] == "GAP"
+    assert record["classifier_labels"] == ["GAP"]
+
+
+def test_pipeline_falls_back_to_generic_when_classifier_predicts_unknown_branch(real_composer, fake_chunks, tmp_path):
+    """Classifier predicts a label not yet in REGISTRY (e.g. TECHNICAL before #18 lands) — pipeline falls back to GENERIC for safety."""
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["TECHNICAL"], confidence=0.9))
+    generator = FakeGenerator(answers=["A"])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run("q", history=[], session_id="s1", turn_index=0)
+
+    record = LogReader(log_path).read_all()[0]
+    assert record["branch"] == "GENERIC", "unknown predicted label must fall back to the safe broad branch"
+
+
+def test_pipeline_filters_unknown_labels_and_keeps_known_ones(real_composer, fake_chunks, tmp_path):
+    """Multi-label classifier output mixing known + unknown branches — unknown filtered, known kept; primary is the first surviving label."""
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["TECHNICAL", "GAP"], confidence=0.9))
+    generator = FakeGenerator(answers=["A"])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run("q", history=[], session_id="s1", turn_index=0)
+
+    record = LogReader(log_path).read_all()[0]
+    assert record["branch"] == "GAP", "TECHNICAL filtered (unknown today); GAP becomes primary"
+
+
+def test_pipeline_logs_raw_classifier_labels_distinct_from_used_branch(real_composer, fake_chunks, tmp_path):
+    """The log carries `classifier_labels` (raw) alongside `branch` (used) so misroute patterns stay observable for the Sentinel."""
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["TECHNICAL", "GAP"], confidence=0.9))
+    generator = FakeGenerator(answers=["A"])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run("q", history=[], session_id="s1", turn_index=0)
+
+    record = LogReader(log_path).read_all()[0]
+    assert record["classifier_labels"] == ["TECHNICAL", "GAP"], "raw classifier output preserved for observability"
+    assert record["branch"] == "GAP"
+
+
 def test_log_record_carries_full_schema_with_branch_classification_chunks_and_latencies(real_composer, fake_chunks, tmp_path):
     """Every required schema field appears in the log record and carries plausible values."""
     log_path = tmp_path / "interactions.jsonl"
@@ -185,6 +251,7 @@ def test_log_record_carries_full_schema_with_branch_classification_chunks_and_la
     assert "T" in record["timestamp"]  # ISO-8601 stamp
     # Routing fields
     assert record["branch"] == "GENERIC"
+    assert record["classifier_labels"] == ["GENERIC"]
     assert record["classification_confidence"] == 0.87
     # Retrieved chunks logged as references, not full content
     assert record["retrieved_chunks"] == [

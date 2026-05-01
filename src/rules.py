@@ -55,11 +55,34 @@ quantitative claims away into vague language ("several papers", "a few years"). 
 The audience includes engineers and researchers who notice when numbers go missing.\
 """
 
+GAP_PHRASE = "I don't have that information in my knowledge base."
+
+CALIBRATION_LADDER = f"""\
+## Calibration ladder
+A guide for choosing claim verbs that match the depth of evidence in the retrieved \
+context. Treat it as direction, not a rigid template — reason over the question and \
+the evidence and let those guide phrasing.
+
+Rough mapping from evidence pattern to claim level:
+- **Skill named + concrete project + role responsibility** → expertise level (e.g. "lead", "ran", "expertise")
+- **Skill named + concrete project** → hands-on (e.g. "shipped", "built")
+- **Skill named + course or certification only** → trained (e.g. "course-grounded", "familiar with")
+- **Skill named only, no project or course** → exposure (e.g. "read about")
+- **Nothing relevant in retrieved context** → emit the Gap phrase: "{GAP_PHRASE}"
+
+For Gap-shape probes ("Do you have AWS?", "Have you used React?"), a useful three-part \
+shape is: (1) lead with the broader skill plus named, KB-verifiable evidence at that \
+level; (2) acknowledge the specific gap honestly with a calibration verb that matches \
+the evidence; (3) name the active learning credential with its status. Academic and \
+AI-engineering skills are presented as transferable, not partitioned.\
+"""
+
 RULES: dict[str, str] = {
     "persona": PERSONA,
     "scope": SCOPE,
     "security": SECURITY,
     "numerical_completeness": NUMERICAL_COMPLETENESS,
+    "calibration_ladder": CALIBRATION_LADDER,
 }
 
 UNIVERSAL: list[str] = ["persona", "scope", "security", "numerical_completeness"]

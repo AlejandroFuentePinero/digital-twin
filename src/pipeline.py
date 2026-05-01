@@ -20,13 +20,13 @@ from generator import Generator
 from guardrail import Guardrail
 from interaction_log import LogWriter
 from retrieval import fetch_context, format_context
+from rules import GAP_PHRASE
 
 MAX_ATTEMPTS = 3
 CANNED_REFUSAL = (
     "I'm sorry, I wasn't able to give you a satisfactory answer. "
     "Please reach out to Alejandro directly at alejandrofuentepinero@gmail.com."
 )
-GAP_PHRASE = "I don't have that information in my knowledge base."
 
 
 class Pipeline:
@@ -55,12 +55,15 @@ class Pipeline:
     ) -> str:
         t_total = time.perf_counter()
 
-        # 1. Classify
+        # 1. Classify — filter unknown labels (e.g. TECHNICAL before #18 lands) so a
+        # classifier ahead of the registry can't crash routing. Empty after filter →
+        # safe fallback to GENERIC. Raw classifier output logged separately for the
+        # Sentinel to surface misroute patterns.
         t = time.perf_counter()
         cls_result = self._classifier.classify(question, history)
         classifier_ms = int((time.perf_counter() - t) * 1000)
-        # TODO(#15+): when multi-label classification lands, merge sections from labels[:2]
-        branch_name = cls_result.labels[0]
+        branches = [b for b in cls_result.labels[:2] if b in self._registry] or ["GENERIC"]
+        branch_name = branches[0]
         branch_spec = self._registry[branch_name]
 
         # 2. Retrieve (once per turn — chunks constant across retries)
@@ -70,8 +73,8 @@ class Pipeline:
         retrieval_ms = int((time.perf_counter() - t) * 1000)
 
         # 3. Compose system prompts (one per role, both branch-aware)
-        sys_prompt_gen = self._composer.compose(branch_name, "generator", retrieved_context=context)
-        sys_prompt_judge = self._composer.compose(branch_name, "guardrail", retrieved_context=context)
+        sys_prompt_gen = self._composer.compose(branches, "generator", retrieved_context=context)
+        sys_prompt_judge = self._composer.compose(branches, "guardrail", retrieved_context=context)
 
         # 4. Generate + evaluate, retry loop
         attempts: list[dict] = []
@@ -119,6 +122,7 @@ class Pipeline:
             "question": question,
             "event_type": event_type,
             "branch": branch_name,
+            "classifier_labels": list(cls_result.labels),
             "classification_confidence": cls_result.confidence,
             "attempts": attempts,
             "retrieved_chunks": [

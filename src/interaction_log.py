@@ -28,6 +28,7 @@ class InteractionRecord(BaseModel):
     question: str
     event_type: EventType
     branch: str
+    classifier_labels: list[str] = Field(default_factory=list)
     classification_confidence: float
     attempts: list[dict]
     retrieved_chunks: list[dict]

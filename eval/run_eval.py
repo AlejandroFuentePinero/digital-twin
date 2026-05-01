@@ -29,8 +29,8 @@ from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from pipeline import GAP_PHRASE
 from retrieval import FINAL_K, MODEL, RETRIEVAL_K, fetch_context
+from rules import GAP_PHRASE
 
 
 def answer_question(question, history=None):

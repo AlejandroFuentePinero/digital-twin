@@ -25,4 +25,11 @@ REGISTRY: dict[str, BranchSpec] = {
         tools=[],
         branch_rules=[],
     ),
+    "GAP": BranchSpec(
+        name="GAP",
+        profile_sections=["identity", "gap_inventory"],
+        final_k=6,
+        tools=[],
+        branch_rules=["calibration_ladder"],
+    ),
 }
