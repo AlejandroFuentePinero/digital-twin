@@ -41,6 +41,11 @@ graph LR
     retrieval["retrieval.py"]:::retrieval
   end
 
+  subgraph sg_pipeline["Pipeline"]
+    direction TB
+    pipeline["pipeline.py"]:::pipeline
+  end
+
   subgraph sg_logging["Logging"]
     direction TB
     interaction_log["interaction_log.py"]:::logging
@@ -49,12 +54,6 @@ graph LR
   subgraph sg_appui["App / UI"]
     direction TB
     app["app.py"]:::appui
-  end
-
-  subgraph sg_legacy["Legacy (transition shim)"]
-    direction TB
-    answer["answer.py"]:::legacy
-    logger["logger.py"]:::legacy
   end
 
   subgraph sg_tooling["Tooling"]
@@ -72,14 +71,24 @@ graph LR
     ext_OpenAI_API(["OpenAI API"]):::external
   end
 
-  answer --> guardrail
-  answer --> logger
-  answer --> retrieval
-  app --> answer
+  app --> branches
+  app --> classifier
+  app --> composer
+  app --> generator
+  app --> guardrail
+  app --> interaction_log
+  app --> pipeline
+  app --> profile
   composer --> branches
   composer --> profile
   composer --> rules
-  answer --> ext_OpenAI___Anthropic_API__via_LiteLLM_
+  pipeline --> branches
+  pipeline --> classifier
+  pipeline --> composer
+  pipeline --> generator
+  pipeline --> guardrail
+  pipeline --> interaction_log
+  pipeline --> retrieval
   app --> ext_Gradio__UI_
   generator --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   guardrail --> ext_OpenAI___Anthropic_API__via_LiteLLM_
@@ -94,9 +103,9 @@ graph LR
   style sg_frame fill:#eef2ff,stroke:#a5b4fc,stroke-width:1.5px,color:#4338ca
   style sg_llm fill:#fef3c7,stroke:#fcd34d,stroke-width:1.5px,color:#b45309
   style sg_retrieval fill:#d1fae5,stroke:#6ee7b7,stroke-width:1.5px,color:#047857
+  style sg_pipeline fill:#fee2e2,stroke:#fca5a5,stroke-width:1.5px,color:#b91c1c
   style sg_logging fill:#fce7f3,stroke:#f9a8d4,stroke-width:1.5px,color:#be185d
   style sg_appui fill:#dbeafe,stroke:#93c5fd,stroke-width:1.5px,color:#1d4ed8
-  style sg_legacy fill:#f1f5f9,stroke:#cbd5e1,stroke-width:1.5px,color:#475569
   style sg_tooling fill:#ede9fe,stroke:#c4b5fd,stroke-width:1.5px,color:#6d28d9
   style sg_external fill:#fff7ed,stroke:#fdba74,stroke-width:1.5px,color:#c2410c
 ```
@@ -105,7 +114,6 @@ graph LR
 
 | Module | Description |
 |---|---|
-| `answer.py` | RAG retrieval and generation for the digital twin. |
 | `app.py` | Gradio chat interface for the digital twin. |
 | `branches.py` | Branch registry for classify-then-route orchestration (ADR-0003). |
 | `classifier.py` | Branch classifier (ADR-0003). |
@@ -114,8 +122,8 @@ graph LR
 | `guardrail.py` | Guardrail — branch-aware quality evaluator (ADR-0003). |
 | `ingest.py` | Ingest the digital twin knowledge base into ChromaDB. |
 | `interaction_log.py` | Enriched per-turn interaction log (ADR-0002 / issue #13 step 7). |
-| `logger.py` | Append-only JSONL interaction logger for the digital twin. |
 | `module_health.py` | Local Gradio dashboard showing pass/fail status of digital-twin tests. |
+| `pipeline.py` | Per-turn orchestrator (ADR-0003). |
 | `profile.py` | Always-on profile loader (the Frame, per ADR-0001 / ADR-0003). |
 | `retrieval.py` | Retrieval helpers — embedding, ChromaDB query, merge, rewrite, rerank, format. |
 | `rules.py` | Shared rule fragments composed into generator and guardrail system prompts. |

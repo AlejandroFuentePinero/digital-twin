@@ -29,7 +29,19 @@ from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from answer import FINAL_K, GAP_PHRASE, MODEL, RETRIEVAL_K, answer_question, fetch_context
+from pipeline import GAP_PHRASE
+from retrieval import FINAL_K, MODEL, RETRIEVAL_K, fetch_context
+
+
+def answer_question(question, history=None):
+    """Pre-redesign no-guardrail RAG entry point. The v4 eval rewrite (Phase 3 / issue #2)
+    replaces this with a routed-pipeline call that skips the guardrail per Session 9. Until
+    then, the integration eval flow is non-functional but the pure-function tests in
+    tests/test_eval.py continue to pass — they don't exercise this path."""
+    raise NotImplementedError(
+        "answer_question removed at issue #13 step 10. v4 eval rewires through pipeline "
+        "(no guardrail) — see Phase 3 / issue #2."
+    )
 
 load_dotenv(override=True)
 

@@ -1,44 +1,81 @@
-"""
-Gradio chat interface for the digital twin.
+"""Gradio chat interface for the digital twin.
 
 Run:
     uv run src/app.py
+
+Wires the routed pipeline (classifier → branch → retrieval → composer →
+generator → guardrail → log) per ADR-0003. Pipeline + its collaborators are
+constructed once as a module-level singleton; per-conversation state lives in
+Gradio `gr.State` slots.
 """
 
+import sys
 import uuid
 from pathlib import Path
 
 import gradio as gr
 from dotenv import load_dotenv
 
-MAX_HISTORY_TURNS = 10  # keep last N user+assistant pairs to cap context window
-
 load_dotenv(override=True)
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent))
-from answer import answer_with_guardrail
 
-def respond(message: str, history: list[dict], session_id: str) -> tuple[str, list[dict]]:
-    """Called on every user message. Maintains history in Gradio's messages format."""
+from branches import REGISTRY
+from classifier import Classifier
+from composer import PromptComposer
+from generator import Generator
+from guardrail import Guardrail
+from interaction_log import LogWriter
+from pipeline import Pipeline
+from profile import ProfileLoader
+
+MAX_HISTORY_TURNS = 10  # last N user+assistant pairs passed to the pipeline
+
+# ---------------------------------------------------------------------------
+# Module-level singletons (constructed once at import; profile.md read once).
+# ---------------------------------------------------------------------------
+_profile = ProfileLoader()
+_composer = PromptComposer(_profile, REGISTRY)
+_pipeline = Pipeline(
+    classifier=Classifier(),
+    composer=_composer,
+    generator=Generator(),
+    guardrail=Guardrail(),
+    log_writer=LogWriter(),
+)
+
+
+def respond(
+    message: str,
+    history: list[dict],
+    session_id: str,
+    turn_count: int,
+) -> tuple[str, list[dict], int]:
+    """Called on every user submission. Threads turn_count through to the log."""
     chat_history = [
         {"role": m["role"], "content": m["content"]}
         for m in history[-(MAX_HISTORY_TURNS * 2):]  # each turn = 1 user + 1 assistant msg
     ]
-    reply, _ = answer_with_guardrail(message, chat_history, session_id=session_id)
+    reply = _pipeline.run(
+        question=message,
+        history=chat_history,
+        session_id=session_id,
+        turn_index=turn_count,
+    )
     history.append({"role": "user", "content": message})
     history.append({"role": "assistant", "content": reply})
-    return "", history
+    return "", history, turn_count + 1
 
 
-def new_session() -> tuple[list, str]:
-    """Reset conversation and generate a fresh session ID."""
-    return [], str(uuid.uuid4())
+def new_session() -> tuple[list, str, int]:
+    """Reset conversation, fresh session ID, turn_count back to 0."""
+    return [], str(uuid.uuid4()), 0
 
 
 with gr.Blocks(title="Alejandro de la Fuente — Digital Twin", theme=gr.themes.Soft()) as demo:
     session_id = gr.State(str(uuid.uuid4()))
     history = gr.State([])
+    turn_count = gr.State(0)
 
     gr.Markdown(
         "## Alejandro de la Fuente\n"
@@ -68,13 +105,13 @@ with gr.Blocks(title="Alejandro de la Fuente — Digital Twin", theme=gr.themes.
 
     msg.submit(
         respond,
-        inputs=[msg, history, session_id],
-        outputs=[msg, history],
+        inputs=[msg, history, session_id, turn_count],
+        outputs=[msg, history, turn_count],
     ).then(
         lambda h: h, inputs=[history], outputs=[chatbot]
     )
 
-    clear.click(new_session, outputs=[history, session_id]).then(
+    clear.click(new_session, outputs=[history, session_id, turn_count]).then(
         lambda h: h, inputs=[history], outputs=[chatbot]
     )
 

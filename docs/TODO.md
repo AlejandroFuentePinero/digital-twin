@@ -4,7 +4,7 @@ Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
 **Last updated:** 2026-05-01
-**Current phase:** Phase 2 (Routing + new pipeline) — issue #13 steps 1–6 of 13 done (`profile.md` shipped; foundations / composer / LLM callers / retrieval extraction built). Steps 7–13 remain (`interaction_log.py`, `pipeline.py`, `app.py` rewire, cleanup, smoke-test, close). Phase 1 KB content sub-tasks (`positioning.md` rewrite, `experience.md` timeline per issue #14, KB re-ingest) still pending in parallel. New tooling: auto-generated [`docs/MAP.md`](./MAP.md) module map (refresh with `uv run python src/system_map.py`).
+**Current phase:** Phase 2 (Routing + new pipeline) — issue #13 steps 1–10 of 13 done. The routed pipeline runs end-to-end and all pre-redesign code paths (`answer.py`, `logger.py`, the `evaluate()` shim in `guardrail.py`) are deleted. Steps 11–13 remain: module-health verify, manual UI smoke-test, close issue. Phase 1 KB content sub-tasks (`positioning.md` rewrite, `experience.md` timeline per issue #14, KB re-ingest) still pending in parallel. New tooling: auto-generated [`docs/MAP.md`](./MAP.md) module map (refresh with `uv run python src/system_map.py`).
 
 ---
 
@@ -44,7 +44,7 @@ Phase 1 deliverable: `profile.md` is content-complete (**including** `personal_s
 Per ADR-0003. The current `answer.py`, `guardrail.py`, and `logger.py` are replaced. New modules added for the classifier and branch dispatch.
 
 ### Rewrites
-- [ ] **`logger.py`** — new enriched record schema:
+- [x] **`logger.py`** — new enriched record schema:
   ```
   timestamp, session_id, turn_index, question, event_type, branch, classification_confidence,
   attempts: [{answer, is_acceptable, guardrail_feedback}],
@@ -54,8 +54,8 @@ Per ADR-0003. The current `answer.py`, `guardrail.py`, and `logger.py` are repla
   knew_answer, contact_offered, contact_provided
   ```
   Old `data/logs/interactions.jsonl` is nuked (dev-only data).
-- [ ] **`answer.py`** — replaced. New control flow: classifier → branch dispatch → generator (with tool loop in TECHNICAL) → guardrail → log. Composed-from-constants prompt pattern (Q11 (C)).
-- [ ] **`guardrail.py`** — replaced. Branch-aware rules. Calibration ladder, deflection rule, scope, and security rules imported from shared constants used by both `answer.py` and `guardrail.py` (drift prevention).
+- [x] **`answer.py`** — replaced (deleted). Control flow lives in `pipeline.py`: classifier → branch dispatch → generator (with tool loop in TECHNICAL — pending issue #18) → guardrail → log. Composed-from-constants prompt pattern via `composer.py` + `rules.py`.
+- [x] **`guardrail.py`** — replaced. Branch-aware via composed system prompt. Universal rules (persona/scope/security/numerical_completeness) imported by both `composer.py` (used by generator) and `guardrail.py` indirectly through the same composer call — drift prevention. Old monolithic `evaluate()` and `SYSTEM_PROMPT` shim removed at step 10. **Branch-specific** rules (calibration_ladder / deflection_rule / tool_rules) land with their branches: issues #15 / #17 / #18.
 
 ### New modules
 - [ ] `classifier.py` — cheap classifier (`gpt-4.1-nano`) returning `{labels, confidence}`; sees last 2 turns + current question; defaults to GENERIC on low confidence.
@@ -80,7 +80,7 @@ All new and rebuilt test files follow the convention in [`TESTING.md`](./TESTING
 - [ ] `tests/test_answer.py` (rebuild) — full routed pipeline integration; existing tests are tied to `answer_with_guardrail`'s monolithic shape and become stale.
 - [ ] `tests/test_guardrail.py` (rebuild) — branch-aware evaluation.
 - [ ] `tests/test_logger.py` (rebuild) — enriched schema, all event types.
-- [ ] `tests/test_eval.py` (build on; surgical updates) — metric tests (`_reciprocal_rank`, `_dcg`, `_ndcg`, `_mean`, aggregation, versioning, `load_tests`) are pure functions that survive intact. The single `eval_retrieval` integration test updates to pass a branch label.
+- [x] `tests/test_eval.py` (build on; surgical updates) — pure-function metric tests (`_reciprocal_rank`, `_dcg`, `_ndcg`, `_mean`, aggregation, versioning, `load_tests`) survive intact. Step 10 flipped `run_eval.py`'s import from `answer` to `retrieval`+`pipeline`. The branch-label integration update to `eval_retrieval` lands with the v4 eval rewrite (Phase 3 / issue #2).
 - [ ] `tests/test_ingest.py` (survives unchanged).
 
 ### `app.py` updates (build on existing scaffold)
