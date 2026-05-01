@@ -1,0 +1,73 @@
+# Release / End-of-project checklist
+
+Pre-deploy verification that every artifact reflects the deployed system. Run through this before declaring the project finished or shipping a major release. Tick items only after physical verification — not from memory.
+
+## Documentation freshness
+
+- [ ] `docs/MAP.md` and `docs/MAP.html` regenerated against current `src/` (`uv run python src/system_map.py`). Inspect the output: every module appears, no stale `Legacy` cluster unless intentional.
+- [ ] `docs/pipeline_diagram.mmd` reflects current runtime behaviour: every branch in `branches.REGISTRY` is shown, every model-callable tool is shown solid (not dashed), every retry/decision point matches `pipeline.py`, every log field on the `LOG` node matches `interaction_log.InteractionRecord`.
+- [ ] `docs/DECISIONS.md` has a final session entry summarising the deployed state (commits, test count, KB chunks, branches live, open issues left, known limitations).
+- [ ] `docs/TODO.md` is at final state — completed phases marked, open items either ticketed or deliberately deferred with a note.
+- [ ] `docs/HUMAN_EVAL_QUESTIONS.md` carries probes for every wired branch (GAP, BEHAVIOURAL, TECHNICAL, LOGISTICAL, GENERIC) including adversarial pressure for each.
+- [ ] `docs/LIMITATIONS.md` (issue #20) is current — observed misclassification patterns, retrieval failure modes, scope limits, deferred work documented from observation, not prediction.
+- [ ] Every architectural decision made post-redesign has an ADR in `docs/adr/` or is captured in an existing ADR's "Operational risks" section.
+- [ ] `CONTEXT.md` glossary covers every domain term used in code and docs. No new term in the codebase that doesn't appear here.
+- [ ] `CLAUDE.md` Architecture Summary section matches the deployed flow.
+- [ ] Pre-redesign artifacts (`docs/PLAN.md`, `docs/ARCHITECTURE.md`) either updated or explicitly marked as historical record.
+
+## Code / test integrity
+
+- [ ] `uv run pytest -q` — all tests pass.
+- [ ] `uv run python src/module_health.py` — every `src/*.py` (minus exemptions) has a partner `tests/test_*.py`, every test passes.
+- [ ] No transition shims, deprecated functions, or "TODO(#N+)" markers referencing closed issues.
+- [ ] All forcing-function tests have been replaced by real behaviour tests where the issue they were designed to surface has landed.
+- [ ] No mock-heavy tests testing implementation details — tests verify behaviour through public interfaces (per `docs/TESTING.md`).
+- [ ] All `src/*.py` modules have a one-line module docstring (surfaces in MAP.md glossary).
+
+## Knowledge base
+
+- [ ] `uv run python -m src.ingest` — KB re-ingested against current `data/knowledge_base/`. Chunk count matches expected (look for unexplained drops or jumps).
+- [ ] No stale tense/dates: every "present" / "currently" reference matches reality (e.g. completed roles past-tensed, current role accurate).
+- [ ] `data/profile.md` Frame sections match the latest profile (gap_inventory, active_learning, narrative_summary all current).
+- [ ] No real-name references to people not authorised (collaborators / supervisors only where in scope).
+
+## Eval
+
+- [ ] `eval/run_eval.py` has been rewired through the routed pipeline (no leftover `answer_question` stub failures).
+- [ ] Latest eval baseline run against the deployed system stored in `eval/results/` with date stamp.
+- [ ] Comparison against prior baseline noted in `DECISIONS.md` with caveats (routing reshapes retrieval — not apples-to-apples vs pre-redesign).
+
+## Live behaviour
+
+- [ ] All branches return the right calibration verb on direct probes (`HUMAN_EVAL_QUESTIONS.md`).
+- [ ] In-progress curriculum keywords (Bedrock, Aurora Serverless, Terraform, etc.) never claimed as acquired skills (system-failure target).
+- [ ] Adversarial probes (social pressure, list-implicit asks) hold the line.
+- [ ] Mid-conversation branch flips work — same session, different turns route correctly.
+- [ ] Out-of-scope probe declines politely; injection probe refuses and answers the legitimate part.
+- [ ] Contact flow works (#16) — form surfaces when offered, `contact_provided` flag flips in the log.
+
+## Observability
+
+- [ ] Sentinel reads from production log location (HF Dataset in prod, JSONL in dev).
+- [ ] Every record carries the full enriched schema — no missing fields.
+- [ ] Sentinel surfaces the metrics it was designed to: gap rate, deflection rate, misclassification rate (high-confidence-but-fell-back-to-GENERIC), retry rate, answered/refused split.
+
+## Deployment
+
+- [ ] `.env` keys documented (`.env.example` or equivalent).
+- [ ] Required services accessible from deployment target (OpenAI, Anthropic, ChromaDB or HF Dataset).
+- [ ] Hosting target verified working end-to-end (HF Spaces / Modal / wherever).
+- [ ] Public URL responsive; first response under acceptable latency.
+
+## Portfolio / external
+
+- [ ] README current (project overview, how to run, link to deployed instance).
+- [ ] LICENSE file present.
+- [ ] Portfolio site links to the deployed app.
+- [ ] Public links in `data/raw_me/` work (no 404s, no broken cert badges).
+
+## Final
+
+- [ ] Tag the release commit (`git tag v1.0.0` or similar).
+- [ ] Close any remaining `needs-triage` labels — every open issue has been triaged into either a labelled future-state issue or wontfix.
+- [ ] Last session entry in DECISIONS.md is dated and final.
