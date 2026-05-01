@@ -13,7 +13,7 @@ Today Alejandro builds end-to-end AI and data science systems, from model develo
 ## Career arc
 - **Research origin (2014–2024):** Ecology fieldwork across South America and Australia → Masters → PhD (Quantitative Ecology, JCU, Cum Laude) → Postdoctoral Fellow
 - **Transition:** Moved from academia into applied AI, drawn by more immediate and tangible impact
-- **Current:** Postdoctoral Fellow at James Cook University (research) + independent AI engineer building LLM systems and data products
+- **Current:** AI Engineer at Officeworks (from 13 May 2026, hybrid) + independent AI engineer building LLM systems and data products. Postdoctoral Fellow at James Cook University (Sep 2024 – May 2026) closing as the Officeworks role begins.
 
 ## Location and availability
 - Based in Melbourne, VIC, Australia

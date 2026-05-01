@@ -41,7 +41,7 @@ This is the index for the RAG knowledge base representing Alejandro de la Fuente
 
 ## Quick facts for common recruiter questions
 
-**Current role:** Postdoctoral Fellow at James Cook University + independent AI engineer
+**Current role:** AI Engineer at Officeworks (from 13 May 2026, hybrid) + independent AI engineer. Postdoctoral Fellow at James Cook University until May 2026.
 **Location:** Melbourne, VIC, Australia | Australian PR
 **Available for:** AI Engineer, Data Scientist, ML Engineer, Research Scientist roles
 **Strongest differentiator:** Research-grade rigour applied to LLM systems — evaluation discipline, uncertainty quantification, and Bayesian thinking from 6+ years of high-stakes modelling

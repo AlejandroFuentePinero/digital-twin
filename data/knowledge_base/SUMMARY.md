@@ -8,7 +8,7 @@ Aggregate, cross-file facts for holistic queries: counts, totals, timelines, and
 
 - **Full name:** Alejandro de la Fuente (Pinero)
 - **Location:** Melbourne, VIC, Australia | Australian Permanent Resident
-- **Current roles:** Postdoctoral Fellow at James Cook University (Sep 2024–present) + independent AI engineer
+- **Current roles:** AI Engineer at Officeworks (from 13 May 2026, hybrid) + independent AI engineer. Postdoctoral Fellow at James Cook University (Sep 2024 – May 2026) ending as the Officeworks role begins.
 - **Available for:** AI Engineer, Data Scientist, ML Engineer, Research Scientist roles
 - **Contact:** alejandrofuentepinero@gmail.com | 0499 501 813
 - **Career span:** 2014–present (~12 years professional experience total)
@@ -20,14 +20,15 @@ Aggregate, cross-file facts for holistic queries: counts, totals, timelines, and
 
 | Period | Role | Organisation | Location |
 |---|---|---|---|
-| Sep 2024–present | Postdoctoral Fellow | James Cook University | Cairns, QLD |
+| 13 May 2026–present | AI Engineer | Officeworks | Australia (hybrid) |
+| Sep 2024 – May 2026 | Postdoctoral Fellow | James Cook University | Cairns, QLD |
 | Apr–Sep 2024 | Research Assistant | University of Melbourne | Melbourne, VIC |
 | Aug 2020–Apr 2024 | PhD Researcher | James Cook University | Townsville/Cairns |
 | Jun–Dec 2019 | Research Assistant | James Cook University | Townsville, QLD |
 | 2017–2018 | Research & Conservation Leader | Kaa-Iya National Park / WCS | Bolivia |
 | 2016–2017 | Head Biologist | CONAF, Puyehue National Park | Chile |
 
-**Total distinct roles: 6** | **Years in Australia: 2019–present (~6 years)**
+**Total distinct roles: 7** | **Years in Australia: 2019–present (~6 years)**
 
 ---
 

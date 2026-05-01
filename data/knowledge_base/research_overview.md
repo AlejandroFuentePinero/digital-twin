@@ -1,10 +1,10 @@
 # Research Overview
 
-Alejandro's academic research spans two major phases: a PhD investigating climate change impacts on tropical montane biodiversity (2020–2024), and postdoctoral work on heat mortality risk in spectacled flying foxes (2024–present). Both are grounded in the same methodology: Bayesian hierarchical modelling, long-term monitoring data, and mechanistic inference that produces evidence with real conservation consequences.
+Alejandro's academic research spans two major phases: a PhD investigating climate change impacts on tropical montane biodiversity (2020–2024), and postdoctoral work on heat mortality risk in spectacled flying foxes (2024–2026). Both are grounded in the same methodology: Bayesian hierarchical modelling, long-term monitoring data, and mechanistic inference that produces evidence with real conservation consequences.
 
 ---
 
-## Postdoctoral Research: Spectacled Flying Foxes (2024–present)
+## Postdoctoral Research: Spectacled Flying Foxes (2024–2026)
 
 **Institution:** James Cook University, Cairns, Australia
 **Focus:** Heat-driven mortality risk in endangered spectacled flying foxes (*Pteropus conspicillatus*)

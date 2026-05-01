@@ -20,10 +20,14 @@ Education
 
 Professional Appointments
 ======
+* AI Engineer.
+  * Organisation: Officeworks.
+  * Country: Australia.
+  * Year: 2026 - present (starts 13 May 2026; hybrid).
 * Postdoctoral fellow.
   * Organisation: James Cook University. 
   * Country: Australia.
-  * Year: 2024 - Currently.
+  * Year: 2024 - 2026 (Sep 2024 – May 2026).
 * Research assistant.
   * Organisation: James Cook University. 
   * Country: Australia.
@@ -42,7 +46,7 @@ Volunteering and other field experiences
 * Vertebrate biodiversity monitoring in the Australian Wet Tropics.
   * Organisation: James Cook University.
   * Country: Australia.
-  * Year: 2019 - present.
+  * Year: 2019 - 2026.
 * Yellow-tailed woolly monkey Lagothrix flavicauda, survey, mammals’ inventory and community-based conservation work in the Peruvian Cloud Forest and the Peruvian Amazon Rainforest.
   * Organisation: Neotropical Primate Conservation and Lush Cosmetics.
   * Country: Peru.
