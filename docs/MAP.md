@@ -7,26 +7,71 @@ Companion docs: [`CONTEXT.md`](../CONTEXT.md) (domain glossary), [`docs/adr/`](.
 ## Module graph
 
 ```mermaid
+%%{init: {'flowchart': {'nodeSpacing': 50, 'rankSpacing': 100, 'curve': 'basis', 'padding': 12}}}%%
 graph LR
-  answer["answer.py"]
-  app["app.py"]
-  branches["branches.py"]
-  classifier["classifier.py"]
-  composer["composer.py"]
-  generator["generator.py"]
-  guardrail["guardrail.py"]
-  ingest["ingest.py"]
-  logger["logger.py"]
-  module_health["module_health.py"]
-  profile["profile.py"]
-  retrieval["retrieval.py"]
-  rules["rules.py"]
-  sample_chunks["sample_chunks.py"]
-  system_map["system_map.py"]
-  ext_ChromaDB(["ChromaDB"])
-  ext_Gradio__UI_(["Gradio (UI)"])
-  ext_OpenAI___Anthropic_API__via_LiteLLM_(["OpenAI / Anthropic API (via LiteLLM)"])
-  ext_OpenAI_API(["OpenAI API"])
+  classDef frame fill:#6366f1,stroke:#4338ca,color:#ffffff,stroke-width:2px
+  classDef llm fill:#f59e0b,stroke:#b45309,color:#ffffff,stroke-width:2px
+  classDef retrieval fill:#10b981,stroke:#047857,color:#ffffff,stroke-width:2px
+  classDef pipeline fill:#ef4444,stroke:#b91c1c,color:#ffffff,stroke-width:2px
+  classDef logging fill:#ec4899,stroke:#be185d,color:#ffffff,stroke-width:2px
+  classDef appui fill:#3b82f6,stroke:#1d4ed8,color:#ffffff,stroke-width:2px
+  classDef legacy fill:#94a3b8,stroke:#475569,color:#ffffff,stroke-width:2px,stroke-dasharray:5 4
+  classDef tooling fill:#8b5cf6,stroke:#6d28d9,color:#ffffff,stroke-width:2px
+  classDef external fill:#f97316,stroke:#c2410c,color:#ffffff,stroke-width:2px
+  classDef uncat fill:#9ca3af,stroke:#4b5563,color:#ffffff,stroke-width:2px
+
+  subgraph sg_frame["Frame & Rules"]
+    direction TB
+    branches["branches.py"]:::frame
+    composer["composer.py"]:::frame
+    profile["profile.py"]:::frame
+    rules["rules.py"]:::frame
+  end
+
+  subgraph sg_llm["LLM Callers"]
+    direction TB
+    classifier["classifier.py"]:::llm
+    generator["generator.py"]:::llm
+    guardrail["guardrail.py"]:::llm
+  end
+
+  subgraph sg_retrieval["Retrieval (RAG)"]
+    direction TB
+    ingest["ingest.py"]:::retrieval
+    retrieval["retrieval.py"]:::retrieval
+  end
+
+  subgraph sg_logging["Logging"]
+    direction TB
+    interaction_log["interaction_log.py"]:::logging
+  end
+
+  subgraph sg_appui["App / UI"]
+    direction TB
+    app["app.py"]:::appui
+  end
+
+  subgraph sg_legacy["Legacy (transition shim)"]
+    direction TB
+    answer["answer.py"]:::legacy
+    logger["logger.py"]:::legacy
+  end
+
+  subgraph sg_tooling["Tooling"]
+    direction TB
+    module_health["module_health.py"]:::tooling
+    sample_chunks["sample_chunks.py"]:::tooling
+    system_map["system_map.py"]:::tooling
+  end
+
+  subgraph sg_external["External Services"]
+    direction TB
+    ext_ChromaDB(["ChromaDB"]):::external
+    ext_Gradio__UI_(["Gradio (UI)"]):::external
+    ext_OpenAI___Anthropic_API__via_LiteLLM_(["OpenAI / Anthropic API (via LiteLLM)"]):::external
+    ext_OpenAI_API(["OpenAI API"]):::external
+  end
+
   answer --> guardrail
   answer --> logger
   answer --> retrieval
@@ -45,6 +90,15 @@ graph LR
   retrieval --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   retrieval --> ext_OpenAI_API
   sample_chunks --> ext_ChromaDB
+
+  style sg_frame fill:#eef2ff,stroke:#a5b4fc,stroke-width:1.5px,color:#4338ca
+  style sg_llm fill:#fef3c7,stroke:#fcd34d,stroke-width:1.5px,color:#b45309
+  style sg_retrieval fill:#d1fae5,stroke:#6ee7b7,stroke-width:1.5px,color:#047857
+  style sg_logging fill:#fce7f3,stroke:#f9a8d4,stroke-width:1.5px,color:#be185d
+  style sg_appui fill:#dbeafe,stroke:#93c5fd,stroke-width:1.5px,color:#1d4ed8
+  style sg_legacy fill:#f1f5f9,stroke:#cbd5e1,stroke-width:1.5px,color:#475569
+  style sg_tooling fill:#ede9fe,stroke:#c4b5fd,stroke-width:1.5px,color:#6d28d9
+  style sg_external fill:#fff7ed,stroke:#fdba74,stroke-width:1.5px,color:#c2410c
 ```
 
 ## Glossary
@@ -59,6 +113,7 @@ graph LR
 | `generator.py` | Generator — wraps the answer LLM call. |
 | `guardrail.py` | Guardrail — branch-aware quality evaluator (ADR-0003). |
 | `ingest.py` | Ingest the digital twin knowledge base into ChromaDB. |
+| `interaction_log.py` | Enriched per-turn interaction log (ADR-0002 / issue #13 step 7). |
 | `logger.py` | Append-only JSONL interaction logger for the digital twin. |
 | `module_health.py` | Local Gradio dashboard showing pass/fail status of digital-twin tests. |
 | `profile.py` | Always-on profile loader (the Frame, per ADR-0001 / ADR-0003). |

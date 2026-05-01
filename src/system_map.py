@@ -12,6 +12,7 @@ Run with `uv run python src/system_map.py` — overwrites `docs/MAP.md`.
 from __future__ import annotations
 
 import ast
+import webbrowser
 from pathlib import Path
 
 SRC_DIR = Path(__file__).parent
@@ -30,6 +31,44 @@ EXTERNAL_SERVICES: dict[str, str] = {
 }
 
 NO_DOCSTRING_SENTINEL = "(no description — add a module docstring)"
+
+# Every module in src/ must appear here. The forcing-function test in
+# tests/test_system_map.py fails when a new module lands without a category.
+MODULE_CATEGORY: dict[str, str] = {
+    "rules": "Frame & Rules",
+    "branches": "Frame & Rules",
+    "profile": "Frame & Rules",
+    "composer": "Frame & Rules",
+    "classifier": "LLM Callers",
+    "generator": "LLM Callers",
+    "guardrail": "LLM Callers",
+    "retrieval": "Retrieval (RAG)",
+    "ingest": "Retrieval (RAG)",
+    "interaction_log": "Logging",
+    "app": "App / UI",
+    "answer": "Legacy (transition shim)",
+    "logger": "Legacy (transition shim)",
+    "module_health": "Tooling",
+    "system_map": "Tooling",
+    "sample_chunks": "Tooling",
+}
+
+UNCATEGORIZED = "Uncategorized"
+
+# Vibrant saturated palette (Tailwind 500-shade family) with white text on solid fills.
+# `bg` is the lighter shade used as the subgraph cluster background (Tailwind 100).
+CATEGORY_STYLES: dict[str, dict[str, str]] = {
+    "Frame & Rules":             {"id": "frame",     "fill": "#6366f1", "stroke": "#4338ca", "color": "#ffffff", "bg": "#eef2ff", "border": "#a5b4fc"},
+    "LLM Callers":               {"id": "llm",       "fill": "#f59e0b", "stroke": "#b45309", "color": "#ffffff", "bg": "#fef3c7", "border": "#fcd34d"},
+    "Retrieval (RAG)":           {"id": "retrieval", "fill": "#10b981", "stroke": "#047857", "color": "#ffffff", "bg": "#d1fae5", "border": "#6ee7b7"},
+    "Pipeline":                  {"id": "pipeline",  "fill": "#ef4444", "stroke": "#b91c1c", "color": "#ffffff", "bg": "#fee2e2", "border": "#fca5a5"},
+    "Logging":                   {"id": "logging",   "fill": "#ec4899", "stroke": "#be185d", "color": "#ffffff", "bg": "#fce7f3", "border": "#f9a8d4"},
+    "App / UI":                  {"id": "appui",     "fill": "#3b82f6", "stroke": "#1d4ed8", "color": "#ffffff", "bg": "#dbeafe", "border": "#93c5fd"},
+    "Legacy (transition shim)":  {"id": "legacy",    "fill": "#94a3b8", "stroke": "#475569", "color": "#ffffff", "bg": "#f1f5f9", "border": "#cbd5e1", "dashed": "true"},
+    "Tooling":                   {"id": "tooling",   "fill": "#8b5cf6", "stroke": "#6d28d9", "color": "#ffffff", "bg": "#ede9fe", "border": "#c4b5fd"},
+    "External Services":         {"id": "external",  "fill": "#f97316", "stroke": "#c2410c", "color": "#ffffff", "bg": "#fff7ed", "border": "#fdba74"},
+    UNCATEGORIZED:               {"id": "uncat",     "fill": "#9ca3af", "stroke": "#4b5563", "color": "#ffffff", "bg": "#f9fafb", "border": "#d1d5db"},
+}
 
 
 def parse_module(path: Path) -> tuple[str, list[str]]:
@@ -84,16 +123,85 @@ def build_graph(src_dir: Path) -> dict:
     }
 
 
+def _classdef_line(category: str) -> str:
+    style = CATEGORY_STYLES[category]
+    parts = [
+        f"fill:{style['fill']}",
+        f"stroke:{style['stroke']}",
+        f"color:{style['color']}",
+        "stroke-width:2px",
+    ]
+    if style.get("dashed") == "true":
+        parts.append("stroke-dasharray:5 4")
+    return f"  classDef {style['id']} {','.join(parts)}"
+
+
+def _subgraph_style_line(category: str) -> str:
+    """Tints the subgraph cluster background with the category's lighter shade."""
+    style = CATEGORY_STYLES[category]
+    return (
+        f"  style sg_{style['id']} "
+        f"fill:{style['bg']},stroke:{style['border']},stroke-width:1.5px,color:{style['stroke']}"
+    )
+
+
 def _emit_mermaid(graph: dict) -> str:
-    lines = ["```mermaid", "graph LR"]
-    for m in graph["modules"]:
-        lines.append(f'  {m}["{m}.py"]')
-    for service in sorted({label for _, label in graph["external_edges"]}):
-        lines.append(f'  ext_{_slug(service)}(["{service}"])')
+    lines = [
+        "```mermaid",
+        "%%{init: {'flowchart': {'nodeSpacing': 50, 'rankSpacing': 100, 'curve': 'basis', 'padding': 12}}}%%",
+        "graph LR",
+    ]
+
+    # classDef declarations — one per category that may appear in this graph
+    for category in CATEGORY_STYLES:
+        lines.append(_classdef_line(category))
+    lines.append("")
+
+    # Group internal modules by category, in CATEGORY_STYLES order
+    by_category: dict[str, list[str]] = {cat: [] for cat in CATEGORY_STYLES}
+    for module in graph["modules"]:
+        cat = MODULE_CATEGORY.get(module, UNCATEGORIZED)
+        by_category[cat].append(module)
+
+    used_categories: list[str] = []
+    for category, modules in by_category.items():
+        if category == "External Services":
+            continue
+        if not modules:
+            continue
+        used_categories.append(category)
+        style_id = CATEGORY_STYLES[category]["id"]
+        subgraph_id = f"sg_{style_id}"
+        lines.append(f'  subgraph {subgraph_id}["{category}"]')
+        lines.append(f"    direction TB")
+        for m in modules:
+            lines.append(f'    {m}["{m}.py"]:::{style_id}')
+        lines.append("  end")
+        lines.append("")
+
+    # External services subgraph
+    services = sorted({label for _, label in graph["external_edges"]})
+    if services:
+        used_categories.append("External Services")
+        ext_style_id = CATEGORY_STYLES["External Services"]["id"]
+        lines.append('  subgraph sg_external["External Services"]')
+        lines.append(f"    direction TB")
+        for service in services:
+            lines.append(f'    ext_{_slug(service)}(["{service}"]):::{ext_style_id}')
+        lines.append("  end")
+        lines.append("")
+
+    # Edges
     for src, dst in graph["internal_edges"]:
         lines.append(f"  {src} --> {dst}")
     for src, label in graph["external_edges"]:
         lines.append(f"  {src} --> ext_{_slug(label)}")
+    lines.append("")
+
+    # Subgraph cluster backgrounds (placed at the end so they apply over inherited styles)
+    for category in used_categories:
+        lines.append(_subgraph_style_line(category))
+
     lines.append("```")
     return "\n".join(lines)
 
@@ -177,6 +285,7 @@ def main() -> None:
     html = render_html(SRC_DIR)
     HTML_PATH.write_text(html)
     print(f"Wrote {MAP_PATH.relative_to(SRC_DIR.parent)} + {HTML_PATH.relative_to(SRC_DIR.parent)}")
+    webbrowser.open(HTML_PATH.as_uri())
 
 
 if __name__ == "__main__":

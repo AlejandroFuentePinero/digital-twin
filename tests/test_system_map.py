@@ -1,4 +1,37 @@
-from system_map import NO_DOCSTRING_SENTINEL, build_graph, parse_module, render, render_html
+from pathlib import Path
+
+from system_map import (
+    MODULE_CATEGORY,
+    NO_DOCSTRING_SENTINEL,
+    SRC_DIR,
+    build_graph,
+    parse_module,
+    render,
+    render_html,
+)
+
+
+def test_every_src_module_has_an_explicit_category():
+    """Forcing function: every `src/*.py` must appear in MODULE_CATEGORY — adding a module without categorising it fails CI."""
+    src_modules = {p.stem for p in SRC_DIR.glob("*.py") if not p.stem.startswith("_")}
+    uncategorised = src_modules - set(MODULE_CATEGORY.keys())
+    assert not uncategorised, (
+        f"Modules without a category: {sorted(uncategorised)}. "
+        "Add an entry to MODULE_CATEGORY in src/system_map.py."
+    )
+
+
+def test_render_emits_subgraphs_and_classdef_styles(tmp_path):
+    """Output groups modules by category via Mermaid subgraphs, and assigns a colour class to each node."""
+    (tmp_path / "rules.py").write_text('"""rules."""\n')
+    (tmp_path / "composer.py").write_text('"""composer."""\nfrom rules import x\n')
+    out = render(tmp_path)
+    # classDef declarations exist
+    assert "classDef" in out
+    # subgraph wraps modules in a category
+    assert "subgraph" in out
+    # nodes carry a class assignment via :::style syntax
+    assert ":::" in out
 
 
 def test_parse_module_extracts_top_level_imports(tmp_path):
