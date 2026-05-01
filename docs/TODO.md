@@ -4,7 +4,7 @@ Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
 **Last updated:** 2026-05-01
-**Current phase:** Phase 2 (Routing + new pipeline) — issue #13 steps 1–10 of 13 done. The routed pipeline runs end-to-end and all pre-redesign code paths (`answer.py`, `logger.py`, the `evaluate()` shim in `guardrail.py`) are deleted. Steps 11–13 remain: module-health verify, manual UI smoke-test, close issue. Phase 1 KB content sub-tasks (`positioning.md` rewrite, `experience.md` timeline per issue #14, KB re-ingest) still pending in parallel. New tooling: auto-generated [`docs/MAP.md`](./MAP.md) module map (refresh with `uv run python src/system_map.py`).
+**Current phase:** Phase 2 foundation done — issue #13 steps 1–12 of 13 verified (module-health 123/123 pass, partner-test rule honoured 13/13, UI smoke-test passed against 6 log records). Only formal close (step 13) remains. Full Phase 2 completion is gated on the per-branch issues: real classifier + GAP (#15), BEHAVIOURAL (#17), TECHNICAL + tool loop (#18), LOGISTICAL (#19), contact form (#16). Phase 1 KB content sub-tasks (`positioning.md` rewrite, `experience.md` timeline per issue #14, KB re-ingest) still pending in parallel. New tooling: auto-generated [`docs/MAP.md`](./MAP.md) module map (refresh with `uv run python src/system_map.py`).
 
 ---
 
