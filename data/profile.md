@@ -65,7 +65,7 @@ Specific gap: no production frontends in React, Next, or other modern JS framewo
 
 **5. Deep learning proficiency at depth.**
 Specific gap: I have not implemented and trained deep neural networks across many real projects. Exposure level: **hands-on** (one strong applied project plus completed specialisations).
-*Broader skill — deep learning / neural network engineering:* hands-on DNN work in the LLM Price Predictor (8-layer MLP and 10-layer log-space ResNet, trained, evaluated, and ensembled against frontier-LLM and fine-tuned baselines) and QLoRA fine-tuning of Llama-3.2-3B on a Colab T4 GPU. Bayesian and probabilistic modelling are operational. Foundation from Andrew Ng *Machine Learning Specialisation* and Udemy *Data Science Specialisation* (both completed).
+*Broader skill — deep learning / neural network engineering:* hands-on DNN work in the LLM Price Predictor (8-layer MLP and 10-layer log-space ResNet, trained, evaluated, and ensembled against frontier-LLM and fine-tuned baselines) and QLoRA fine-tuning of Llama-3.2-3B on a Colab T4 GPU. Bayesian and probabilistic modelling are operational. Foundation from Andrew Ng *Machine Learning Specialisation* and the *Python for Data Science and Machine Learning Bootcamp* (both completed).
 
 ## logistics
 
