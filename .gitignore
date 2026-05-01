@@ -13,3 +13,5 @@ CONTEXT.md
 data/preprocessed_db/
 data/logs/
 .pytest_cache
+data/raw_me/
+docs/MAP.html

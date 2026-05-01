@@ -3,8 +3,8 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-04-30
-**Current phase:** Phase 1 (Profile + KB content rewrites) — `profile.md` shipped, KB rewrites pending. Developer-experience layer (PRD #7: module-health dashboard + testing convention) is closed.
+**Last updated:** 2026-05-01
+**Current phase:** Phase 2 (Routing + new pipeline) — issue #13 steps 1–6 of 13 done (`profile.md` shipped; foundations / composer / LLM callers / retrieval extraction built). Steps 7–13 remain (`interaction_log.py`, `pipeline.py`, `app.py` rewire, cleanup, smoke-test, close). Phase 1 KB content sub-tasks (`positioning.md` rewrite, `experience.md` timeline per issue #14, KB re-ingest) still pending in parallel. New tooling: auto-generated [`docs/MAP.md`](./MAP.md) module map (refresh with `uv run python src/system_map.py`).
 
 ---
 
@@ -65,10 +65,10 @@ Per ADR-0003. The current `answer.py`, `guardrail.py`, and `logger.py` are repla
 - [ ] `data/readmes/registry.json` + 5–8 cached project READMEs.
 
 ### Universal rules (loaded in every branch)
-- [ ] Persona block.
-- [ ] Scope (in/out) — inherits from current `SYSTEM_PROMPT` content, refined.
-- [ ] Security / injection-defence — universal; never per-branch.
-- [ ] Numerical-completeness rule: *"For numerical questions, include specific numbers from the context — don't paraphrase quantities away."*
+- [x] Persona block.
+- [x] Scope (in/out) — inherits from current `SYSTEM_PROMPT` content, refined.
+- [x] Security / injection-defence — universal; never per-branch.
+- [x] Numerical-completeness rule: *"For numerical questions, include specific numbers from the context — don't paraphrase quantities away."*
 
 ### Tests
 
