@@ -8,23 +8,25 @@ from rules import RULES, UNIVERSAL
 
 @pytest.fixture
 def fixture_profile(tmp_path):
-    """Minimal profile fixture with the three GENERIC sections + a non-GENERIC one."""
+    """Minimal profile fixture covering every section any registered branch loads."""
     p = tmp_path / "profile.md"
     p.write_text(
         "## identity\nIDENTITY-MARKER body.\n\n"
         "## narrative_summary\nNARRATIVE-MARKER body.\n\n"
         "## transfer_principles\nTRANSFER-MARKER body.\n\n"
-        "## gap_inventory\nGAP-MARKER body — should not leak into GENERIC.\n"
+        "## gap_inventory\nGAP-MARKER body — should not leak into GENERIC.\n\n"
+        "## active_learning\nACTIVE-LEARNING-MARKER body.\n"
     )
     return ProfileLoader(p)
 
 
-def test_gap_single_branch_loads_calibration_ladder_and_gap_inventory(fixture_profile):
-    """compose(['GAP']) includes the calibration_ladder rule and the gap_inventory section."""
+def test_gap_single_branch_loads_calibration_ladder_gap_inventory_and_active_learning(fixture_profile):
+    """compose(['GAP']) includes the calibration_ladder rule, gap_inventory, and active_learning sections."""
     composer = PromptComposer(fixture_profile, REGISTRY)
     prompt = composer.compose(["GAP"], "generator")
     assert "Calibration ladder" in prompt, "GAP's branch_rule (calibration_ladder) must be loaded"
-    assert "GAP-MARKER" in prompt, "GAP's profile section (gap_inventory) must be loaded"
+    assert "GAP-MARKER" in prompt, "GAP's gap_inventory section must be loaded"
+    assert "ACTIVE-LEARNING-MARKER" in prompt, "GAP's active_learning section must be loaded so in-progress curriculum keywords are always available"
     # GENERIC-only sections must not leak in
     assert "NARRATIVE-MARKER" not in prompt
     assert "TRANSFER-MARKER" not in prompt

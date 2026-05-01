@@ -17,7 +17,7 @@ def test_gap_branch_matches_locked_spec():
     gap = REGISTRY["GAP"]
     assert isinstance(gap, BranchSpec)
     assert gap.name == "GAP"
-    assert gap.profile_sections == ["identity", "gap_inventory"]
+    assert gap.profile_sections == ["identity", "gap_inventory", "active_learning"]
     assert gap.final_k == 6
     assert gap.tools == []
     assert gap.branch_rules == ["calibration_ladder"]

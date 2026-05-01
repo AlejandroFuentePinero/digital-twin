@@ -14,7 +14,7 @@ Statistical modelling and uncertainty-aware inference — particularly Bayesian 
 ## AI / LLM Stack
 - **APIs & models:** OpenAI, Anthropic (Claude), Google Gemini, HuggingFace
 - **Frameworks:** LangChain, LangGraph, instructor
-- **Vector stores:** ChromaDB, FAISS
+- **Vector stores:** ChromaDB
 - **RAG:** full pipeline design — chunking, embedding, retrieval, reranking, evaluation (MRR, nDCG, LLM-as-judge)
 - **Fine-tuning (frontier):** supervised fine-tuning of closed models via OpenAI and Anthropic APIs
 - **Fine-tuning (open-source):** QLoRA — 4-bit NF4/LoRA on Llama 3.2 3B; training tracked in Weights & Biases
@@ -25,7 +25,7 @@ Statistical modelling and uncertainty-aware inference — particularly Bayesian 
 - **Multimodal:** text, image, and audio processing in LLM pipelines (Whisper, TTS, vision)
 
 ## ML / Data Stack
-- **Python:** pandas, NumPy, scikit-learn, XGBoost, LightGBM, TensorFlow/Keras, PyTorch
+- **Python:** pandas, NumPy, scikit-learn, XGBoost, LightGBM, TensorFlow/Keras
 - **SQL:** PostgreSQL (advanced: window functions, CTEs, recursive queries, analytical patterns)
 - **R:** tidyverse, ggplot2, Shiny; Bayesian modelling in JAGS/WinBUGS
 - **Embeddings & NLP:** SBERT, sentence-transformers, TF-IDF, semantic search

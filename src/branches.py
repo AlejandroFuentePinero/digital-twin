@@ -27,7 +27,7 @@ REGISTRY: dict[str, BranchSpec] = {
     ),
     "GAP": BranchSpec(
         name="GAP",
-        profile_sections=["identity", "gap_inventory"],
+        profile_sections=["identity", "gap_inventory", "active_learning"],
         final_k=6,
         tools=[],
         branch_rules=["calibration_ladder"],

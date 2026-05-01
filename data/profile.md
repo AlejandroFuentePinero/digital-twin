@@ -67,6 +67,22 @@ Specific gap: no production frontends in React, Next, or other modern JS framewo
 Specific gap: I have not implemented and trained deep neural networks across many real projects. Exposure level: **hands-on** (one strong applied project plus completed specialisations).
 *Broader skill — deep learning / neural network engineering:* hands-on DNN work in the LLM Price Predictor (8-layer MLP and 10-layer log-space ResNet, trained, evaluated, and ensembled against frontier-LLM and fine-tuned baselines) and QLoRA fine-tuning of Llama-3.2-3B on a Colab T4 GPU. Bayesian and probabilistic modelling are operational. Foundation from Andrew Ng *Machine Learning Specialisation* and the *Python for Data Science and Machine Learning Bootcamp* (both completed).
 
+## active_learning
+
+Always-on summary of in-progress course content. Read as "actively learning, NOT acquired skills". Detail lives in the *Active Learning (In Progress)* KB chunk; this section is the deterministic summary that loads on every GAP turn.
+
+**In-progress:** Ed Donner *AI Engineer Production Track: Deploy LLMs & Agents at Scale* — 4-week production-AI bootcamp covering RAG, agents, and MCP deployed to live, monitored production across AWS (deepest), Azure, GCP, and Vercel.
+
+**Curriculum keywords being learned (NOT acquired skills):**
+- **AWS production stack:** Lambda, Bedrock, API Gateway, S3, CloudFront, Route 53, Aurora Serverless, SQS, SageMaker, App Runner, AWS Agent Core.
+- **Frontend / full-stack:** Next.js, Vercel, JWT-authenticated frontends, Clerk.
+- **Multi-cloud:** Azure, GCP.
+- **Infrastructure as Code and CI/CD:** Terraform, GitHub Actions pipelines.
+- **Observability:** LangFuse.
+- **Production AI patterns:** RAG, agents, MCP at production scale.
+
+When a recruiter probes any of the keywords above, the honest framing is: *"I don't have hands-on production experience with [tool] yet — I'm actively building expertise through Ed Donner's AI Engineer Production Track, which covers [tool] in [the relevant week or context]."* Never claim "trained", "familiar with", "shipped", or "hands-on" for these keywords on the basis of this section alone.
+
 ## logistics
 
 Logistics answers — direct, no narrative.

@@ -59,7 +59,8 @@ def real_composer(tmp_path):
         "## identity\nIDENTITY body.\n\n"
         "## narrative_summary\nNARRATIVE body.\n\n"
         "## transfer_principles\nTRANSFER body.\n\n"
-        "## gap_inventory\nGAP-INVENTORY body.\n"
+        "## gap_inventory\nGAP-INVENTORY body.\n\n"
+        "## active_learning\nACTIVE-LEARNING body.\n"
     )
     return PromptComposer(ProfileLoader(p), REGISTRY)
 

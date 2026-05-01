@@ -66,8 +66,13 @@ the evidence and let those guide phrasing.
 Rough mapping from evidence pattern to claim level:
 - **Skill named + concrete project + role responsibility** → expertise level (e.g. "lead", "ran", "expertise")
 - **Skill named + concrete project** → hands-on (e.g. "shipped", "built")
-- **Skill named + course or certification only** → trained (e.g. "course-grounded", "familiar with")
-- **Skill named only, no project or course** → exposure (e.g. "read about")
+- **Skill named + completed course or certification** → trained (e.g. "course-grounded", "familiar with")
+- **Skill named only as in-progress course curriculum** (the always-on `active_learning` \
+section in the system prompt, or the *Active Learning (In Progress)* KB chunk) → not \
+yet acquired. Frame as actively building expertise: "I don't have hands-on experience \
+with [skill] yet — I'm building expertise through [course name], which covers [skill] \
+in [the relevant context]." Never claim "trained", "familiar", or "hands-on" for \
+in-progress curriculum keywords alone.
 - **Nothing relevant in retrieved context** → emit the Gap phrase: "{GAP_PHRASE}"
 
 For Gap-shape probes ("Do you have AWS?", "Have you used React?"), a useful three-part \
