@@ -1,0 +1,33 @@
+%%{init: {'flowchart': {'nodeSpacing': 45, 'rankSpacing': 55, 'curve': 'basis', 'padding': 12}}}%%
+flowchart TD
+  classDef io fill:#fbbf24,stroke:#92400e,color:#1f2937,stroke-width:2px
+  classDef llm fill:#f59e0b,stroke:#b45309,color:#ffffff,stroke-width:2px
+  classDef decision fill:#fcd34d,stroke:#92400e,color:#1f2937,stroke-width:2px
+  classDef pure fill:#10b981,stroke:#047857,color:#ffffff,stroke-width:2px
+  classDef sideEffect fill:#ec4899,stroke:#be185d,color:#ffffff,stroke-width:2px
+  classDef refusal fill:#ef4444,stroke:#b91c1c,color:#ffffff,stroke-width:2px
+  classDef future fill:#cbd5e1,stroke:#64748b,color:#1f2937,stroke-width:2px,stroke-dasharray:5 4
+
+  USER([User question + history]):::io
+  USER --> CLASSIFY["Classifier — gpt-4.1-nano<br/>last 2 turns + question<br/>multi-label + confidence"]:::llm
+  CLASSIFY --> CONF{"confidence &ge; 0.5?"}:::decision
+  CONF -->|no| GENFALL["override labels = GENERIC"]:::pure
+  CONF -->|yes| FILTER["filter labels[:2] to<br/>known REGISTRY branches"]:::pure
+  GENFALL --> FILTER
+  FILTER --> EMPTY{"any branch<br/>survived filter?"}:::decision
+  EMPTY -->|no| GENFALL2["branches = GENERIC<br/>safe fallback"]:::pure
+  EMPTY -->|yes| ROUTE["branches = surviving labels<br/>(max 2 per ADR-0003)"]:::pure
+  GENFALL2 --> RETR
+  ROUTE --> RETR["Retrieval — fetch_context<br/>ChromaDB top-K<br/>K = branch.final_k"]:::pure
+  RETR --> COMP["PromptComposer<br/>UNIVERSAL rules + branch_rules<br/>+ profile sections (incl. active_learning for GAP)<br/>+ retrieved context"]:::pure
+  COMP --> GEN["Generator — gpt-4.1<br/>system + history + question"]:::llm
+  GEN -.->|"TECHNICAL only<br/>future #18"| TOOL["fetch_project_readme<br/>tool loop<br/>(README into next turn)"]:::future
+  TOOL -.-> GEN
+  GEN --> JUDGE["Guardrail — Claude Sonnet 4.6<br/>same composed prompt + answer<br/>distinct model family"]:::llm
+  JUDGE --> ACCEPT{"is_acceptable?"}:::decision
+  ACCEPT -->|yes| LOG["InteractionLog append (JSONL)<br/>branch, classifier_labels, attempts,<br/>retrieved_chunks, latency_ms"]:::sideEffect
+  ACCEPT -->|"no — rejection feedback<br/>wraps into next system prompt"| RETRY{"attempts &lt; MAX_ATTEMPTS = 3?"}:::decision
+  RETRY -->|yes| GEN
+  RETRY -->|no| REFUSE["CANNED_REFUSAL<br/>polite decline + contact email"]:::refusal
+  REFUSE --> LOG
+  LOG --> RESP([Response to user]):::io

@@ -121,6 +121,41 @@ def test_render_emits_mermaid_block_and_glossary_table(tmp_path):
     assert "| `beta.py` | Beta does the beta thing. |" in out
 
 
+def test_render_injects_pipeline_diagram_above_module_graph_when_file_exists(tmp_path):
+    """When pipeline_diagram_path points to a file with Mermaid content, render() inserts a 'Pipeline behaviour (runtime)' section before the 'Module graph' heading."""
+    (tmp_path / "alpha.py").write_text('"""Alpha."""\n')
+    diagram = tmp_path / "pipeline.mmd"
+    diagram.write_text("flowchart TD\n  A[USER] --> B[CLASSIFIER]\n")
+    out = render(tmp_path, pipeline_diagram_path=diagram)
+    # New section heading present
+    assert "## Pipeline behaviour (runtime)" in out
+    # Diagram content embedded inside a Mermaid fence
+    assert "A[USER] --> B[CLASSIFIER]" in out
+    # Pipeline section appears before the module graph
+    assert out.index("## Pipeline behaviour (runtime)") < out.index("## Module graph")
+
+
+def test_render_omits_pipeline_section_when_diagram_file_absent(tmp_path):
+    """If the diagram path doesn't exist, render() falls back to module-graph-only output (no broken section)."""
+    (tmp_path / "alpha.py").write_text('"""Alpha."""\n')
+    missing = tmp_path / "does_not_exist.mmd"
+    out = render(tmp_path, pipeline_diagram_path=missing)
+    assert "## Pipeline behaviour (runtime)" not in out
+    assert "## Module graph" in out
+
+
+def test_render_html_embeds_pipeline_diagram_when_file_exists(tmp_path):
+    """render_html() injects the pipeline diagram as a <pre class='mermaid'> block above the module graph."""
+    (tmp_path / "alpha.py").write_text('"""Alpha."""\n')
+    diagram = tmp_path / "pipeline.mmd"
+    diagram.write_text("flowchart TD\n  A --> B\n")
+    html = render_html(tmp_path, pipeline_diagram_path=diagram)
+    assert "Pipeline behaviour (runtime)" in html
+    assert "A --> B" in html
+    # Pipeline section appears before the module-graph H2
+    assert html.index("Pipeline behaviour (runtime)") < html.index("Module graph")
+
+
 def test_render_html_emits_self_contained_preview_with_mermaid_cdn(tmp_path):
     """render_html produces a standalone HTML document loading mermaid.js from CDN, embedding the graph and glossary."""
     (tmp_path / "alpha.py").write_text(
