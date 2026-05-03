@@ -134,6 +134,15 @@ LLM Price Predictor?")
 fetch each project involved, up to the tool budget
 - The retrieved KB context names the relevant project but does not carry the \
 implementation depth the question needs
+- **Questions about this chatbot itself — how it works, how it classifies, \
+what its architecture is, how the retrieval / routing / guardrail / tool \
+layers operate (for example: "how does the Digital Twin classify questions?", \
+"what's your architecture?", "how do you decide what to answer?", "what model \
+are you?")** — fetch `fetch_project_readme(project="digital_twin")`. The \
+Digital Twin is the only project the visitor is interacting with directly; \
+meta-questions about its operation are exactly the case the tool exists to \
+answer. Do not attempt to describe this system from training-data knowledge; \
+fetch the canonical doc.
 
 When not to call:
 - The question is general (for example: "tell me about your projects", "what \

@@ -52,3 +52,21 @@ def test_tool_rules_registered_with_key_behavioural_anchors():
         "rule must guide when not to call (general / GAP-shape probes)"
     assert "ground" in lower or "do not extrapolate" in lower or "do not speculate" in lower, \
         "rule must instruct grounding in returned content"
+
+
+def test_tool_rules_includes_self_reference_trigger_for_digital_twin_questions():
+    """tool_rules must explicitly trigger digital_twin tool fetch on meta-questions about this chatbot.
+
+    Q8.2 smoke-test ("How does the Digital Twin classify questions?") showed the model
+    falling back to gap phrase rather than fetching the digital_twin README, because the
+    rule's "When to call" examples were all "explain a project Alejandro built" shapes —
+    none for the structurally distinct "how does this very chatbot work" case. Friction-lock:
+    the self-reference trigger must remain in the rule body or this test breaks intentionally.
+    """
+    body = RULES["tool_rules"].lower()
+    assert "digital twin" in body or "this chatbot" in body, \
+        "rule must include a self-reference trigger so meta-questions about this system fetch the digital_twin doc"
+    assert "do not attempt to describe this system from training-data knowledge" in body or \
+        "do not describe this system from training" in body or \
+        "fetch the canonical doc" in body, \
+        "rule must explicitly forbid training-data fabrication for self-reference questions"
