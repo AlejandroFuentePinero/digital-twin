@@ -4,13 +4,22 @@ A monolithic system prompt that always loads `profile.md` plus all rules plus re
 
 ## Branches and their composition
 
-| Branch | Profile sections | Retrieval `FINAL_K` | Tools | Approx. system prompt |
+The table below was the original ADR design. Implementation (Sessions 17–24) refined some values — the table is updated to reflect what's wired in `branches.REGISTRY` today; the design intent is unchanged.
+
+| Branch | `profile_sections` | `branch_rules` (on top of UNIVERSAL) | `final_k` | `tools` |
 |---|---|---|---|---|
-| **GAP** | identity + gap_inventory + calibration_ladder | 6 | — | ~2.2k tokens |
-| **BEHAVIOURAL** | identity + deflection_rule + personal_stories | 4 | — | ~1.8k |
-| **TECHNICAL** | identity + transfer_principles + tool_rules | 8 | `fetch_project_readme` | ~2.9k (+ tool result if invoked) |
-| **GENERIC** | identity + narrative_summary + transfer_principles | 6 | — | ~2.9k |
-| **LOGISTICAL** | identity + logistics_block | 2 | — | ~1.0k |
+| **GENERIC** | identity + narrative_summary + transfer_principles | concise_disclosure | 6 | — |
+| **GAP** | identity + gap_inventory + active_learning | calibration_ladder + concise_disclosure | 6 | — |
+| **LOGISTICAL** | identity + logistics | concise_disclosure | 6 | — |
+| **BEHAVIOURAL** | identity + personal_stories | deflection + concise_disclosure | 6 | — |
+| **TECHNICAL** | identity + transfer_principles + active_learning | tool_rules + concise_disclosure | 6 | `fetch_project_readme` |
+
+`UNIVERSAL` rules load on every branch: `persona`, `scope`, `security`, `numerical_completeness`, `project_links`. Notable refinements vs. the original ADR table:
+
+- All branches converged on `final_k=6`. The original differential (2 / 4 / 6 / 8) was not justified by smoke-test signal once retrieval landed.
+- TECHNICAL adds `active_learning` to `profile_sections` per `LIMITATIONS.md::O2` mitigation — the classifier over-fires TECHNICAL on tool-name probes ("have you used CUDA?"), and the always-on `active_learning` Layer 1 grounding handles those cases without requiring a tool fetch.
+- `concise_disclosure` (Session 20 / #25) is a cross-branch pattern rule applied to every branch.
+- `project_links` (Session 24 / #18) is a universal rule governing canonical-source-link surfacing across all branches.
 
 A cheap classifier (`gpt-4.1-nano`) takes the last 2 turns of history plus the current question and returns `{labels: list[str], confidence: float}`. High confidence + single label → that branch. Multi-label (max 2) → composition takes the union of needed sections. Low confidence → defaults to GENERIC. Misclassifications are logged with the confidence score so the **Sentinel** can flag persistent low-confidence patterns.
 
@@ -39,6 +48,7 @@ Routing introduces failure modes the monolithic prompt did not have. They are ac
 
 - **Mid-conversation prompt switching.** A session can route turn-by-turn to different branches. The model sees a different system prompt on different turns; earlier-turn instructions are gone from the working set even though earlier-turn responses remain in the message history. Style/calibration shifts across rule-set changes are possible. Mitigated by `identity` + the four universal rules (`persona`, `scope`, `security`, `numerical_completeness`) loading on every branch, which holds cross-turn consistency on the dimensions that matter most. Not mitigated for branch-specific rule continuity.
 - **Hidden state across `rules.py`, `profile.md`, and `branches.py`.** A `BranchSpec` references rule keys and section names as strings; the composer dereferences them at runtime. Reading `branches.py` alone does not tell a contributor what `GENERIC` actually does — they need `rules.RULES["persona"]` + `profile.section("identity")` + the composer's two-loop logic. Cognitive overhead vs. a single prompt template. Tests cover the dereferencing; readability is the residual cost.
-- **Universal rules cannot be branch-tuned.** The four universal rules load identically on every branch. If a future need requires per-branch variation of one of them, the design forces either overriding the whole rule per branch or keeping the rule generic enough to cover all branches. Today the four are intentionally generic; future tightening may need to revisit.
+- **Universal rules cannot be branch-tuned.** The five universal rules load identically on every branch. If a future need requires per-branch variation of one of them, the design forces either overriding the whole rule per branch or keeping the rule generic enough to cover all branches. Today the five are intentionally generic; future tightening may need to revisit.
+- **Guardrail must see what the model grounded in.** The TECHNICAL branch's tool loop produces tool-fetched content the model uses to answer. Originally the guardrail received only KB retrieval as `retrieved_context` — tool-returned content was invisible to it, so tool-grounded answers were rejected as "fabrication." Surfaced as `LIMITATIONS.md::R1` in #18 smoke-test (Session 24); resolved by recomposing the guardrail's prompt per attempt with a `## Tool-fetched content available to the model` section appended to `retrieved_context`. The general principle: every model surface that produces output the guardrail evaluates must also share its grounding context with the guardrail.
 
 A living register of these risks plus system-wide limitations (KB-static / no live fetch, single-user, no cross-session memory, eval-vs-user-behaviour caveats) lives in `docs/LIMITATIONS.md` — planned in [issue #20](https://github.com/AlejandroFuentePinero/digital-twin/issues/20), deferred until the real classifier lands ([issue #15](https://github.com/AlejandroFuentePinero/digital-twin/issues/15)) so misclassification risk can be described from observation rather than prediction.

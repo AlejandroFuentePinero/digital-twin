@@ -5,6 +5,96 @@
 
 ---
 
+## Session 24 (2026-05-03) — Issue #18 closed (TECHNICAL branch + ToolRegistry + ToolLoop + 24 distilled docs); Phase 2 branch surface complete
+
+**Status:** Issue [`#18`](https://github.com/AlejandroFuentePinero/digital-twin/issues/18) (TECHNICAL branch + tool loop with `fetch_project_readme`) closed in `<commit>`. Adds the fifth and final branch to `branches.REGISTRY`, completing Phase 2's branch surface (GENERIC + GAP + LOGISTICAL + BEHAVIOURAL + TECHNICAL all wired). Two new modules (`src/tools.py`, `src/tool_loop.py`); two new rules (`tool_rules`, `project_links`); 25 new behaviour tests (146 → 175 net during code work, then 175 → 177 with the bug-fix tests added during smoke-test); 24 distilled technical docs in `data/readmes/` totalling ~17k tokens (papers + AI projects + this Digital Twin self-reference); KB pruned 109 → 104 chunks (positioning.md transfer-prose deleted as Phase 1 sub-task). One bug surfaced + fixed live during smoke-test (`LIMITATIONS.md::R1` — guardrail blindness to tool-returned content); one rule-wording sharpening (TECHNICAL self-reference trigger) discovered + fixed in the second smoke-test pass. Three smoke-test probes (Q8.2 / Q8.2b / Q8.2c) all green post-fixes. Phase 3 (v4 eval) is now unblocked — full routed pipeline available for the rewrite.
+
+### What shipped — code (5 vertical TDD slices, 4 commits)
+
+| Commit | Scope |
+|---|---|
+| `16d1033` | Code-track checkpoint: TECHNICAL `BranchSpec` + ToolRegistry + ToolLoop + new rules + positioning.md prune + pipeline diagram update + MAP.md refresh |
+| `76e0e40` | Hardening: `additionalProperties: False` schema lock + 4 new tool-builder tests |
+| `577f227` | Observability: per-attempt tool-call attribution (`attempt_index` in log) + `LIMITATIONS::P8` watch-item |
+| `6b047dd` | Content track + integration: 24 distilled docs + `registry.json` + `app.py` wires `ToolRegistry` + `make_litellm_tool_callable` into Pipeline + HUMAN_EVAL_QUESTIONS Q8.2/Q8.2b/Q8.2c added + RELEASE_CHECKLIST `digital_twin` gates + `tool_rules` examples marked illustrative-not-exhaustive |
+| `3781a67` | Bug fix R1: guardrail receives tool-returned content via `on_call(name, args, status, content)` callback + per-attempt judge-prompt recomposition with `## Tool-fetched content available to the model` section appended |
+| `8a509e9` | Bug fix: `tool_rules` self-reference trigger for "how does this Digital Twin work" meta-questions; explicit no-training-data-fabrication directive |
+
+### What shipped — design choices (resolved in `/grill-me` session before any code)
+
+13 design questions resolved upfront and locked in writing before implementation, per the project's grill-then-build pattern:
+
+1. **TECHNICAL trigger condition** — absorb both shapes (deep-project Q + tool-name probe). `active_learning` Layer 1 grounds the latter via the section's own *"Never claim trained / familiar / shipped / hands-on for these keywords"* framing — no separate `calibration_ladder` rule. Validated empirically by Q8.2c: classifier routed CUDA to GAP at 0.95 confidence (better than `LIMITATIONS::O2` predicted) and the tool correctly didn't fire.
+2. **ToolLoop architecture** — separate generic, model-agnostic class in `src/tool_loop.py` called from Pipeline (option B). Generator stays single-call; ToolLoop calls `litellm.completion()` directly via `make_litellm_tool_callable` adapter.
+3. **Termination behaviour** — simplest possible: `if not response.tool_calls: break`. No special boundary engineering. Pathological budget-exhaustion → empty content → guardrail rejects → existing retry path handles.
+4. **Content-fetch unit** — full-fetch with content distillation discipline (rejected (B) summary-first and (C) semantic retrieval as premature). Distilled docs are 1–2k tokens each by content authoring discipline, not by post-fetch filtering.
+5. **Project key set** — 24 keys: 12 LLM Lab splits + 5 standalone AI projects + 1 self-reference + 6 papers. Dropped `python_eda_projects` after redundancy audit (KB content already adequate per `projects_skill_labs.md`).
+6. **`MAX_TOOL_CALLS = 3`** (bumped from spec'd 2 to support 3-way project comparisons). Validated by Q8.2b — comparison fired 2 parallel tool calls cleanly within budget.
+7. **Distilled docs scope** — tool-only, not ingested (mirrors `profile.md` pattern). `data/readmes/` lives outside `data/knowledge_base/` so ingest naturally skips.
+8. **Universal `project_links` rule** — added to `UNIVERSAL` list (4 → 5 keys; friction-lock test in `test_rules.py` updated). Conditional language ("only when asked specifically or explicitly relevant") prevents opportunistic link-jamming.
+9. **`tool_rules` content** — drafted with conditional triggers + grounding requirements + handoff-to-source clause for depth beyond the doc.
+10. **Failure mode strictness** — hard-fail at startup for structural issues (missing registry, missing files); soft error tool-result for runtime issues (invalid key, file IO error). ToolRegistry validates all referenced files exist on `__init__`.
+11. **Distilled-doc shape (Q11)** — Source link → What it is → Architecture/Methods → Key engineering decisions → Stack and discipline. Adapted for papers (Methods + Theoretical contribution + Results) where appropriate.
+12. **Wording fixes** — example lists in TOOL_RULES, PROJECT_LINKS, NUMERICAL_COMPLETENESS marked illustrative-not-exhaustive ("for example: ..." rather than bare brackets) to prevent the model reading examples as exclusive triggers. User-surfaced concern.
+13. **Schema lock** — `additionalProperties: False` on the `fetch_project_readme` schema as defence-in-depth + prerequisite for OpenAI strict-mode if enabled later. User-surfaced concern.
+
+### Bugs surfaced + fixed during smoke-test (post-implementation signal)
+
+**R1 — Guardrail blindness to tool-returned content** (commit `3781a67`):
+- **Surfaced:** Q8.2 first run. Tool fetched `digital_twin.md` correctly on attempts 1 and 2, model produced grounded answers, but guardrail rejected all 3 attempts as "fabrication" — its `retrieved_context` only carried KB chunks, not the README the model actually grounded in. User received `CANNED_REFUSAL`. Architecturally load-bearing: the tool surface was non-functional for any TECHNICAL probe where KB has no overlap with tool content (the canonical case being the `digital_twin` self-reference).
+- **Fix:** extended `on_call` signature to pass tool content to Pipeline; per-attempt re-composition of judge prompt with `## Tool-fetched content available to the model` section appended. Now resolved in `LIMITATIONS.md::R1`.
+- **Per the design-hypothesis pivot rule** — paused before fixing, surfaced design options (A) inject content into retrieved_context vs (B) pass full messages list to guardrail vs (C) loosen guardrail criterion; user picked (A); shipped accordingly.
+
+**Tool-rules self-reference trigger gap** (commit `8a509e9`):
+- **Surfaced:** Q8.2 second run (post-R1). Architecture worked correctly — classifier routed TECHNICAL, tool was available, guardrail-content fix would have accepted a tool-grounded answer — but the model chose not to fetch on attempt 0 (fabricated from training-data knowledge of the architecture instead). On retry, model retreated to gap phrase rather than fetching to verify.
+- **Diagnosis:** `tool_rules` "When to call" examples were all "explain a project Alejandro built" shapes. The structurally distinct "how does this very chatbot work" self-reference case had no explicit trigger. Model didn't recognise it as a tool-fetch case.
+- **Fix:** new "When to call" bullet explicitly targeting meta-questions about this chatbot, with directive *"Do not attempt to describe this system from training-data knowledge; fetch the canonical doc."* Friction-lock test in `test_rules.py` pins both the trigger and the no-fabrication directive.
+- **Q8.2 third run:** clean pass. Tool fired on attempt 0; guardrail accepted the grounded answer; 16s latency vs 52s on the original failing run.
+
+### Verified
+
+| Probe | Result | Notes |
+|---|---|---|
+| Q8.2 (digital_twin self-ref) | ✅ Clean (after R1 + tool_rules fix) | `tool_calls=[fetch_project_readme(project="digital_twin"), success, attempt_index=0]`; guardrail accepted on attempt 0; 16s; `event_type=answered`, `knew_answer=True`; user-visible answer accurately describes classify-then-route, gpt-4.1-nano classifier, branch dispatch, distinct guardrail (Claude Sonnet 4.6) — all from the README; Source link surfaced per `project_links` |
+| Q8.2b (multi-tool comparison) | ✅ Clean on first run | Two parallel tool calls fired (`ai_jie` + `expert_knowledge_worker`), accepted on attempt 0, 22s; comparison answer grounded in both READMEs |
+| Q8.2c (CUDA tool-name probe) | ✅ Clean on first run | Routed to `GAP` (not TECHNICAL — better than `LIMITATIONS::O2` predicted), tool correctly didn't fire, GAP-shape calibration answer with active_learning grounding; 10s |
+
+- `uv run pytest -q` → **177 passed** (146 → 175 across the 5 code slices + 175 → 177 across the two bug-fix tests).
+- `uv run python -m src.ingest` → **104 chunks** (109 → 104 after positioning.md transfer-prose deletion in Phase 1 sub-task; verified post-prune).
+- `data/readmes/registry.json` validates: 24 keys, hard-fail-at-startup verified all 24 README files exist on disk; tool schema enum carries 24 keys + `additionalProperties: False`.
+- `app.py` Pipeline now wires `ToolRegistry(data/readmes/registry.json)` + `make_litellm_tool_callable()` so production TECHNICAL turns can fire the tool. ToolRegistry hard-fails at startup if any referenced README is missing — catches deploy mistakes before first user turn.
+- `docs/pipeline_diagram.mmd` updated: TOOL node solid (was dashed-grey "future"); new `TOOL → JUDGE` dotted edge documenting the R1 content-pass-through; MAX_TOOL_CALLS = 3 annotation.
+- `docs/MAP.md` regenerated after diagram + `tool_loop` + `tools` modules added (new "Tools" category in cyan).
+- All link checks on `data/readmes/*.md`: 22/27 confirmed working, 4 Wiley journal URLs return 403 to scripted requests but resolve in browsers (false positives), **1 real broken link** — `https://github.com/AlejandroFuentePinero/digital-twin` (used in `digital_twin.md`'s Source line) returns 404 because the repo is private. Tracked as a release-blocker in [`RELEASE_CHECKLIST.md::Portfolio / external`](./RELEASE_CHECKLIST.md) — replace `digital_twin.md` with Alejandro-authored content + either make repo public or redirect Source line.
+
+### Design decisions
+
+- **Spec evolution called out explicitly.** Several #18 acceptance criteria evolved during the slice: `MAX_TOOL_CALLS` 2 → 3 (3-way comparisons); `active_learning` added to TECHNICAL `profile_sections` per O2 mitigation (not in original spec); `concise_disclosure` added to TECHNICAL `branch_rules` (cross-branch consistency, post-#25). Same pattern as Sessions 22/23 with LOGISTICAL/BEHAVIOURAL — recorded in DECISIONS so the issue body isn't read as the live spec.
+- **Bug discovery via smoke-test, not pre-empted by tests.** R1 (guardrail blindness) was a real architectural bug the unit tests couldn't catch — the FakeGuardrail in `tests/test_pipeline.py` doesn't actually evaluate against retrieved_context, just returns scripted Evaluations. The bug was load-bearing for the `digital_twin` self-reference case yet invisible to the test surface. Smoke-test discovered it; new test `test_guardrail_prompt_includes_tool_returned_content_for_grounded_evaluation` now locks the contract. **Per `feedback_verify_runtime_behaviour_before_commit`: tests cover the contract, not runtime accuracy** — R1 is the canonical example.
+- **ADR-0003 amended** rather than rewritten or superseded. Branch composition table updated to match implementation reality (FINAL_K=6 across branches; active_learning added to TECHNICAL); R1 added to Operational risks as a now-resolved item with the general principle: *"every model surface that produces output the guardrail evaluates must also share its grounding context with the guardrail."*
+- **`digital_twin.md` shipped as a Claude-authored placeholder.** User explicitly OK with shipping the placeholder + broken Source link (private repo) as long as both are tracked in TODO + RELEASE_CHECKLIST. Voice and emphasis are the recruiter-facing surface for "how does this very chatbot work?", so the placeholder will be replaced. Both gates registered in `RELEASE_CHECKLIST::Portfolio / external`.
+- **No new ADR for the R1 fix.** The principle ("guardrail must see model's grounding context") is broadly applicable and worth recording — captured in ADR-0003's Operational risks update + LIMITATIONS::R1 + the locking test. A standalone ADR would be overkill for a same-week fix; the Operational risks section is the right home.
+- **Distillation depth philosophy.** User pushback on initial round-1 distillations surfaced the right question: should distilled docs go deeper (closer to interview-prep depth) or stay at moderate depth (with handoff to canonical source for full detail)? Resolved in favour of moderate-depth-plus-handoff because (a) multi-turn context already provides three depth tiers (overview turn → tool fetch → source link), (b) deeper docs increase fabrication risk for adjacent specifics the model would then claim authority on, (c) it mirrors how good technical conversation actually works. Implemented via the new `tool_rules` Grounding bullet: *"When the visitor's question asks for depth beyond what the returned document carries, do not extrapolate or guess — acknowledge the document's scope and surface the Source link as the path to full detail."*
+- **Pipeline-diagram update + ADR amendment** are the kinds of doc-currency hygiene that's easy to skip. Done explicitly here so the docs stay self-current for future contributors / future Claude sessions / `RELEASE_CHECKLIST.md` walk-through.
+
+### Watch-items registered (for future signal-driven work)
+
+- `LIMITATIONS::P8` — TECHNICAL tool-uptake rate is unmeasured. Captured the architectural blind spot before the smoke-test surfaced the actual case (Q8.2 second run — model didn't fetch). The `tool_rules` self-reference fix addresses one specific shape; broader uptake-rate aggregation will need Sentinel (Phase 4).
+- `LIMITATIONS::R1` resolved — guardrail blindness fix shipped; entry kept in LIMITATIONS for historical record.
+- `LIMITATIONS::P7` (deflection scope) carried forward unchanged — still BEHAVIOURAL-only; trip-wires for promotion to cross-branch `offer_contact` rule still apply.
+
+### Outstanding
+
+- **Phase 2 branch surface complete.** All five branches wired. No more `BranchSpec` work in scope.
+- **Next priorities (any order):**
+  - **#16** (contact form + per-session `contact_provided` flag) — last operational gap before Phase 3 v4 eval.
+  - **Phase 3 / #2** (v4 eval baseline) — now unblocked. Rewrite `eval/run_eval.py` through the routed pipeline (no guardrail per Session 9 decision); per-question `branch` + `classification_confidence` + `by_branch` aggregation; first v4 run on the existing 149 questions.
+  - **R3 smoke-test** — full HUMAN_EVAL_QUESTIONS walk against the live 5-branch system. Worth doing after #16 lands so both new affordances (TECHNICAL + contact form) are validated together.
+- **Replace `data/readmes/digital_twin.md`** with Alejandro-authored content + resolve Source-link visibility — release-blockers in RELEASE_CHECKLIST.
+- **Phase 1 sub-tasks remaining:** none — `positioning.md` prune was the last; KB date-stable; `personal_stories` complete; `transfer_principles` complete.
+
+---
+
 ## Session 23 (2026-05-03) — Issue #17 closed (BEHAVIOURAL branch + deflection rule + Story 8); first novel branch_rule lands
 
 **Status:** Issue [`#17`](https://github.com/AlejandroFuentePinero/digital-twin/issues/17) (BEHAVIOURAL branch + deflection rule) closed in `<commit>`. Adds the fourth branch to `branches.REGISTRY` plus the first **novel** branch_rule since Session 17's slate (deflection — no prior analogue). Five new behaviour tests; one friction-lock rename; one new STAR story (Story 8 — direct disagreement) added to `data/profile.md::personal_stories`; one new entry (P7 — deflection scope) in `LIMITATIONS.md`. **Test count 141 → 146.** KB at 109 chunks (unchanged — `personal_stories` already authored, profile.md never ingested). The R2 smoke-test data telegraphed both the routing path (Q8.1 / disagreement question fabricated under GENERIC routing → caught by guardrail → retry corrected) and the content gap (Story 8 covers exactly the disagreement-resolution shape Q8.1 needed).
