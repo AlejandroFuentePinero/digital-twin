@@ -147,7 +147,9 @@ A second-order risk: the same composed prompt loads to **both** generator and gu
 
 **Status:** Predicted (architectural choice).
 
-The knowledge base is ingested at build time. Profile content, project metrics, and KB facts cannot be updated mid-session. New facts (a new publication, a project milestone, a role change) require re-ingest. The TECHNICAL branch's `fetch_project_readme` tool (planned for #18) will be the *only* model-callable mechanism for fresh content.
+The knowledge base is ingested at build time. Profile content, project metrics, and KB facts cannot be updated mid-session. New facts (a new publication, a project milestone, a role change) require re-ingest. The TECHNICAL branch's `fetch_project_readme` tool (#18 / Session 24) is the *only* model-callable mechanism for fresh content — and it reads from local distilled files, not the live web.
+
+**Decision provenance:** [`DECISIONS.md::Session 1 (2026-04-24) → § 3 Web fetch: links-as-pointers, no live fetch in v1`](./DECISIONS.md#session-1-2026-04-24--knowledge-base-and-evaluation-set). Rationale: *"For a personal digital twin answering known facts about a known person, live web fetch adds latency and failure modes for no benefit. The knowledge base is the authoritative source."*
 
 **Trip-wire:** a recruiter asks about something that demonstrably changed since last ingest, and the system answers from stale data. Mitigated today by date-stable KB framing (#24's "May 2026 – present" rather than "starts 13 May 2026").
 
