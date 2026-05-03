@@ -12,6 +12,8 @@ from litellm import completion
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from rules import GAP_PHRASE
+
 # Distinct model family from the generator (OpenAI) to avoid correlated failures.
 MODEL = "anthropic/claude-sonnet-4-6"
 
@@ -45,6 +47,11 @@ class Guardrail:
         answer: str,
         history: list[dict],
     ) -> Evaluation:
+        if answer.strip() == GAP_PHRASE:
+            return Evaluation(
+                is_acceptable=True,
+                feedback="Gap phrase — canonical refusal accepted without LLM evaluation.",
+            )
         user_prompt = (
             f"## Conversation history\n\n{_format_history(history)}\n\n"
             f"## Visitor's question\n\n{question}\n\n"
