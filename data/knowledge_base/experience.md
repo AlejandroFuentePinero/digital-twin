@@ -4,7 +4,7 @@
 
 A chronological anchor covering formal roles, fieldwork, and education, most recent first.
 
-- **AI Engineer** — Officeworks, Australia — 2026–present *(starts 13 May 2026)*
+- **AI Engineer** — Officeworks, Australia — May 2026 – present
 - **Postdoctoral Fellow** — James Cook University, Australia — 2024–2026
 - **Research Assistant** — University of Melbourne, Australia — 2024
 - **PhD in Quantitative Ecology** — James Cook University, Australia — 2020–2024
@@ -26,9 +26,9 @@ A chronological anchor covering formal roles, fieldwork, and education, most rec
 ---
 
 ## AI Engineer — Officeworks
-**13 May 2026 – Present | Australia (hybrid)**
+**May 2026 – Present | Australia (hybrid)**
 
-First industry role following the academic-to-AI-engineering transition. Joined as an AI engineer to apply the modelling and uncertainty-aware inference foundation built during the PhD and postdoc to production AI systems. Subject to a confidentiality agreement; specific projects and internal work are not discussed publicly.
+First industry role following the academic-to-AI-engineering transition. Applying the modelling and uncertainty-aware inference foundation built during the PhD and postdoc to production AI systems. Subject to a confidentiality agreement; specific projects and internal work are not discussed publicly.
 
 ---
 

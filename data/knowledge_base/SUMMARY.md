@@ -8,11 +8,11 @@ Aggregate, cross-file facts for holistic queries: counts, totals, timelines, and
 
 - **Full name:** Alejandro de la Fuente (Pinero)
 - **Location:** Melbourne, VIC, Australia | Australian Permanent Resident
-- **Current roles:** AI Engineer at Officeworks (from 13 May 2026, hybrid) + independent AI engineer. Postdoctoral Fellow at James Cook University (Sep 2024 – May 2026) ending as the Officeworks role begins.
+- **Current roles:** AI Engineer at Officeworks (May 2026 – present, hybrid) + independent AI engineer. Postdoctoral Fellow at James Cook University (Sep 2024 – May 2026) ended as the Officeworks role began.
 - **Available for:** AI Engineer, Data Scientist, ML Engineer, Research Scientist roles
 - **Contact:** alejandrofuentepinero@gmail.com | 0499 501 813
 - **Career span:** 2014–present (~12 years professional experience total)
-- **Domain transition:** quantitative ecology (2014–2024) → AI engineering (2023–present, full focus 2024–)
+- **Domain transition:** quantitative ecology (2014–2026) → AI engineering (2023–present, full focus 2024–)
 
 ---
 
@@ -20,7 +20,7 @@ Aggregate, cross-file facts for holistic queries: counts, totals, timelines, and
 
 | Period | Role | Organisation | Location |
 |---|---|---|---|
-| 13 May 2026–present | AI Engineer | Officeworks | Australia (hybrid) |
+| May 2026–present | AI Engineer | Officeworks | Australia (hybrid) |
 | Sep 2024 – May 2026 | Postdoctoral Fellow | James Cook University | Cairns, QLD |
 | Apr–Sep 2024 | Research Assistant | University of Melbourne | Melbourne, VIC |
 | Aug 2020–Apr 2024 | PhD Researcher | James Cook University | Townsville/Cairns |

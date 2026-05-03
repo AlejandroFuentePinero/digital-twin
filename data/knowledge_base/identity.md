@@ -11,13 +11,14 @@ That training produced a specific kind of thinking: how to reason under uncertai
 Today Alejandro builds end-to-end AI and data science systems, from model development and orchestration through to deployment. He works at the intersection of scientific modelling and production engineering, with a particular focus on RAG systems, fine-tuning, agentic workflows, and rigorous evaluation.
 
 ## Career arc
-- **Research origin (2014–2024):** Ecology fieldwork across South America and Australia → Masters → PhD (Quantitative Ecology, JCU, Cum Laude) → Postdoctoral Fellow
+- **Research origin (2014–2026):** Ecology fieldwork across South America and Australia → Masters → PhD (Quantitative Ecology, JCU, Cum Laude) → Postdoctoral Fellow
 - **Transition:** Moved from academia into applied AI, drawn by more immediate and tangible impact
-- **Current:** AI Engineer at Officeworks (from 13 May 2026, hybrid) + independent AI engineer building LLM systems and data products. Postdoctoral Fellow at James Cook University (Sep 2024 – May 2026) closing as the Officeworks role begins.
+- **Current:** AI Engineer at Officeworks (May 2026 – present, hybrid) + independent AI engineer building LLM systems and data products. Postdoctoral Fellow at James Cook University (Sep 2024 – May 2026) closed as the Officeworks role began.
 
 ## Location and availability
 - Based in Melbourne, VIC, Australia
 - Australian Permanent Resident
+- Currently employed full-time as AI Engineer at Officeworks. For new opportunities or collaborations, please contact directly via email or LinkedIn — do not assume immediate availability.
 - Contact: alejandrofuentepinero@gmail.com | 0499 501 813
 
 ## Core character
