@@ -411,6 +411,55 @@ Optional second pass after core clears. Tests harder behaviours: multi-turn rout
 
 ---
 
+### Session A — Turn-3 invitation + multi-branch routing (post-#16 / Session 26)
+
+🔄 **Fresh session.** Validates: turn-3 form trigger, multi-branch routing health, submit + reset flow — in one conversation.
+
+| Turn | Probe | Expected branch | Form behaviour |
+|---|---|---|---|
+| 1 | *"What's your background?"* | GENERIC | Hidden |
+| 2 | *"Have you used AWS?"* | GAP | Hidden (calibration answer ≠ gap phrase) |
+| 3 | *"How does the Digital Twin classify questions?"* | TECHNICAL | Tool fires (`fetch_project_readme(project="digital_twin")`); **form appears** with initial copy ("Want a follow-up?") |
+| 4 | *"Where are you based?"* | LOGISTICAL | Form **stays visible** (latched from turn 3) |
+| Submit | name + email | — | Form hides; "✅ Thanks…" appears; `data/logs/contacts.jsonl` carries new record with matching `session_id` |
+| Click "New conversation" | — | — | Form hides immediately; counter resets to 0; copy resets to initial |
+
+✅ Pass = form visible at turn 3, latched across turns 4+, hidden after submit, reset on new conversation; routing correct across all 4 branches; `tool_calls` populated on turn 3.
+
+---
+
+### Session B — Gap-event trigger + explicit-request trigger + turn-7 re-prompt
+
+🔄 **Fresh session.** Validates: gap-event triggers form before turn 3; explicit-request keyword detector; turn-7 re-prompt copy change.
+
+| Turn | Probe | Expected behaviour |
+|---|---|---|
+| 1 | *"Have you ever worked with kdb+/q?"* (truly off-KB tech-name probe) | System emits gap phrase ("I don't have that information…"). **Form appears at turn 1** despite turn_counter < 3, with initial copy. |
+
+Don't submit. Continue to test the explicit-request detector in a fresh session below; OR, if you want to keep the same session, reset and re-run with the explicit-request probe instead.
+
+🔄 **Fresh session for explicit-request branch:**
+
+| Turn | Probe | Expected behaviour |
+|---|---|---|
+| 1 | *"How can I reach Alejandro?"* | Keyword detector matches `\bhow\s+(can|...)\s+i\s+(contact|reach|...)\b`. **Form appears at turn 1**. |
+
+🔄 **Fresh session for turn-7 re-prompt:**
+
+| Turn | Probe | Expected behaviour |
+|---|---|---|
+| 1–6 | Any 6 in-scope questions | Form appears at turn 3 (initial copy); persists through turns 4–6 (still initial copy). |
+| 7 | Any 7th question | Form copy **changes** to re-engagement nudge ("Still here — happy to be in touch."). |
+
+✅ Pass per probe = form appears at the expected turn (immediately for triggers 1–2; turn 7 for re-prompt copy change); `tool_calls=[]` for the off-KB probe (not a TECHNICAL question); contact_offered logged appropriately.
+
+**Watch for:**
+- False positives on the keyword detector (e.g., "what email service does Alejandro use?" should NOT trigger)
+- Form not appearing on turn-1 gap event (the new fix's central case)
+- Form copy not changing at turn 7 (re-prompt regression)
+
+---
+
 ### Q8.3 — Logistical probe (LOGISTICAL future, GENERIC fallback today)
 
 🔄 **Fresh session.**

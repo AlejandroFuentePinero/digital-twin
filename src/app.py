@@ -37,7 +37,12 @@ from guardrail import Guardrail
 from interaction_log import LogWriter
 from pipeline import Pipeline
 from profile import ProfileLoader
-from session_state import SessionState
+from rules import GAP_PHRASE
+from session_state import (
+    INITIAL_FORM_PROMPT,
+    SessionState,
+    detect_explicit_contact_request,
+)
 from tools import ToolRegistry, make_litellm_tool_callable
 
 MAX_HISTORY_TURNS = 10  # last N user+assistant pairs passed to the pipeline
@@ -71,12 +76,25 @@ def respond(
     session_id: str,
     state: SessionState,
 ):
-    """Called on every user submission. Increments turn counter, threads contact state into the pipeline, and updates the form visibility post-turn."""
+    """Called on every user submission. Increments turn counter, detects contact-flow triggers (explicit request + gap event), threads contact state into the pipeline, and updates form visibility + prompt copy post-turn.
+
+    Three triggers can surface the contact form (Session 26):
+      - Turn 3+ (default invitation_turn) — handled by SessionState.should_show_contact_form
+      - User explicitly asks to be contacted — detected from message BEFORE Pipeline.run
+      - System emits the gap phrase — detected from reply AFTER Pipeline.run
+
+    Form copy switches at turn 7 (re-invitation_turn) per current_form_prompt().
+    """
     state.record_turn()
     chat_history = [
         {"role": m["role"], "content": m["content"]}
         for m in history[-(MAX_HISTORY_TURNS * 2):]  # each turn = 1 user + 1 assistant msg
     ]
+
+    # Trigger detection — explicit request from user message (before generation)
+    if detect_explicit_contact_request(message):
+        state.mark_explicit_request()
+
     contact_offered = state.should_show_contact_form()
     reply = _pipeline.run(
         question=message,
@@ -86,10 +104,19 @@ def respond(
         contact_offered=contact_offered,
         contact_provided=state.contact_provided,
     )
+
+    # Trigger detection — gap event from assistant reply (after generation)
+    # Form will appear immediately for the visitor's next view of the page even
+    # though this turn's log record may have contact_offered=False (the gap event
+    # happened during this turn; offered semantics reflect pre-turn state).
+    if GAP_PHRASE in reply:
+        state.mark_gap_event()
+
     history.append({"role": "user", "content": message})
     history.append({"role": "assistant", "content": reply})
     form_visible = gr.update(visible=state.should_show_contact_form())
-    return "", history, state, form_visible
+    form_prompt = gr.update(value=state.current_form_prompt())
+    return "", history, state, form_visible, form_prompt
 
 
 def submit_contact(
@@ -132,13 +159,14 @@ def submit_contact(
 
 
 def new_session():
-    """Reset conversation, fresh session ID, fresh SessionState, hide contact form + status."""
+    """Reset conversation, fresh session ID, fresh SessionState, hide contact form + status, restore initial form prompt."""
     return (
         [],
         str(uuid.uuid4()),
         SessionState(),
         gr.update(visible=False),
         gr.update(visible=False),
+        gr.update(value=INITIAL_FORM_PROMPT),
     )
 
 
@@ -173,12 +201,12 @@ with gr.Blocks(title="Alejandro de la Fuente — Digital Twin", theme=gr.themes.
     with gr.Row():
         clear = gr.Button("New conversation", size="sm", variant="secondary")
 
-    # Contact form — hidden by default; becomes visible at the invitation turn
-    # (default 3) and persists until the user submits or starts a new session.
+    # Contact form — hidden by default; becomes visible when any trigger fires
+    # (turn 3+, gap event, or explicit user request) and persists until submit
+    # or new_session. Header copy switches to a re-engagement nudge at turn 7+
+    # via SessionState.current_form_prompt().
     with gr.Group(visible=False) as contact_form:
-        gr.Markdown(
-            "**Want a follow-up?** Drop your details and Alejandro will get in touch directly."
-        )
+        contact_prompt = gr.Markdown(INITIAL_FORM_PROMPT)
         contact_name = gr.Textbox(label="Name (optional)", scale=1)
         contact_email = gr.Textbox(label="Email", placeholder="you@example.com", scale=1)
         contact_note = gr.Textbox(
@@ -193,7 +221,7 @@ with gr.Blocks(title="Alejandro de la Fuente — Digital Twin", theme=gr.themes.
     msg.submit(
         respond,
         inputs=[msg, history, session_id, state],
-        outputs=[msg, history, state, contact_form],
+        outputs=[msg, history, state, contact_form, contact_prompt],
     ).then(
         lambda h: h, inputs=[history], outputs=[chatbot]
     )
@@ -206,7 +234,7 @@ with gr.Blocks(title="Alejandro de la Fuente — Digital Twin", theme=gr.themes.
 
     clear.click(
         new_session,
-        outputs=[history, session_id, state, contact_form, contact_status],
+        outputs=[history, session_id, state, contact_form, contact_status, contact_prompt],
     ).then(
         lambda h: h, inputs=[history], outputs=[chatbot]
     )

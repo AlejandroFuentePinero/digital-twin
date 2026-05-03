@@ -5,6 +5,64 @@
 
 ---
 
+## Session 26 (2026-05-03) — Contact-flow expansion: multi-trigger union + turn-7 re-prompt + explicit-request keyword detector
+
+**Status:** In-session expansion of #16's contact-flow beyond the original spec, after the user pointed out that turn-3-only triggering missed two high-value UX cases. Three triggers now union into the form-visibility decision; form copy switches at turn 7 for re-engagement; explicit recruiter-shape requests surface the form immediately. **#16 was already closed in Session 25** — this is additive, not reopening; closes as a Session-level extension. Test count 195 → 215 (+20). No new commits planned for #16 itself; the expansion ships under Session 26.
+
+### What surfaced after Session 25 closed
+
+User observation: the original #16 spec ("fires exactly once at turn 3") had two UX gaps:
+
+1. **Turn-1 gap event with no actionable bridge.** A recruiter who asks something off-KB on turn 1 ("Have you ever worked with kdb+/q?") gets the gap phrase ("I don't have that information") with no path forward — the contact form doesn't appear until turn 3, by which point they may have already left.
+2. **Explicit recruiter requests not surfaced immediately.** A recruiter who explicitly asks "How can I reach Alejandro?" on turn 1 should see the form NOW, not wait three turns.
+
+Plus a UX nuance: if the form appears at turn 3 and the recruiter ignores it but keeps chatting, a re-prompt at turn 7 should re-engage without being naggy. Original spec had no re-prompt mechanism.
+
+### Design decisions
+
+- **Multi-trigger union, not sequential states.** Three independent latches in `SessionState`:
+  - `turn_counter >= invitation_turn` (default 3) — original behaviour
+  - `gap_event_seen` (latched by `mark_gap_event()`) — system emitted the canonical gap phrase
+  - `explicit_request_seen` (latched by `mark_explicit_request()`) — user explicitly asked to be contacted
+  
+  `should_show_contact_form()` ORs them. Any one fires → form visible (until `contact_provided` latches all triggers off).
+- **Form persistent from first trigger until submit.** No "ask again with disappearing form" pattern (would be naggy). The form being there IS the ongoing offer; multiple triggers don't change visibility, just record additional `contact_offered` events in the log for Sentinel.
+- **Re-engagement copy change at turn 7** (`re_invitation_turn`). Form copy switches from initial *"Want a follow-up?"* to softer *"Still here — happy to be in touch."* Visual signal that the offer is still on the table without re-popping the form. Implemented via `current_form_prompt()` returning different text based on `turn_counter`.
+- **Explicit-request detection via conservative regex patterns** (`EXPLICIT_REQUEST_PATTERNS` in `session_state.py`). Targets recruiter-shape phrases (*"how can I reach Alejandro?"*, *"schedule a call"*, *"reach out to him"*) — high precision, accepts false negatives. False positives are worse (form pops up unexpectedly); pattern conservatism prioritises precision over recall. Watch-item registered in `LIMITATIONS::P9`.
+- **Trigger detection happens in `app.py`, not `Pipeline`.** Keeps Pipeline focused on the per-turn answer-generation contract. App.py owns all per-session-flow concerns; Pipeline just receives `contact_offered` / `contact_provided` as inputs and writes them to the log.
+- **Order of trigger detection: explicit-request BEFORE Pipeline.run, gap-event AFTER.** Explicit-request from user message can be checked before generation; gap-event from reply can only be checked after. This means a turn-1 gap event has `contact_offered=False` in its own log record (form became visible after the turn ended), but `contact_offered=True` from turn 2 onwards. Slight log asymmetry; Sentinel can derive accurate "form-visible-at-time-X" by combining `gap_event_seen` propagation with `contact_offered` history.
+- **Form is persistent (not dismissable) by design.** Standard UX dismiss-and-re-show patterns add complexity (dismiss button + dismiss state); persistent form is simpler and matches the "ask once, stay available" intent better than "ask repeatedly."
+
+### What shipped
+
+- **`src/session_state.py`** — `SessionState` extended with `gap_event_seen`, `explicit_request_seen`, `re_invitation_turn`. New methods: `mark_gap_event()`, `mark_explicit_request()`, `current_form_prompt()`. `should_show_contact_form()` updated to OR all three triggers; `reset()` clears all latches. New module-level: `INITIAL_FORM_PROMPT`, `RE_INVITATION_FORM_PROMPT`, `EXPLICIT_REQUEST_PATTERNS`, `detect_explicit_contact_request()`.
+- **`src/app.py`** — `respond()` callback now: detects explicit-request from user message before Pipeline.run; detects gap event from reply after Pipeline.run; updates form visibility AND form copy via `gr.update(value=state.current_form_prompt())`. `new_session()` resets the form copy alongside other state. The form's prompt `gr.Markdown` component is now bound to a named handle (`contact_prompt`) and threaded through `msg.submit` + `clear.click` outputs.
+- **`tests/test_session_state.py`** — 5 new SessionState behaviour tests (gap-event triggers, explicit-request triggers, contact_provided overrides all, reset clears new flags, form-prompt-changes-at-turn-7) + 15 detector parametrised tests (10 should-match, 5 should-not-match). Covers high-precision recruiter phrases AND defensive false-positive cases (e.g., *"what email service does he use?"* must NOT trigger).
+- **`docs/HUMAN_EVAL_QUESTIONS.md`** — two new smoke-test sessions added: Session A (turn-3 invitation + multi-branch routing health) and Session B (gap-trigger + explicit-request + turn-7 re-prompt). Each session validates multiple aspects per turn.
+- **`docs/pipeline_diagram.mmd`** — contact-flow side-channel cluster updated to show all three triggers fanning into SessionState. Both `USER -.-> STATE` (explicit request) and `GEN -.-> STATE` (gap event) edges added; `should_show_contact_form` annotated with the OR conditions.
+- **`docs/LIMITATIONS.md`** — `P9` added: keyword-detector heuristic. Trip-wires for false negatives (recurring missed phrase shape), false positives (form pops up unexpectedly), pattern-list bloat (>~20 entries → migrate to LLM classifier).
+
+### Verified
+
+- `uv run pytest -q` → **215 passed** (195 → 215; +5 SessionState behaviour tests + 15 detector parametrised tests).
+- `app.py` imports cleanly; ToolRegistry hard-fail-at-startup still passes; `INITIAL_FORM_PROMPT` flows through correctly via the new bound `contact_prompt` Markdown handle.
+- Pipeline tests unchanged — the contact_offered/contact_provided threading from Session 25 is unaffected.
+
+### Live verification (handed off to user)
+
+Two smoke-test sessions designed in `HUMAN_EVAL_QUESTIONS.md` cover all three triggers + the re-prompt:
+
+- **Session A** — turn-3 invitation + multi-branch routing health + submit + reset (one continuous session covering 4 branches).
+- **Session B** — three sub-sessions: turn-1 gap-event trigger, turn-1 explicit-request trigger, turn-7 re-prompt copy change.
+
+### Outstanding
+
+- **Phase 2 still complete.** This expansion is additive within #16's domain; doesn't reopen Phase 2 status.
+- **Next priority unchanged: Phase 3 / `#2`** (v4 eval baseline).
+- **R3 smoke-test** can incorporate Session A + Session B from `HUMAN_EVAL_QUESTIONS.md` for full contact-flow validation.
+
+---
+
 ## Session 25 (2026-05-03) — Issue #16 closed (contact form + per-session state); Phase 2 fully complete
 
 **Status:** Issue [`#16`](https://github.com/AlejandroFuentePinero/digital-twin/issues/16) (contact form + per-session `contact_provided` flag + periodic invitation hook) closed in `<commit>`. Closes Phase 2 cleanly — the last `app.py` work item from the original Phase 2 plan now lands. Two new modules (`src/session_state.py`, `src/contact_log.py`); 17 new behaviour tests (177 → 195); `Pipeline.run()` signature extended with optional `contact_offered` / `contact_provided` kwargs; `app.py` rewired with collapsible contact-form row, submit handler, and `SessionState` in `gr.State`. **Phase 2 complete; Phase 3 (v4 eval) is now unblocked AND scope-clean** (full deployable system available for the eval rewrite).

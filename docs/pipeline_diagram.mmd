@@ -44,12 +44,16 @@ flowchart TD
   REFUSE --> LOG
   LOG --> RESP([Response to user]):::io
 
-  %% Contact-flow side-channel (#16) — runs in app.py outside the per-turn pipeline.
-  %% SessionState (in gr.State) drives a collapsible form that appears at turn 3
-  %% and writes to a separate file joinable to interactions.jsonl on session_id.
-  STATE["app.py SessionState (gr.State)<br/>turn_counter, contact_provided"]:::pure
+  %% Contact-flow side-channel (#16 + Session 26 expansion) — runs in app.py
+  %% outside the per-turn pipeline. SessionState (in gr.State) holds three
+  %% independent triggers (turn-3, gap event, explicit request); any of them
+  %% surfaces the form. contact_provided=True latches all triggers off.
+  %% Form copy switches at turn 7 to a re-engagement nudge.
+  STATE["app.py SessionState (gr.State)<br/>turn_counter, contact_provided<br/>gap_event_seen, explicit_request_seen"]:::pure
   STATE -.->|"contact_offered, contact_provided<br/>per-turn"| LOG
-  FORM[/"Contact form (collapsible)<br/>name, email (required), note<br/>visible from turn ≥ 3 until submit"/]:::io
-  STATE -.->|"should_show_contact_form()"| FORM
+  USER -.->|"explicit request<br/>(keyword detector in session_state.py)"| STATE
+  GEN -.->|"if reply contains GAP_PHRASE<br/>→ mark_gap_event"| STATE
+  FORM[/"Contact form (collapsible)<br/>name, email (required), note<br/>copy: turn 3-6 vs turn 7+ re-prompt"/]:::io
+  STATE -.->|"should_show_contact_form()<br/>= turn≥3 OR gap OR explicit, AND NOT contact_provided"| FORM
   FORM -->|"on submit"| CONTACTS["ContactLog append<br/>data/logs/contacts.jsonl<br/>session_id (join key) + email + name + note"]:::sideEffect
-  FORM -.->|"latches contact_provided=True"| STATE
+  FORM -.->|"latches contact_provided=True<br/>(form hides forever for this session)"| STATE

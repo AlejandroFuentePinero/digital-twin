@@ -201,6 +201,34 @@ The `deflection` rule is registered in `branches.REGISTRY` only for `BEHAVIOURAL
 
 ---
 
+### P9 — Contact-form keyword detector is heuristic
+
+**Status:** Predicted (architectural choice, Session 26 / #16 expansion).
+
+The explicit-request trigger uses a regex pattern list (`session_state.EXPLICIT_REQUEST_PATTERNS`) to detect phrases like *"how can I contact him?"*, *"reach out to Alejandro"*, *"schedule a call"*. Conservative-by-design — high precision (low false-positive risk) but accepting false negatives. Patterns target the recruiter intent of "I want to reach Alejandro directly," not the appearance of words like "email" or "contact" in unrelated questions ("what email service does he use?").
+
+**Why this is logged but not fixed today:**
+
+- LLM-based intent classification would be more accurate but adds a per-turn model call cost + latency for a UX nicety.
+- Turn-3 invitation + gap-event trigger both cover the "form should appear" case the detector misses — false negatives degrade UX gracefully (user sees form by turn 3 anyway).
+- False positives are worse (form pops up out of nowhere); pattern conservatism prioritises precision over recall.
+
+**Trip-wires (any one promotes to Observed):**
+
+1. Smoke-test or live observation surfaces a recruiter-shape phrase the detector misses repeatedly (e.g., "I'd like to discuss the role" — clearly contact intent but no detector match).
+2. False positive observed in the wild — form appears unexpectedly because a phrase matched a pattern incorrectly.
+3. Pattern list grows past ~20 entries — at that point the heuristic complexity is approaching what an LLM classifier would handle more cleanly.
+
+**Action when a trip-wire fires:**
+
+- Single false negative shape recurring → add a tightened pattern targeting that specific phrase shape.
+- False positive → tighten the conflicting pattern; add a unit test pinning the negative case.
+- Pattern list bloating → migrate to LLM-based classification (`gpt-4.1-nano` for cost), accept the ~200ms latency hit. Could reuse the classifier module's pattern (one-shot LLM call returning `bool`).
+
+**Companion observability:** Sentinel will be able to surface "turns where the user message contained 'contact' / 'reach' / 'in touch' words BUT explicit_request_seen wasn't latched" — gives a queryable signal for false-negative pattern discovery. Phase 4 work.
+
+---
+
 ### P8 — TECHNICAL tool-uptake rate is unmeasured
 
 **Status:** Predicted (architectural blind spot, Session 24 / #18).
