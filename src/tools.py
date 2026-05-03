@@ -123,6 +123,10 @@ def build_fetch_project_readme_tool(
                     },
                 },
                 "required": ["project"],
+                # Defence-in-depth: rejects model hallucinations of extra args
+                # at the schema layer rather than silently ignoring at the handler
+                # layer. Also a prerequisite for OpenAI strict-mode validation.
+                "additionalProperties": False,
             },
         },
     }

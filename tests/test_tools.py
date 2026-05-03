@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from tools import ToolRegistry
+from tools import ToolRegistry, build_fetch_project_readme_tool
 
 
 @pytest.fixture
@@ -110,6 +110,59 @@ def test_registry_hard_fails_when_registry_json_malformed(tmp_path):
     bad.write_text("{ not valid json")
     with pytest.raises((json.JSONDecodeError, ValueError)):
         ToolRegistry(bad)
+
+
+def test_fetch_project_readme_tool_locks_schema_with_additional_properties_false(fixture_registry):
+    """fetch_project_readme schema sets additionalProperties=False — model can't smuggle extra args.
+
+    Defence-in-depth: rejects model hallucinations of unexpected fields at the schema layer
+    rather than silently ignoring at the handler layer. Also the prerequisite for OpenAI
+    strict-mode validation if we ever enable it.
+    """
+    registry = ToolRegistry(fixture_registry)
+    tool = build_fetch_project_readme_tool(registry)
+    parameters = tool.schema["function"]["parameters"]
+    assert parameters["additionalProperties"] is False, \
+        "schema must lock to declared properties only — defence-in-depth against model hallucinated extra args"
+    # And the basics still hold
+    assert parameters["properties"]["project"]["enum"] == list(registry.keys), \
+        "project enum is built from registry keys"
+    assert parameters["required"] == ["project"]
+
+
+def test_fetch_project_readme_tool_description_includes_registry_summaries(fixture_registry):
+    """Tool description embeds every project's summary so the model knows which key to pick.
+
+    Per #18 acceptance criteria. The description is what the model reads when deciding
+    whether to call the tool and which project key to pass.
+    """
+    registry = ToolRegistry(fixture_registry)
+    tool = build_fetch_project_readme_tool(registry)
+    description = tool.schema["function"]["description"]
+    assert "Alpha's structured extraction pipeline with chain-of-thought scaffolding." in description
+    assert "Beta's RAG-based knowledge worker over a 50-document corpus." in description
+
+
+def test_fetch_project_readme_tool_handler_invokes_registry_fetch_with_parsed_args(fixture_registry):
+    """Handler receives parsed args dict, extracts `project`, returns registry.fetch result."""
+    registry = ToolRegistry(fixture_registry)
+    tool = build_fetch_project_readme_tool(registry)
+    result = tool.handler({"project": "alpha"})
+    assert "Alpha technical body." in result
+
+
+def test_fetch_project_readme_tool_handler_logs_calls_via_callback(fixture_registry):
+    """on_call callback fires with (name, args, status) — used by Pipeline for tool_calls log."""
+    registry = ToolRegistry(fixture_registry)
+    log: list = []
+    tool = build_fetch_project_readme_tool(registry, on_call=lambda n, a, s: log.append((n, a, s)))
+    # Successful fetch
+    tool.handler({"project": "alpha"})
+    assert log == [("fetch_project_readme", {"project": "alpha"}, "success")]
+    # Invalid key — logs status="invalid_key" and re-raises
+    with pytest.raises(KeyError):
+        tool.handler({"project": "gamma"})
+    assert log[-1] == ("fetch_project_readme", {"project": "gamma"}, "invalid_key")
 
 
 def test_registry_hard_fails_when_referenced_file_does_not_exist(tmp_path):
