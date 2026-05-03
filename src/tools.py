@@ -79,13 +79,16 @@ class ToolRegistry:
 
 def build_fetch_project_readme_tool(
     tool_registry: ToolRegistry,
-    on_call: Callable[[str, dict, str], None] | None = None,
+    on_call: Callable[[str, dict, str, str | None], None] | None = None,
 ) -> ToolSpec:
     """Assemble the `fetch_project_readme` ToolSpec from a ToolRegistry.
 
-    `on_call`: optional callback fired after each invocation with (name, args, status)
-    where status is one of "success" | "invalid_key" | "read_error". Used by Pipeline
-    to populate the `tool_calls[]` log field.
+    `on_call`: optional callback fired after each invocation with
+    (name, args, status, content) where status is one of
+    "success" | "invalid_key" | "read_error" and content is the fetched README
+    text on success (None otherwise). Used by Pipeline both to populate the
+    `tool_calls[]` log field AND to surface tool-returned content to the
+    guardrail for fair evaluation of tool-grounded answers.
     """
 
     def handler(args: dict) -> str:
@@ -93,15 +96,15 @@ def build_fetch_project_readme_tool(
         try:
             content = tool_registry.fetch(project)
             if on_call is not None:
-                on_call("fetch_project_readme", args, "success")
+                on_call("fetch_project_readme", args, "success", content)
             return content
         except KeyError:
             if on_call is not None:
-                on_call("fetch_project_readme", args, "invalid_key")
+                on_call("fetch_project_readme", args, "invalid_key", None)
             raise
         except Exception:
             if on_call is not None:
-                on_call("fetch_project_readme", args, "read_error")
+                on_call("fetch_project_readme", args, "read_error", None)
             raise
 
     schema = {

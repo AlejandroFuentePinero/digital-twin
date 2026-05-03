@@ -231,7 +231,17 @@ The `fetch_project_readme` tool fires on the model's discretion — `tool_rules`
 
 ## Resolved
 
-*(Empty. Entries graduate to this section with a fix-commit pointer when their trip-wire conditions are addressed.)*
+### R1 — Guardrail blindness to tool-returned content (#18 smoke-test bug)
+
+**Surfaced:** Session 24 / #18 smoke-test of Q8.2 ("How does the Digital Twin classify questions?").
+
+**Bug:** the guardrail's evaluation prompt only carried KB retrieval context — not the tool-returned README content the model actually grounded in. For TECHNICAL probes where the KB has no overlap with the tool content (the canonical case being the `digital_twin` self-reference), the guardrail rejected correct, tool-grounded answers as "fabrication" because it could not see the source the model cited from. Q8.2 was rejected on all 3 attempts; the user received `CANNED_REFUSAL` despite the model producing a faithful, grounded answer.
+
+**Fix (commit `<TBD>`):** Pipeline now captures tool-returned content via the `on_call(name, args, status, content)` callback (extended signature) and re-composes the guardrail's prompt per attempt with a `## Tool-fetched content available to the model` section appended to `retrieved_context`. The guardrail evaluates the answer against KB context **plus** tool content — both surfaces the model could have grounded in. Per-attempt recomposition (not just per-turn) so the augmented context grows correctly across retries that fetch additional tools.
+
+**Test:** `tests/test_pipeline.py::test_guardrail_prompt_includes_tool_returned_content_for_grounded_evaluation` — locks the contract that the guardrail's system prompt must include any tool-returned content from the same turn.
+
+**Smoke-test verification:** re-run Q8.2 against the live pipeline post-fix — expected `event_type=answered` rather than `refused`, and the guardrail accepts the tool-grounded answer rather than rejecting it as fabrication.
 
 ---
 

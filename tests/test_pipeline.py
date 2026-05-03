@@ -416,6 +416,49 @@ def test_technical_branch_records_tool_calls_in_log_when_model_invokes_tool(real
     assert tool_result_msgs and "AI-JIE README BODY" in tool_result_msgs[0]["content"]
 
 
+def test_guardrail_prompt_includes_tool_returned_content_for_grounded_evaluation(real_composer, fake_chunks, fake_tool_registry, tmp_path):
+    """When TECHNICAL fires the tool, the guardrail's evaluation prompt must include the tool-returned content.
+
+    Real bug discovered in #18 smoke-test of Q8.2 ("How does the Digital Twin classify questions?"):
+    the model fetched digital_twin.md, generated a correct, grounded answer, but the guardrail
+    rejected all 3 attempts as "fabrication" because the guardrail's retrieved_context only
+    carried KB chunks — not the README the model actually grounded in. User received CANNED_REFUSAL
+    despite the answer being correct. The guardrail must see what the model saw to evaluate fairly.
+    """
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["TECHNICAL"], confidence=0.9))
+    generator = FakeGenerator(answers=[])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+    tool_model = FakeToolModelCallable([
+        ModelResponse(
+            content=None,
+            tool_calls=[ToolCall(id="c1", name="fetch_project_readme", arguments={"project": "alpha"})],
+        ),
+        ModelResponse(content="answer grounded in alpha content", tool_calls=[]),
+    ])
+    # alpha.md content is "ALPHA-DISTINCTIVE-MARKER" — must reach guardrail's prompt
+    (tmp_path / "alpha.md").write_text("# Alpha\n\nALPHA-DISTINCTIVE-MARKER body here.")
+    (tmp_path / "registry.json").write_text(
+        '{"alpha": {"path": "alpha.md", "title": "A", "summary": "S", "kb_cross_reference": "k.md", "link": "https://example.com"}}'
+    )
+    from tools import ToolRegistry
+    overlap_registry = ToolRegistry(tmp_path / "registry.json")
+
+    pipeline = _build_pipeline(
+        real_composer, classifier, generator, guardrail, log_path,
+        tool_registry=overlap_registry, tool_model_callable=tool_model,
+    )
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run("How does alpha work?", history=[], session_id="s1", turn_index=0)
+
+    guardrail_prompt = guardrail.calls[0]["system_prompt"]
+    assert "ALPHA-DISTINCTIVE-MARKER" in guardrail_prompt, (
+        "Guardrail must see tool-returned content to evaluate tool-grounded answers fairly. "
+        "Without this, the guardrail rejects correct answers as 'fabrication' because the "
+        "tool-fetched content isn't in its retrieval context. See #18 smoke-test Q8.2."
+    )
+
+
 def test_technical_branch_per_attempt_tool_budget_resets_on_retry(real_composer, fake_chunks, fake_tool_registry, tmp_path):
     """Per Q5: each retry attempt gets its own ToolLoop budget. Tool calls accumulate across attempts in the log."""
     log_path = tmp_path / "interactions.jsonl"

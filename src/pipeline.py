@@ -93,18 +93,27 @@ class Pipeline:
             and self._tool_model_callable is not None
         )
         tool_calls_log: list[dict] = []
+        # Per-turn accumulation of tool-fetched content so the guardrail can see
+        # what the model actually grounded in. Without this, tool-grounded answers
+        # are rejected as "fabrication" because the guardrail's retrieved_context
+        # only carries KB chunks. See LIMITATIONS bug surfaced in #18 smoke-test
+        # Q8.2 — the digital_twin self-reference case where KB has no overlap with
+        # the tool-returned README.
+        tool_content_for_judge: list[tuple[str, dict, str]] = []
         # Mutable index so the callback closure can stamp each tool call with the
         # attempt that triggered it — lets per-attempt debugging trace which retry
         # invoked which tool, separately from the per-attempt accumulation in attempts[].
         current_attempt_index = [0]
 
-        def _on_tool_call(name: str, args: dict, status: str) -> None:
+        def _on_tool_call(name: str, args: dict, status: str, content: str | None) -> None:
             tool_calls_log.append({
                 "name": name,
                 "args": args,
                 "status": status,
                 "attempt_index": current_attempt_index[0],
             })
+            if status == "success" and content is not None:
+                tool_content_for_judge.append((name, args, content))
 
         attempts: list[dict] = []
         previous_attempt: dict | None = None
@@ -134,8 +143,24 @@ class Pipeline:
             gen_total_ms += int((time.perf_counter() - t) * 1000)
             last_answer = answer
 
+            # Recompose the guardrail's prompt with tool-fetched content appended
+            # so the judge can verify tool-grounded answers fairly. Without this,
+            # tool-returned READMEs are invisible to the judge and grounded answers
+            # get rejected as "fabrication."
+            if tool_content_for_judge:
+                tool_block = "\n\n## Tool-fetched content available to the model\n\n" + "\n\n---\n\n".join(
+                    f"[{name}({args})]\n{content}"
+                    for name, args, content in tool_content_for_judge
+                )
+                judge_context = context + tool_block
+                sys_prompt_judge_for_attempt = self._composer.compose(
+                    branches, "guardrail", retrieved_context=judge_context
+                )
+            else:
+                sys_prompt_judge_for_attempt = sys_prompt_judge
+
             t = time.perf_counter()
-            evaluation = self._guardrail.evaluate(sys_prompt_judge, question, answer, history)
+            evaluation = self._guardrail.evaluate(sys_prompt_judge_for_attempt, question, answer, history)
             guard_total_ms += int((time.perf_counter() - t) * 1000)
 
             attempts.append({

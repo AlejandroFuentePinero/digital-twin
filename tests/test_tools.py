@@ -152,17 +152,21 @@ def test_fetch_project_readme_tool_handler_invokes_registry_fetch_with_parsed_ar
 
 
 def test_fetch_project_readme_tool_handler_logs_calls_via_callback(fixture_registry):
-    """on_call callback fires with (name, args, status) — used by Pipeline for tool_calls log."""
+    """on_call callback fires with (name, args, status, content) — used by Pipeline for tool_calls log AND for surfacing tool-returned content to the guardrail."""
     registry = ToolRegistry(fixture_registry)
     log: list = []
-    tool = build_fetch_project_readme_tool(registry, on_call=lambda n, a, s: log.append((n, a, s)))
-    # Successful fetch
+    tool = build_fetch_project_readme_tool(
+        registry,
+        on_call=lambda n, a, s, c: log.append((n, a, s, c)),
+    )
+    # Successful fetch — content passed to callback
     tool.handler({"project": "alpha"})
-    assert log == [("fetch_project_readme", {"project": "alpha"}, "success")]
-    # Invalid key — logs status="invalid_key" and re-raises
+    assert log[0][:3] == ("fetch_project_readme", {"project": "alpha"}, "success")
+    assert "Alpha technical body." in log[0][3], "content arg must carry the fetched README so guardrail can see what model grounded in"
+    # Invalid key — content is None, status="invalid_key", and re-raises
     with pytest.raises(KeyError):
         tool.handler({"project": "gamma"})
-    assert log[-1] == ("fetch_project_readme", {"project": "gamma"}, "invalid_key")
+    assert log[-1] == ("fetch_project_readme", {"project": "gamma"}, "invalid_key", None)
 
 
 def test_registry_hard_fails_when_referenced_file_does_not_exist(tmp_path):
