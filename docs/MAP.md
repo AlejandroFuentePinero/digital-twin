@@ -12,6 +12,15 @@ How a user question becomes a response — branch routing, retry loop, side effe
 
 ```mermaid
 %%{init: {'flowchart': {'nodeSpacing': 45, 'rankSpacing': 55, 'curve': 'basis', 'padding': 12}}}%%
+%% Hand-editable runtime pipeline diagram for the Digital Twin.
+%% Edit this file whenever pipeline behaviour changes — new branch, new tool,
+%% new decision point, retry policy change, new log field. After editing run:
+%%   uv run python src/system_map.py
+%% to regenerate docs/MAP.md and docs/MAP.html (both this diagram and the
+%% auto-generated module graph).
+%% Colour conventions: orange = LLM call, green = pure transform,
+%% yellow = decision, pink = side effect, red = canned refusal,
+%% dashed grey = future / not yet wired tool.
 flowchart TD
   classDef io fill:#fbbf24,stroke:#92400e,color:#1f2937,stroke-width:2px
   classDef llm fill:#f59e0b,stroke:#b45309,color:#ffffff,stroke-width:2px
@@ -124,6 +133,7 @@ graph LR
   composer --> branches
   composer --> profile
   composer --> rules
+  guardrail --> rules
   pipeline --> branches
   pipeline --> classifier
   pipeline --> composer
