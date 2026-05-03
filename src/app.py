@@ -126,13 +126,16 @@ def submit_contact(
     session_id: str,
     state: SessionState,
 ):
-    """Form submit handler. Writes a ContactRecord (joinable to interactions.jsonl on session_id) and latches contact_provided=True so the form hides for the rest of the session."""
+    """Form submit handler. Writes a ContactRecord (joinable to interactions.jsonl on session_id), latches contact_provided=True so the form hides for the rest of the session, and clears the form input values to prevent leakage if the form is somehow re-shown."""
     email_clean = (email or "").strip()
     if not email_clean:
         return (
             gr.update(visible=True),
             gr.update(value="⚠️ Please enter an email address.", visible=True),
             state,
+            gr.update(),  # name unchanged on validation error
+            gr.update(),  # email unchanged
+            gr.update(),  # note unchanged
         )
     try:
         record = ContactRecord(
@@ -149,17 +152,28 @@ def submit_contact(
             gr.update(visible=False),
             gr.update(value="✅ Thanks — Alejandro will be in touch.", visible=True),
             state,
+            gr.update(value=""),  # clear name (defence-in-depth — form hidden too)
+            gr.update(value=""),  # clear email
+            gr.update(value=""),  # clear note
         )
     except Exception as e:
         return (
             gr.update(visible=True),
             gr.update(value=f"⚠️ Submission error: {e}", visible=True),
             state,
+            gr.update(),
+            gr.update(),
+            gr.update(),
         )
 
 
 def new_session():
-    """Reset conversation, fresh session ID, fresh SessionState, hide contact form + status, restore initial form prompt."""
+    """Reset conversation, fresh session ID, fresh SessionState, hide contact form + status, restore initial form prompt, AND clear form input values.
+
+    The input clearing is a privacy fix — without it, a previous visitor's name/
+    email/note persists in the textboxes for the next visitor on the same
+    browser session. Surfaced live in Session 26 smoke-test.
+    """
     return (
         [],
         str(uuid.uuid4()),
@@ -167,6 +181,9 @@ def new_session():
         gr.update(visible=False),
         gr.update(visible=False),
         gr.update(value=INITIAL_FORM_PROMPT),
+        gr.update(value=""),  # clear name input
+        gr.update(value=""),  # clear email input
+        gr.update(value=""),  # clear note input
     )
 
 
@@ -203,18 +220,21 @@ with gr.Blocks(title="Alejandro de la Fuente — Digital Twin", theme=gr.themes.
 
     # Contact form — hidden by default; becomes visible when any trigger fires
     # (turn 3+, gap event, or explicit user request) and persists until submit
-    # or new_session. Header copy switches to a re-engagement nudge at turn 7+
-    # via SessionState.current_form_prompt().
-    with gr.Group(visible=False) as contact_form:
+    # or new_session. Wrapped in an Accordion so it's visually separated from
+    # the chat area and the user can collapse it. Header copy switches to a
+    # re-engagement nudge at turn 7+ via SessionState.current_form_prompt().
+    with gr.Accordion("📨 Get in touch", open=True, visible=False) as contact_form:
         contact_prompt = gr.Markdown(INITIAL_FORM_PROMPT)
-        contact_name = gr.Textbox(label="Name (optional)", scale=1)
-        contact_email = gr.Textbox(label="Email", placeholder="you@example.com", scale=1)
+        with gr.Row():
+            contact_name = gr.Textbox(label="Name (optional)", scale=1)
+            contact_email = gr.Textbox(label="Email", placeholder="you@example.com", scale=1)
         contact_note = gr.Textbox(
             label="Anything you'd like to share? (optional)",
-            lines=3,
-            scale=1,
+            lines=2,
+            placeholder="Role, project, or anything else worth knowing…",
         )
-        contact_submit = gr.Button("Send", variant="primary", size="sm")
+        with gr.Row():
+            contact_submit = gr.Button("Send", variant="primary", size="sm", scale=0)
 
     contact_status = gr.Markdown(visible=False)
 
@@ -229,12 +249,16 @@ with gr.Blocks(title="Alejandro de la Fuente — Digital Twin", theme=gr.themes.
     contact_submit.click(
         submit_contact,
         inputs=[contact_name, contact_email, contact_note, session_id, state],
-        outputs=[contact_form, contact_status, state],
+        outputs=[contact_form, contact_status, state, contact_name, contact_email, contact_note],
     )
 
     clear.click(
         new_session,
-        outputs=[history, session_id, state, contact_form, contact_status, contact_prompt],
+        outputs=[
+            history, session_id, state,
+            contact_form, contact_status, contact_prompt,
+            contact_name, contact_email, contact_note,
+        ],
     ).then(
         lambda h: h, inputs=[history], outputs=[chatbot]
     )
