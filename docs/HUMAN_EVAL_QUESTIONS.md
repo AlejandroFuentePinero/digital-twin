@@ -372,14 +372,42 @@ Optional second pass after core clears. Tests harder behaviours: multi-turn rout
 
 ---
 
-### Q8.2 — Technical probe (TECHNICAL future, GENERIC fallback today)
+### Q8.2 — Technical probe (TECHNICAL branch + tool fire)
 
 🔄 **Fresh session.**
 
 - **Ask:** *"How does the Digital Twin classify questions?"*
-- **Expected `classifier_labels`:** likely `["TECHNICAL"]`; falls back to GENERIC.
-- **Expected answer:** explanation of the classify-then-route architecture, drawing on retrieved chunks if available. Should mention gpt-4.1-nano, multi-label output, branch routing.
-- **Watch for:** confabulation if retrieval doesn't surface project-detail chunks.
+- **Expected `classifier_labels`:** likely `["TECHNICAL"]`.
+- **Expected `branch`:** `TECHNICAL` (no longer falls back — TECHNICAL is now in REGISTRY since #18).
+- **Expected `tool_calls`:** `[{name: "fetch_project_readme", args: {project: "digital_twin"}, status: "success", attempt_index: 0}]` — the model should call the tool to fetch this very project's distilled README and ground its answer in the returned content.
+- **Expected answer:** explanation of the classify-then-route architecture grounded in the fetched `digital_twin` README. Should mention gpt-4.1-nano (classifier), multi-label routing, branch dispatch, the same-composer-for-generator-and-guardrail pattern, the bounded ToolLoop. Closes with the GitHub Source link per the `project_links` rule (note: link currently 404s because `digital-twin` repo is private — see RELEASE_CHECKLIST.md).
+- **Watch for:** model fabricating architecture details instead of fetching the tool; tool firing but answer not grounded in returned content; over-deflecting to "see the source" without giving a moderate-depth answer first.
+
+---
+
+### Q8.2b — Technical comparison probe (multi-tool fire)
+
+🔄 **Fresh session.** Exercises the 3-way comparison case that drove the `MAX_TOOL_CALLS = 2 → 3` bump.
+
+- **Ask:** *"Compare AI-JIE and Expert Knowledge Worker — both are evaluation-heavy projects, what's the architectural difference?"*
+- **Expected `classifier_labels`:** likely `["TECHNICAL"]`.
+- **Expected `branch`:** `TECHNICAL`.
+- **Expected `tool_calls`:** two entries — `fetch_project_readme(project="ai_jie")` and `fetch_project_readme(project="expert_knowledge_worker")` — both `status: "success"`.
+- **Expected answer:** comparative analysis grounded in both fetched READMEs. AI-JIE's evaluation discipline (LLM-as-judge across 33 prompt versions + human eval at 4.11/5); EKW's retrieval+answer eval framework (MRR/nDCG + LLM-judge for accuracy/completeness/relevance). Architectural difference: AI-JIE evaluates structured-extraction quality on a fixed test sample; EKW evaluates RAG-system-as-a-whole quality with retrieval and answer split.
+- **Watch for:** model only fetching one tool; model fetching but failing to actually compare (parallel summaries instead of contrast); over-long answer that includes both READMEs verbatim instead of synthesising.
+
+---
+
+### Q8.2c — Tool-name probe that should NOT trigger the tool
+
+🔄 **Fresh session.** Exercises the TECHNICAL routing path's *don't fetch* discipline — the classifier may route tool-name probes to TECHNICAL (per `LIMITATIONS.md::O2`), but the model should answer from `active_learning` Layer 1 grounding rather than calling the tool.
+
+- **Ask:** *"Have you used CUDA?"*
+- **Expected `classifier_labels`:** could be `["TECHNICAL"]` (classifier over-fires on tool-name probes) or `["GAP"]` (correct shape).
+- **Expected `branch`:** either TECHNICAL or GAP — both produce acceptable answers.
+- **Expected `tool_calls`:** **empty** — no project README is relevant to a CUDA-shape probe. The `tool_rules` "When not to call" clause should hold.
+- **Expected answer:** GAP-shape calibration ("I don't have hands-on experience with CUDA yet — I'm building expertise through Ed Donner's AI Engineer Production Track…"). Should NOT claim trained / familiar / shipped / hands-on for CUDA. Per `active_learning` section's own framing.
+- **Watch for:** model calling the tool with a guess key (false-positive tool fire — would be a `tool_rules` failure); model claiming acquired skill for CUDA (active_learning framing failure — high-priority error per acceptance bar #5).
 
 ---
 

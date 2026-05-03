@@ -65,6 +65,9 @@ Pre-deploy verification that every artifact reflects the deployed system. Run th
 - [ ] LICENSE file present.
 - [ ] Portfolio site links to the deployed app.
 - [ ] Public links in `data/raw_me/` work (no 404s, no broken cert badges).
+- [ ] Every Source link in `data/readmes/*.md` resolves for unauthenticated visitors (no private repos, no broken DOIs). Smoke-test with: `grep -hoE 'https?://[^[:space:])]+' data/readmes/*.md | sort -u | while read u; do echo "$(curl -L -s -o /dev/null -w '%{http_code}' --max-time 15 "$u")  $u"; done`. Wiley journal URLs return 403 to scripted requests but resolve in browsers — verify those manually.
+- [ ] [`data/readmes/digital_twin.md`](../data/readmes/digital_twin.md) replaced with Alejandro-authored content (currently a Claude-authored placeholder per `docs/TODO.md::Open implementation details`). Voice and emphasis are the recruiter-facing surface for "how does this very chatbot work?" — content must read in Alejandro's voice. Keep the locked Q11 shape (Source link → What it is → Architecture → Key engineering decisions → Stack and discipline).
+- [ ] [`data/readmes/digital_twin.md`](../data/readmes/digital_twin.md) Source link resolves: either the `AlejandroFuentePinero/digital-twin` repo is made public (`gh repo edit AlejandroFuentePinero/digital-twin --visibility public`) so the GitHub URL works, OR the Source line points to an alternative public resource (portfolio page, blog post). Currently the link returns 404 for visitors because the repo is private.
 
 ## Final
 

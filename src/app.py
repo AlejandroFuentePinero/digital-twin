@@ -28,20 +28,29 @@ from guardrail import Guardrail
 from interaction_log import LogWriter
 from pipeline import Pipeline
 from profile import ProfileLoader
+from tools import ToolRegistry, make_litellm_tool_callable
 
 MAX_HISTORY_TURNS = 10  # last N user+assistant pairs passed to the pipeline
 
 # ---------------------------------------------------------------------------
 # Module-level singletons (constructed once at import; profile.md read once).
+# ToolRegistry hard-fails at startup if data/readmes/registry.json is missing
+# or any referenced README file doesn't exist on disk — surfaces deploy issues
+# before the first user turn rather than silently breaking on first TECHNICAL probe.
 # ---------------------------------------------------------------------------
 _profile = ProfileLoader()
 _composer = PromptComposer(_profile, REGISTRY)
+_tool_registry = ToolRegistry(
+    Path(__file__).parent.parent / "data" / "readmes" / "registry.json"
+)
 _pipeline = Pipeline(
     classifier=Classifier(),
     composer=_composer,
     generator=Generator(),
     guardrail=Guardrail(),
     log_writer=LogWriter(),
+    tool_registry=_tool_registry,
+    tool_model_callable=make_litellm_tool_callable(),
 )
 
 

@@ -1,0 +1,170 @@
+{
+  "llm_engineering_lab": {
+    "path": "llm_engineering_lab.md",
+    "title": "LLM Engineering Lab",
+    "summary": "Portfolio of 11 production-grade LLM systems built from scratch — RAG at 800k-document scale, QLoRA fine-tuning, multi-agent orchestration, autonomous planning, serverless cloud deployment. Use this key for lab-overview questions; use the per-project keys for implementation depth on any single sub-project.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/llm-engineering-lab"
+  },
+  "llm_price_predictor": {
+    "path": "llm_price_predictor.md",
+    "title": "LLM Price Predictor",
+    "summary": "Flagship of the LLM Engineering Lab. Real-time autonomous deal-finding system: 820k Amazon products, full ML lifecycle, RAG over 800k documents, QLoRA fine-tuning of Llama-3.2-3B, ensemble (GPT-5.1+RAG / fine-tuned Modal specialist / DNN), LLM-orchestrated autonomous agent, live Gradio dashboard. Final ensemble: MAE $29.95, R² 86.3%.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/llm-engineering-lab/tree/main/llm_price_predictor"
+  },
+  "expert_knowledge_worker": {
+    "path": "expert_knowledge_worker.md",
+    "title": "Expert Knowledge Worker (RAG Chatbot)",
+    "summary": "RAG assistant for a company knowledge base. Two interchangeable pipelines: LangChain baseline and from-scratch optimised pipeline with LLM-based chunking (headline+summary+verbatim), hierarchical RAG via category summaries, query rewriting, dual retrieval pass, LLM reranking. Standalone evaluation dashboard (MRR, nDCG, LLM-as-judge).",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/llm-engineering-lab/tree/main/RAG_expert_knowledge_worker"
+  },
+  "web_summary_tool": {
+    "path": "web_summary_tool.md",
+    "title": "Web Summary Tool",
+    "summary": "Embeddable Python utility that turns a webpage URL into a concise Markdown summary. Persona/tone control via parameter; dual backend (OpenAI hosted + Ollama local); designed for internal workflows that need quick, repeatable briefs from unstructured web content.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/llm-engineering-lab/tree/main/ai_web_summary_tool"
+  },
+  "company_brochure_generator": {
+    "path": "company_brochure_generator.md",
+    "title": "Company Brochure Generator",
+    "summary": "Two-stage agentic workflow that turns a company website into a Markdown brochure. Stage 1: LLM selects brochure-relevant pages (planning/routing). Stage 2: LLM writes the brochure using retrieved page text. Optional translation. Demonstrates the select-then-generate pattern.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/llm-engineering-lab/tree/main/company_sales_brochure_generator"
+  },
+  "tech_tutor": {
+    "path": "tech_tutor.md",
+    "title": "Tech Tutor",
+    "summary": "Python utility that explains data-work concepts and code through a single configurable movie-analogy thread (with technical translations alongside). Designed for fast learning loops; dual backend (OpenAI + Ollama). Analogy-as-backbone pattern, not analogy-as-decoration.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/llm-engineering-lab/tree/main/tech_tutor"
+  },
+  "multi_agent_conversation": {
+    "path": "multi_agent_conversation.md",
+    "title": "Multi-Agent Conversation",
+    "summary": "Three-agent review-panel orchestration (Staff Data Scientist, Product Manager, Tech Lead). Learning lab for the engineering pitfalls of multi-agent systems: stale context, role drift, duplicated state updates, turn-taking discipline. Synthesis-as-explicit-role pattern via the Tech Lead.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/llm-engineering-lab/tree/main/agentic_conversation"
+  },
+  "sales_intake_copilot": {
+    "path": "sales_intake_copilot.md",
+    "title": "Sales Intake Copilot",
+    "summary": "B2B sales-intake chatbot that qualifies a lead in a few turns and produces a structured handoff note for a human sales rep. Bifurcated output (conversational + structured) from a single LLM under prompt contract; faithfulness discipline forbids inventing missing details.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/llm-engineering-lab/tree/main/sales_chatbot_assistant"
+  },
+  "flight_booking_agentic_tool": {
+    "path": "flight_booking_agentic_tool.md",
+    "title": "Flight Booking Agentic Tool",
+    "summary": "Tool-calling agent backed by stateful SQLite. Quote ticket prices, ask for confirmation, create mock bookings with autoincrement IDs. Demonstrates structured tool schemas, tool-call loop discipline, and multimodal output (text + TTS audio + destination image).",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/llm-engineering-lab/tree/main/price_ticket_agentic_tool"
+  },
+  "meeting_minute_generator": {
+    "path": "meeting_minute_generator.md",
+    "title": "Meeting Minute Generator",
+    "summary": "Two-stage pipeline: Whisper audio transcription, then LLM Markdown minutes generation under a fixed-structure prompt contract. Faithfulness guardrails (missing info marked 'Not specified', not invented), low temperature, transcript persistence for traceability.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/llm-engineering-lab/tree/main/meeting_minute_audio"
+  },
+  "synthetic_ab_dataset_generator": {
+    "path": "synthetic_ab_dataset_generator.md",
+    "title": "Synthetic A/B Dataset Generator",
+    "summary": "Gradio app that generates a synthetic A/B conversion CSV plus a Markdown dataset card from configurable knobs. Schema-as-contract enforcement; both artefacts persisted to disk. Designed for prototyping dashboards, testing analytics pipelines, and teaching experimentation concepts.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/llm-engineering-lab/tree/main/synthetic_data_generator"
+  },
+  "llm_code_performance_benchmark": {
+    "path": "llm_code_performance_benchmark.md",
+    "title": "LLM Code Performance Benchmark",
+    "summary": "Multi-model benchmark on the Python→C++ speedup task. Compares OpenAI / Anthropic / Ollama / OpenRouter on the same workload; failure modes are first-class outputs (compile error vs runtime error vs success); each model's generated C++ persisted as an artefact for inspection.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/llm-engineering-lab/tree/main/llm_code_performance_benchmark"
+  },
+  "ai_jie": {
+    "path": "ai_jie.md",
+    "title": "AI-JIE — Automated Job Information Extraction",
+    "summary": "Structured extraction pipeline turning raw job-posting text into validated, intent-classified Job objects. Chain-of-thought scaffolding (intermediate Pydantic fields force extract-then-classify) was the largest accuracy gain across 33 prompt versions. Two-tier eval (LLM-as-judge + human, 4.11/5 overall). 3,892 DS postings published to HuggingFace Hub.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/ai-jie"
+  },
+  "job_intelligence_engine": {
+    "path": "job_intelligence_engine.md",
+    "title": "Job Intelligence Engine",
+    "summary": "Deterministic end-to-end job-market intelligence system. Converts postings into market signals (skill demand, salary drivers) and a constraint-aware recommender (best-now vs stretch roles) with counterfactual upskilling ranked by simulated lift. Streamlit app live; pipeline-chapters-with-stable-outputs architecture.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/job-intelligence-engine"
+  },
+  "mlb_analytics_sql": {
+    "path": "mlb_analytics_sql.md",
+    "title": "MLB Analytics — Lahman Database (1871–2024)",
+    "summary": "End-to-end SQL analytics on 150 years of MLB history. Manual relational schema, reusable analytical views, three query tiers (analysis / advanced / optimised), window functions, multi-step CTE pipelines. Four analytical pillars: talent pipelines, salary dynamics, career trajectories, physical profiles.",
+    "kb_cross_reference": "projects_skill_labs.md",
+    "link": "https://github.com/AlejandroFuentePinero/MLB_Analytics_Project"
+  },
+  "python_ml_projects": {
+    "path": "python_ml_projects.md",
+    "title": "Python ML Projects — Core ML Algorithms Lab",
+    "summary": "Catalogue of 11 end-to-end ML projects: regression (linear, polynomial), classification (logistic, KNN, decision trees, random forests, SVM), clustering (K-means), dimensionality reduction (PCA), NLP (Naive Bayes), deep learning (Keras), recommender systems. Per-project Jupyter notebooks documenting problem, methods, decisions, and results.",
+    "kb_cross_reference": "projects_skill_labs.md",
+    "link": "https://github.com/AlejandroFuentePinero/python-ML-projects"
+  },
+  "python_oop_minisystems": {
+    "path": "python_oop_minisystems.md",
+    "title": "Python OOP Mini-Systems",
+    "summary": "Six compact Python systems demonstrating OOP design: Tic-Tac-Toe (procedural), Blackjack (composition), Credit Card Validator (Luhn algorithm), Bank Account Manager (inheritance), Product Inventory (CRUD), Library Lending (item subclasses). Sequenced from procedural to inheritance.",
+    "kb_cross_reference": "projects_skill_labs.md",
+    "link": "https://github.com/AlejandroFuentePinero/python-oop-mini-systems"
+  },
+  "digital_twin": {
+    "path": "digital_twin.md",
+    "title": "Digital Twin — This Conversational Agent",
+    "summary": "The very system you are interacting with. Multi-LLM conversational agent representing Alejandro professionally. Classify-then-route orchestration, Frame/Substance prompt composition, branch-aware tool use with bounded loop, multi-LLM guardrail with structured retry, deterministic short-circuits, full per-turn observability logs, ADR-driven discipline. Use this key for questions about the chatbot itself.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/digital-twin"
+  },
+  "gcb_2025_physiological_stress": {
+    "path": "gcb_2025_physiological_stress.md",
+    "title": "GCB 2025 — Climate-Induced Physiological Stress (Ringtail Possums)",
+    "summary": "First-author Global Change Biology 2025 paper. Four-component unified Bayesian framework (microclimate + physiological energetics + biogeochemical pathway + open population model) integrated in R+JAGS, bridging bottom-up biophysical and top-down statistical modelling for causal attribution of population decline to climate stress.",
+    "kb_cross_reference": "publications.md",
+    "link": "https://doi.org/10.1111/gcb.70215"
+  },
+  "dd_2022_ringtail_possums_climate": {
+    "path": "dd_2022_ringtail_possums_climate.md",
+    "title": "DD 2022 — Ringtail Possums Climate Forecast",
+    "summary": "First-author Diversity and Distributions 2022 paper. Bayesian hierarchical open population model on 30 years of monitoring (1992–2021), forecasting collapse probability by 2050 under projected heatwave/warming scenarios. Detection-probability correction; PVA over multiple viability thresholds. Used to support EPBC Act re-listing.",
+    "kb_cross_reference": "publications.md",
+    "link": "https://onlinelibrary.wiley.com/doi/full/10.1111/ddi.13652"
+  },
+  "dd_2022_vertebrate_communities": {
+    "path": "dd_2022_vertebrate_communities.md",
+    "title": "DD 2022 — Vertebrate Communities under Elevational Shifts",
+    "summary": "First-author Diversity and Distributions 2022 paper. Spatially explicit dispersal simulation of 7,613 community assemblages (47 vertebrate species) using thermal resistance as movement friction. Quantifies the 'escalator to extinction' spatial signature via beta-diversity dissimilarity from heterogeneous per-species dispersal success.",
+    "kb_cross_reference": "publications.md",
+    "link": "https://onlinelibrary.wiley.com/doi/full/10.1111/ddi.13514"
+  },
+  "ncc_mountains": {
+    "path": "ncc_mountains.md",
+    "title": "Nature Climate Change — Mountains as Natural Laboratories",
+    "summary": "First-author Nature Climate Change Perspective. Argues that compressed climatic gradients of mountain elevations function as natural experimental contrasts, making mountains uniquely powerful systems for detecting causal mechanisms of climate-driven biological change. Theoretical-framework paper, not new empirical data.",
+    "kb_cross_reference": "publications.md",
+    "link": "https://doi.org/10.1038/s41558-025-02549-x"
+  },
+  "delafuente_2021_ecography": {
+    "path": "delafuente_2021_ecography.md",
+    "title": "Ecography 2021 — SDM Suitability Predicts Local Abundance",
+    "summary": "First-author Ecography 2021 paper. Tests whether SDM-derived habitat suitability predicts observed abundance for 50 endemic species across 29 years of monitoring. 9-algorithm SDM ensemble, multiple link functions, spatial blocked cross-validation. Mean 55% deviance explained — first systematic large-scale test for tropical endemics.",
+    "kb_cross_reference": "publications.md",
+    "link": "https://onlinelibrary.wiley.com/doi/full/10.1111/ecog.05776"
+  },
+  "williams_delafuente_2021_plosone": {
+    "path": "williams_delafuente_2021_plosone.md",
+    "title": "PLoS ONE 2021 — Spatiotemporal Bird Climate Impacts",
+    "summary": "Co-authored PLoS ONE 2021 paper. 17 years of bird monitoring across 114 sites (47 species, sea level to 1500 m) documenting >40% lower-edge abundance loss for upland species, up to 190% upward expansion of lowland species, ~50% upland-endemic decline. Empirical evidence the Wet Tropics World Heritage Area's Outstanding Universal Value is degrading.",
+    "kb_cross_reference": "publications.md",
+    "link": "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0254307"
+  }
+}
