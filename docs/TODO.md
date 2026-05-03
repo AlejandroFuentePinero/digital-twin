@@ -157,7 +157,15 @@ Build on the existing eval pipeline; the metric and aggregation code is reused. 
 - Final phrasing for: deflection rule, periodic-invitation closing line, contact-form copy.
 - Selection of 5–8 flagship project READMEs to cache in `data/readmes/`.
 - Formal test plan (one document covering all phases — written when test surface is concrete).
-- Gradio UI polish: welcome message, theme, mobile responsiveness.
+- **Gradio UI polish session** — dedicated standalone session (planned per Session 26 smoke-test feedback; not gated on Phase 3+ work). Concrete items surfaced from live testing:
+  - Welcome message + framing (currently a one-line Markdown header)
+  - Theme review (cohesion across chat / accordion / form / buttons)
+  - Mobile responsiveness (untested; chat layout assumes desktop width)
+  - Form layout polish — initial Session 26 fix (Accordion + tighter row layout) was a quick fix; revisit for visual hierarchy, spacing, microcopy
+  - Accordion default-open vs default-closed when first triggered
+  - Loading states / response streaming (currently full reply appears at once)
+  - Visual feedback for tool fetches (TECHNICAL turns currently silent during the multi-second tool loop)
+  - Error state UI (canned-refusal currently appears as a regular assistant message)
 - **Replace [`data/readmes/digital_twin.md`](../data/readmes/digital_twin.md) with Alejandro-authored version.** Currently a Claude-authored placeholder distilled from `CLAUDE.md` + `docs/adr/` + a direct read of `src/`. Architecturally accurate but not in Alejandro's voice. The self-reference doc is the one TECHNICAL recruiters most likely to drill into ("how does this very chatbot work?"), so voice and emphasis matter. Keep the locked Q11 shape (Source link → What it is → Architecture → Key engineering decisions → Stack and discipline) when replacing. Two release-blocking gates in [`RELEASE_CHECKLIST.md::Portfolio / external`](./RELEASE_CHECKLIST.md): (1) content replacement, (2) Source link resolution (the `AlejandroFuentePinero/digital-twin` repo is currently private — the GitHub Source link returns 404 for unauthenticated visitors; either make the repo public or redirect the Source line to a public resource).
 
 ---
