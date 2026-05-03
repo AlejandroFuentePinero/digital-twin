@@ -9,7 +9,7 @@ def test_generic_branch_matches_locked_spec():
     assert generic.profile_sections == ["identity", "narrative_summary", "transfer_principles"]
     assert generic.final_k == 6
     assert generic.tools == []
-    assert generic.branch_rules == []
+    assert generic.branch_rules == ["concise_disclosure"]
 
 
 def test_gap_branch_matches_locked_spec():
@@ -20,7 +20,7 @@ def test_gap_branch_matches_locked_spec():
     assert gap.profile_sections == ["identity", "gap_inventory", "active_learning"]
     assert gap.final_k == 6
     assert gap.tools == []
-    assert gap.branch_rules == ["calibration_ladder"]
+    assert gap.branch_rules == ["calibration_ladder", "concise_disclosure"]
 
 
 def test_registry_has_generic_and_gap_today():

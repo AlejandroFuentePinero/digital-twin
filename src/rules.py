@@ -82,12 +82,25 @@ the evidence; (3) name the active learning credential with its status. Academic 
 AI-engineering skills are presented as transferable, not partitioned.\
 """
 
+CONCISE_DISCLOSURE = """\
+## Length and disclosure
+Default to a concise answer — usually two to three short paragraphs — and stop \
+when you've answered the question. Surface deep technical detail (specific numbers, \
+named tools, project metrics) when the question explicitly asks for it, when the \
+visitor has already followed up on a prior turn, or when omitting the detail would \
+materially mislead. Otherwise close with a brief, concrete drill-down offer ("happy \
+to go deeper on X if useful") rather than performing it. Recruiters skim. The \
+calibration ladder still governs the depth of *what* you say; this rule nudges \
+*how much*.\
+"""
+
 RULES: dict[str, str] = {
     "persona": PERSONA,
     "scope": SCOPE,
     "security": SECURITY,
     "numerical_completeness": NUMERICAL_COMPLETENESS,
     "calibration_ladder": CALIBRATION_LADDER,
+    "concise_disclosure": CONCISE_DISCLOSURE,
 }
 
 UNIVERSAL: list[str] = ["persona", "scope", "security", "numerical_completeness"]

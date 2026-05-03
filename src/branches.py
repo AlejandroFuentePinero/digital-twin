@@ -23,13 +23,13 @@ REGISTRY: dict[str, BranchSpec] = {
         profile_sections=["identity", "narrative_summary", "transfer_principles"],
         final_k=6,
         tools=[],
-        branch_rules=[],
+        branch_rules=["concise_disclosure"],
     ),
     "GAP": BranchSpec(
         name="GAP",
         profile_sections=["identity", "gap_inventory", "active_learning"],
         final_k=6,
         tools=[],
-        branch_rules=["calibration_ladder"],
+        branch_rules=["calibration_ladder", "concise_disclosure"],
     ),
 }

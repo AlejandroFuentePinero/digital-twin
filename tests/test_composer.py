@@ -102,3 +102,16 @@ def test_unknown_branch_raises_keyerror(fixture_profile):
     composer = PromptComposer(fixture_profile, REGISTRY)
     with pytest.raises(KeyError):
         composer.compose(["DOES_NOT_EXIST"], "generator")
+
+
+def test_concise_disclosure_rule_loads_into_generic_and_gap_branches(fixture_profile):
+    """Both GENERIC and GAP carry the soft conciseness + progressive-disclosure rule.
+
+    Discovered in #21 smoke-test: Q5.3 over-dumped (7-section + table response to
+    "Tell me everything"); Q7.2 was correct content but excessive length. The rule
+    nudges toward briefer answers without capping length — calibration ladder still
+    governs depth of content.
+    """
+    composer = PromptComposer(fixture_profile, REGISTRY)
+    assert "Length and disclosure" in composer.compose(["GENERIC"], "generator")
+    assert "Length and disclosure" in composer.compose(["GAP"], "generator")
