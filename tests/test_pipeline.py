@@ -61,7 +61,8 @@ def real_composer(tmp_path):
         "## transfer_principles\nTRANSFER body.\n\n"
         "## gap_inventory\nGAP-INVENTORY body.\n\n"
         "## active_learning\nACTIVE-LEARNING body.\n\n"
-        "## logistics\nLOGISTICS body — Melbourne, hybrid, contact directly.\n"
+        "## logistics\nLOGISTICS body — Melbourne, hybrid, contact directly.\n\n"
+        "## personal_stories\nPERSONAL-STORIES body — seven STAR anecdotes plus routing guide.\n"
     )
     return PromptComposer(ProfileLoader(p), REGISTRY)
 
@@ -255,6 +256,34 @@ def test_logistical_classification_routes_to_logistical_branch_with_logistics_se
     record = LogReader(log_path).read_all()[0]
     assert record["branch"] == "LOGISTICAL"
     assert record["classifier_labels"] == ["LOGISTICAL"]
+
+
+def test_behavioural_classification_routes_to_behavioural_branch_with_personal_stories_section(real_composer, fake_chunks, tmp_path):
+    """End-to-end: classifier predicts BEHAVIOURAL → generator's system prompt carries the deflection rule + personal_stories section.
+
+    Per #17. Behavioural probes ("tell me about a time you failed", "describe a
+    conflict") were filter-falling-back to GENERIC before this slice because
+    BEHAVIOURAL was not in REGISTRY. This test locks the routing path: when
+    BEHAVIOURAL is registered, the same classification reaches its own branch
+    prompt with both the personal_stories section content and the deflection-rule
+    guidance available to the generator.
+    """
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["BEHAVIOURAL"], confidence=0.9))
+    generator = FakeGenerator(answers=["A"])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run("Tell me about a time you failed.", history=[], session_id="s1", turn_index=0)
+
+    sys_prompt = generator.calls[0]["system_prompt"]
+    assert "PERSONAL-STORIES body" in sys_prompt, "BEHAVIOURAL profile section (personal_stories) must reach the generator"
+    assert "personal_stories" in sys_prompt, "deflection rule must name the section by key"
+    assert "fabricat" in sys_prompt.lower(), "deflection rule must forbid fabrication in the generator's view"
+    record = LogReader(log_path).read_all()[0]
+    assert record["branch"] == "BEHAVIOURAL"
+    assert record["classifier_labels"] == ["BEHAVIOURAL"]
 
 
 def test_log_record_carries_full_schema_with_branch_classification_chunks_and_latencies(real_composer, fake_chunks, tmp_path):

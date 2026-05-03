@@ -173,6 +173,32 @@ The v3 eval (`eval/tests.jsonl`, 149 Q&A) and the v4 eval (#2, planned) measure 
 
 ---
 
+### P7 — Deflection rule scoped to BEHAVIOURAL only
+
+**Status:** Predicted (architectural choice, Session 23 / #17).
+
+The `deflection` rule is registered in `branches.REGISTRY` only for `BEHAVIOURAL`. Its body governs (a) story selection from the `personal_stories` section via the routing guide, and (b) honest non-fabrication ("decline + offer Alejandro contact directly") when no story maps. The "decline + offer contact" half is a generally useful pattern; it is *not* currently exposed to `GENERIC`, `GAP`, or `LOGISTICAL`.
+
+**Why this is the right scope today:**
+
+- BEHAVIOURAL is the most open-ended branch — its inputs ("tell me about a time you…") cannot be reliably constrained by KB grounding, so the explicit no-fabrication-with-contact-offer guidance is highest-value there.
+- The other branches each have their own anti-fabrication mechanism: generator framing (universal) says "Do not invent facts" and emits the gap phrase; `calibration_ladder` (GAP) governs evidence-calibrated verbs and the gap-phrase fallback; LOGISTICAL's section content already encodes "happy to discuss directly" redirects per item.
+- KB-grounded branches (GENERIC, GAP, LOGISTICAL, future TECHNICAL) lean on retrieval as the primary fabrication defense — the principle is "answer from grounded context or emit the gap phrase," enforced by both generator framing and guardrail. Open-ended branches need stronger deflection precisely because grounding is thinner.
+
+**Trip-wires (any one promotes this to Observed and triggers extracting a cross-branch `offer_contact` rule):**
+
+1. A future smoke-test shows `GENERIC`, `GAP`, or `LOGISTICAL` fabricating in a shape where a "decline + offer Alejandro contact" pattern would have been more useful than the current bare gap phrase.
+2. A pattern emerges where the gap-phrase response feels like a dead-end to the visitor (e.g. follow-up turns that re-ask the same thing, suggesting the visitor wanted a path forward, not just an honest "no").
+3. TECHNICAL (#18) lands and, despite its `fetch_project_readme` tool, surfaces a fabrication shape (e.g. invented architecture details for a project not yet in the README registry) that an `offer_contact` rule would have caught more cleanly than retry-then-canned-refusal.
+
+**Action when a trip-wire fires:** extract the "decline + offer Alejandro contact" half of `DEFLECTION` into a separate `offer_contact` rule (~3 lines: "If the answer would require fabricating to be useful, decline and offer Alejandro's direct contact at [email]"). Keep `deflection` for personal-stories-specific machinery (routing guide, STAR shape, no-extrapolation-from-KB-experience). Wire `offer_contact` into the `branch_rules` of whichever branch the trip-wire fired on.
+
+**Why split rather than just add `deflection` everywhere?** Today's `deflection` body is deeply coupled to personal_stories machinery (routing guide, "never extrapolate from KB experience entries"). Loading it into GENERIC or LOGISTICAL would be incoherent — those branches have no routing guide and don't draw from `personal_stories`. The right factoring on a trip-wire firing is to pull out the orthogonal "offer contact" half rather than promote the whole rule.
+
+**Related:** O1 (first-attempt fabrication rate) — if O1's trip-wire fires *and* the new fabrications are on non-BEHAVIOURAL branches, P7 is the structural follow-up.
+
+---
+
 ## Resolved
 
 *(Empty. Entries graduate to this section with a fix-commit pointer when their trip-wire conditions are addressed.)*
