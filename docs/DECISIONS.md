@@ -5,6 +5,46 @@
 
 ---
 
+## Session 22 (2026-05-03) — Issue #19 closed (LOGISTICAL branch); additive-routing pattern validated
+
+**Status:** Issue [`#19`](https://github.com/AlejandroFuentePinero/digital-twin/issues/19) (LOGISTICAL branch) closed in `<commit>`. Additive registry entry only — three new tests, one REGISTRY entry, one docstring update, two test fixtures extended with a `## logistics` section. **Test count 141/141** (138 + 3 new behaviour tests). KB at 109 chunks (unchanged — `## logistics` already existed in `data/profile.md` from earlier work + #24's hardening). The R2 smoke-test data already telegraphed this routing path: Q8.3 produced `classifier_labels=[LOGISTICAL]` at 0.95 confidence and filter-fell-back to GENERIC; with `LOGISTICAL` now in `branches.REGISTRY`, the same classification reaches its own branch prompt.
+
+### What shipped
+
+- **`branches.REGISTRY` extended** with the LOGISTICAL entry: `profile_sections=["identity", "logistics"]`, `final_k=6`, `tools=[]`, `branch_rules=["concise_disclosure"]`. Module docstring updated to reflect the three-branch (GENERIC + GAP + LOGISTICAL) state with #17 (BEHAVIOURAL) and #18 (TECHNICAL) still pending.
+- **Three new behaviour tests:**
+  - `tests/test_branches.py::test_logistical_branch_matches_locked_spec` — locks the BranchSpec values per Session 17's friction-lock pattern.
+  - `tests/test_composer.py::test_logistical_branch_loads_logistics_section_and_excludes_others` — locks that LOGISTICAL composes the logistics section and *not* narrative_summary / transfer_principles / gap_inventory / active_learning (no leak from GENERIC or GAP).
+  - `tests/test_pipeline.py::test_logistical_classification_routes_to_logistical_branch_with_logistics_section` — end-to-end routing test: when the classifier returns `[LOGISTICAL]` at high confidence, the generator's system prompt carries the logistics section content; log records `branch=LOGISTICAL` with `classifier_labels=["LOGISTICAL"]`.
+- **Existing `test_registry_has_generic_and_gap_today`** updated and renamed to `test_registry_has_generic_gap_and_logistical_today` — the friction-lock now covers three branch keys.
+- **Test fixtures extended** to include a `## logistics` section in both `tests/test_composer.py::fixture_profile` and `tests/test_pipeline.py::real_composer` so any test exercising LOGISTICAL has a profile section to load.
+
+### Design decisions
+
+- **No grill session needed today.** `## logistics` had already been authored by Alejandro in earlier work (Session 16) and refined in Session 20 via #24 (Officeworks reframed as currently held, explicit "do not assume immediate availability" line). The acceptance criterion "Grill session held; logistics section added to data/profile.md" was already met before this session began. Skipping the grill is a confirmation, not a deferral.
+- **`branch_rules=["concise_disclosure"]`, not `[]`.** The acceptance criterion in #19 said "no extra rules beyond universal," written before #25 introduced the `concise_disclosure` soft conciseness rule (Session 20). The right interpretation today is "no LOGISTICAL-specific rule" — `concise_disclosure` is a *cross-branch pattern rule* (already on GENERIC and GAP), not LOGISTICAL-specific. Excluding it would have been the inconsistency, since logistics-shape probes are exactly the questions where brevity matters most ("what's your notice period?" → one line + redirect, not three paragraphs). Calling out the spec evolution explicitly so the original criterion isn't read as violated.
+- **`profile_sections=["identity", "logistics"]`, including identity.** Mirrors GENERIC and GAP — every branch loads `identity` so the basic "who is Alejandro" framing is present even on logistics-only turns. Recruiters routinely ask logistics first, then pivot; carrying identity costs ~150 tokens and prevents an awkward "no context" answer if the conversation flips back to background.
+- **Single TDD cycle, not three.** Could have done one cycle per test (branch spec → composer → pipeline). Skipped because the design here is *registering an established pattern*, not learning a new shape. Three tests collectively describe one behaviour ("LOGISTICAL exists and routes correctly"); a single GREEN step (the REGISTRY entry) makes them all pass. Acceptable per the TDD skill's vertical-tracer guidance — one larger RED is appropriate when the implementation surface is known.
+- **Pipeline diagram unchanged.** `docs/pipeline_diagram.mmd` describes the registry-driven dispatch, not the registry contents. Adding a branch entry to `branches.REGISTRY` doesn't change the runtime decision graph — same classify → filter → fall-back-to-GENERIC-if-empty → compose → generate flow. The diagram only enumerates a branch when its prompt has a unique decision point (e.g. "TECHNICAL only — future #18" for the tool loop). LOGISTICAL has no special decision point, so no diagram change.
+- **No re-ingest.** No KB content changed. `## logistics` was already present and was last re-ingested in Session 20 with the #24 hardening. Chunk count remains 109.
+
+### Verified
+
+- `uv run pytest -q` → **141 passed** (138 → 141, three new behaviour tests; existing `test_registry_has_generic_and_gap_today` renamed to `..._has_generic_gap_and_logistical_today` with content updated for the new key set).
+- RED phase confirmed before GREEN: 4 expected failures (3 new tests + 1 renamed lock), all green after the REGISTRY edit + docstring update.
+- Pipeline integration test reproduces the R2 Q8.3 routing path: classifier returns `[LOGISTICAL]` at 0.95 confidence → branch resolves to `LOGISTICAL` → logistics section lands in the generator's system prompt → log record carries the right branch label.
+- No existing test broken — `test_pipeline_falls_back_to_generic_when_classifier_predicts_unknown_branch` still passes (TECHNICAL stays unknown in the registry; that test still validates the unknown-label fallback path).
+
+### Outstanding
+
+- **Next branch:** [`#17`](https://github.com/AlejandroFuentePinero/digital-twin/issues/17) (BEHAVIOURAL + deflection rule). Per Session 21's recommendation, #17 layers in a *novel* branch_rule (deflection) on top of the same additive shape #19 just validated. No grill needed (PRD calls it out).
+- **After #17:** [`#18`](https://github.com/AlejandroFuentePinero/digital-twin/issues/18) (TECHNICAL + tool loop). Body should absorb the `LIMITATIONS.md::O2` watch-item — when TECHNICAL lands, filter-fallback stops firing for the 5+ TECHNICAL-mis-predicted turns from R1+R2.
+- **LOGISTICAL live behaviour** unverified yet. Today's tests use mocked classifier; real `gpt-4.1-nano` predictions on Q8.3-shape probes are deterministic-ish based on R1+R2, but a fresh smoke-test of the LOGISTICAL turn would confirm. Not a blocker — eligible for the next round (#26-style) after another branch lands.
+- **Phase 1 sub-task** still pending: rewrite `data/knowledge_base/positioning.md` to remove transfer-principle prose now in `profile.md`. Same as Session 21.
+- **Phase 3** (issue #2 v4 eval baseline) unchanged: gated until all branches land.
+
+---
+
 ## Session 21 (2026-05-03) — Issue #26 closed: second-round eval validates polish; first-attempt fabrication rate flagged as monitoring item
 
 **Status:** Issue [`#26`](https://github.com/AlejandroFuentePinero/digital-twin/issues/26) closed. Second-round walk of `HUMAN_EVAL_QUESTIONS.md` (CORE Sessions 1–5 + EXTENDED Sessions 6–8 + one bonus follow-up turn on Q8.3) executed against the polish-round build. **All three #21 reds are now green; #15's regression surface holds; one mild regression on Q8.1 (still passes after a retry); no new issues opened from this round.** First-attempt fabrication rate (~3 of 27 turns, ~11%) flagged as a monitoring item for Sentinel rather than a fix — guardrail+retry is the architectural defense and worked end-to-end on every case. `HUMAN_EVAL_QUESTIONS.md` reset (per-question Result lines stripped) so the runbook stays a clean reusable template across future rounds. No code or KB changes shipped this session — closure-only.

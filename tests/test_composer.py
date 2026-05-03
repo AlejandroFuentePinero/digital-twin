@@ -15,7 +15,8 @@ def fixture_profile(tmp_path):
         "## narrative_summary\nNARRATIVE-MARKER body.\n\n"
         "## transfer_principles\nTRANSFER-MARKER body.\n\n"
         "## gap_inventory\nGAP-MARKER body — should not leak into GENERIC.\n\n"
-        "## active_learning\nACTIVE-LEARNING-MARKER body.\n"
+        "## active_learning\nACTIVE-LEARNING-MARKER body.\n\n"
+        "## logistics\nLOGISTICS-MARKER body — should not leak into GENERIC or GAP.\n"
     )
     return ProfileLoader(p)
 
@@ -115,3 +116,21 @@ def test_concise_disclosure_rule_loads_into_generic_and_gap_branches(fixture_pro
     composer = PromptComposer(fixture_profile, REGISTRY)
     assert "Length and disclosure" in composer.compose(["GENERIC"], "generator")
     assert "Length and disclosure" in composer.compose(["GAP"], "generator")
+
+
+def test_logistical_branch_loads_logistics_section_and_excludes_others(fixture_profile):
+    """compose(['LOGISTICAL']) loads identity + logistics; other branches' sections do NOT leak.
+
+    Per #19: LOGISTICAL is for direct logistics-shape probes (notice period, salary,
+    location, contact). It must NOT pull narrative/transfer/gap_inventory/active_learning
+    content because those would either over-share or shift framing away from a clean
+    redirect.
+    """
+    composer = PromptComposer(fixture_profile, REGISTRY)
+    prompt = composer.compose(["LOGISTICAL"], "generator")
+    assert "LOGISTICS-MARKER" in prompt, "LOGISTICAL must load the logistics profile section"
+    assert "IDENTITY-MARKER" in prompt, "identity loads on every branch"
+    assert "NARRATIVE-MARKER" not in prompt, "narrative_summary belongs to GENERIC, must not leak"
+    assert "TRANSFER-MARKER" not in prompt, "transfer_principles belongs to GENERIC, must not leak"
+    assert "GAP-MARKER" not in prompt, "gap_inventory belongs to GAP, must not leak"
+    assert "ACTIVE-LEARNING-MARKER" not in prompt, "active_learning belongs to GAP, must not leak"

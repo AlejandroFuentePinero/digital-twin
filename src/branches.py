@@ -2,8 +2,8 @@
 
 Each `BranchSpec` declares which `profile.md` sections to load, the retrieval
 `FINAL_K`, the model-callable tools, and the branch-specific rule keys (resolved
-later against `rules.RULES`). Today only `GENERIC` is wired — other branches
-(`GAP`, `BEHAVIOURAL`, `TECHNICAL`, `LOGISTICAL`) land in subsequent slices.
+later against `rules.RULES`). Today `GENERIC`, `GAP`, and `LOGISTICAL` are wired —
+`BEHAVIOURAL` (#17) and `TECHNICAL` (#18) land in subsequent slices.
 """
 
 from pydantic import BaseModel
@@ -31,5 +31,12 @@ REGISTRY: dict[str, BranchSpec] = {
         final_k=6,
         tools=[],
         branch_rules=["calibration_ladder", "concise_disclosure"],
+    ),
+    "LOGISTICAL": BranchSpec(
+        name="LOGISTICAL",
+        profile_sections=["identity", "logistics"],
+        final_k=6,
+        tools=[],
+        branch_rules=["concise_disclosure"],
     ),
 }

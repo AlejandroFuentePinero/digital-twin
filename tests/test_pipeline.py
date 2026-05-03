@@ -60,7 +60,8 @@ def real_composer(tmp_path):
         "## narrative_summary\nNARRATIVE body.\n\n"
         "## transfer_principles\nTRANSFER body.\n\n"
         "## gap_inventory\nGAP-INVENTORY body.\n\n"
-        "## active_learning\nACTIVE-LEARNING body.\n"
+        "## active_learning\nACTIVE-LEARNING body.\n\n"
+        "## logistics\nLOGISTICS body — Melbourne, hybrid, contact directly.\n"
     )
     return PromptComposer(ProfileLoader(p), REGISTRY)
 
@@ -230,6 +231,30 @@ def test_pipeline_logs_raw_classifier_labels_distinct_from_used_branch(real_comp
     record = LogReader(log_path).read_all()[0]
     assert record["classifier_labels"] == ["TECHNICAL", "GAP"], "raw classifier output preserved for observability"
     assert record["branch"] == "GAP"
+
+
+def test_logistical_classification_routes_to_logistical_branch_with_logistics_section(real_composer, fake_chunks, tmp_path):
+    """End-to-end: classifier predicts LOGISTICAL → generator's system prompt carries the logistics section.
+
+    Per #19. R2 smoke-test (Q8.3) showed the classifier predicting [LOGISTICAL] at 0.95
+    confidence today; before this slice the pipeline filter-fell-back to GENERIC because
+    LOGISTICAL was not in REGISTRY. This test locks the routing path: when LOGISTICAL is
+    in the registry, the same classification reaches its own branch prompt.
+    """
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["LOGISTICAL"], confidence=0.95))
+    generator = FakeGenerator(answers=["A"])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run("What's your notice period?", history=[], session_id="s1", turn_index=0)
+
+    sys_prompt = generator.calls[0]["system_prompt"]
+    assert "LOGISTICS body" in sys_prompt, "LOGISTICAL profile section (logistics) must reach the generator"
+    record = LogReader(log_path).read_all()[0]
+    assert record["branch"] == "LOGISTICAL"
+    assert record["classifier_labels"] == ["LOGISTICAL"]
 
 
 def test_log_record_carries_full_schema_with_branch_classification_chunks_and_latencies(real_composer, fake_chunks, tmp_path):
