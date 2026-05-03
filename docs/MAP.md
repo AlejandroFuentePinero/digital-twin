@@ -50,12 +50,22 @@ flowchart TD
   TOOL -.->|"tool-fetched content<br/>recomposed into judge prompt<br/>so guardrail sees what model grounded in<br/>(LIMITATIONS::R1)"| JUDGE
   GEN --> JUDGE["Guardrail — Claude Sonnet 4.6<br/>same composed prompt + answer<br/>distinct model family"]:::llm
   JUDGE --> ACCEPT{"is_acceptable?"}:::decision
-  ACCEPT -->|yes| LOG["InteractionLog append (JSONL)<br/>branch, classifier_labels, attempts,<br/>retrieved_chunks, latency_ms"]:::sideEffect
+  ACCEPT -->|yes| LOG["InteractionLog append (JSONL)<br/>branch, classifier_labels, attempts,<br/>retrieved_chunks, tool_calls (with attempt_index),<br/>latency_ms, contact_offered, contact_provided"]:::sideEffect
   ACCEPT -->|"no — rejection feedback<br/>wraps into next system prompt"| RETRY{"attempts &lt; MAX_ATTEMPTS = 3?"}:::decision
   RETRY -->|yes| GEN
   RETRY -->|no| REFUSE["CANNED_REFUSAL<br/>polite decline + contact email"]:::refusal
   REFUSE --> LOG
   LOG --> RESP([Response to user]):::io
+
+  %% Contact-flow side-channel (#16) — runs in app.py outside the per-turn pipeline.
+  %% SessionState (in gr.State) drives a collapsible form that appears at turn 3
+  %% and writes to a separate file joinable to interactions.jsonl on session_id.
+  STATE["app.py SessionState (gr.State)<br/>turn_counter, contact_provided"]:::pure
+  STATE -.->|"contact_offered, contact_provided<br/>per-turn"| LOG
+  FORM[/"Contact form (collapsible)<br/>name, email (required), note<br/>visible from turn ≥ 3 until submit"/]:::io
+  STATE -.->|"should_show_contact_form()"| FORM
+  FORM -->|"on submit"| CONTACTS["ContactLog append<br/>data/logs/contacts.jsonl<br/>session_id (join key) + email + name + note"]:::sideEffect
+  FORM -.->|"latches contact_provided=True"| STATE
 ```
 
 ## Module graph
