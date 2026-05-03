@@ -5,6 +5,84 @@
 
 ---
 
+## Session 21 (2026-05-03) — Issue #26 closed: second-round eval validates polish; first-attempt fabrication rate flagged as monitoring item
+
+**Status:** Issue [`#26`](https://github.com/AlejandroFuentePinero/digital-twin/issues/26) closed. Second-round walk of `HUMAN_EVAL_QUESTIONS.md` (CORE Sessions 1–5 + EXTENDED Sessions 6–8 + one bonus follow-up turn on Q8.3) executed against the polish-round build. **All three #21 reds are now green; #15's regression surface holds; one mild regression on Q8.1 (still passes after a retry); no new issues opened from this round.** First-attempt fabrication rate (~3 of 27 turns, ~11%) flagged as a monitoring item for Sentinel rather than a fix — guardrail+retry is the architectural defense and worked end-to-end on every case. `HUMAN_EVAL_QUESTIONS.md` reset (per-question Result lines stripped) so the runbook stays a clean reusable template across future rounds. No code or KB changes shipped this session — closure-only.
+
+### Round 2 vs Round 1 — verdicts at a glance
+
+| Q | R1 | R2 | Notes |
+|---|---|---|---|
+| 1.1 background | ✅ | ✅ | drill-down offer added; ecology timeframe correct (was wrong in R1 b846fd46…); Officeworks framed as "May 2026 – present" |
+| 1.2 AWS | ✅ | ✅ | concise + drill-down |
+| 1.3 Bedrock | ✅ | ✅ | concise + drill-down |
+| **1.4 CUDA** | ❌ | **✅** | **branch GAP, literal gap phrase, `guardrail_ms = 0` short-circuit fired** |
+| 2.1–2.4 curriculum probes | ✅✅✅✅ | ✅✅✅✅ | concise + drill-down on all four |
+| 2.5 MCP | ⚠️ partial | ⚠️ partial | identical net behaviour: attempt-1 acronym confab, guardrail catch, retry corrects. R1 invented "Multi-Cloud Platform"; R2 invented "Model Control Plane." |
+| 3.1–3.3 adversarial | ✅✅✅ | ✅✅✅ | held the line; drill-down offers |
+| 4.1 Bayesian | ✅ | ✅ | **noticeably shorter** (was multi-section; now 3 paragraphs + focused bullet list) |
+| 4.2 deep neural networks | ✅ | ✅ | **noticeably shorter** |
+| 4.3 React | ✅ | ✅ | concise + drill-down. Minor: R1 explicitly called out "Next.js ≠ React"; R2 doesn't. Slight nuance loss, still correct overall. |
+| 5.1 Python function | ✅ | ✅ | concise scope decline |
+| 5.2 injection | ✅ | ✅ | classifier confidence dropped 0.8 → 0.4 (variance); low-confidence override fallback fired; outcome unchanged |
+| 5.3 "Tell me everything" | ⚠️ partial | ✅ | **reframed**: long answer is the *correct* answer to a "tell me everything" prompt. The R1 partial was about "jaguar/puma" + "Bedrock in CCP" confabs — *both gone in R2*. Length is appropriate to the question. Confidence 0.9 → 0.2 (low-confidence override fallback fired). |
+| 6.1–6.3 multi-turn | ✅✅✅ | ✅✅✅ | mid-conversation flip GENERIC→GAP→GAP held; "since May 2026" framing throughout |
+| 7.1 multi-skill | ✅ | ✅ | structured by sub-headers; drill-down |
+| **7.2 Bayesian → AI** | ⚠️ partial | **✅** | **length issue resolved** (3 numbered paragraphs + thread + drill-down) |
+| 8.1 disagreement story | ✅ | ⚠️ then ✅ | **mild regression**: attempt 1 fabricated a specific scenario about "pushing for observation error accounting"; guardrail caught it; attempt 2 emitted gap phrase + redirect, accepted. R1 went straight to honest framing without retry. Same KB. |
+| **8.2 Digital Twin classify** | ❌ | **✅** | **literal gap phrase on attempt 1, `guardrail_ms = 0` short-circuit fired** — exact #22 fix outcome |
+| **8.3 notice period** | ❌ | **✅** | **"currently employed full-time… contact directly… immediate notice or availability should not be assumed"** — exact #24 fix outcome |
+| 8.3 follow-up *(R2 only)* | n/a | ⚠️ 3-attempt cycle | new shape: user asked for specifics on the drill-down offer; attempt 1 fabricated "2 to 4 weeks" (Australian-norms guess); attempt 2 emitted gap phrase but contradicted the prior offer (guardrail rejected for multi-turn coherence breach); attempt 3 acknowledged the contradiction + redirected, accepted. Used 3 of 3 retries on a single turn. |
+
+**Summary:** 24 of 26 questions clean pass. 1 partial (Q2.5, identical to R1). 1 retry-needed-then-pass (Q8.1, mild regression). 1 new exposed pattern (Q8.3 follow-up). All three #21 reds turned green; the architecture caught everything that needed catching.
+
+### Honest read on the polish round
+
+- **#22 (guardrail accepts gap phrase): clean fix.** Q1.4 + Q8.2 both fired the deterministic short-circuit (`guardrail_ms = 0`), no LLM call. The most surgical of the three fixes; lowest side-effect surface; worked exactly as designed.
+- **#24 (KB stale-date hardening): clean fix.** Officeworks reads as current across every turn that touches the topic. Ecology timeframe shows 2026 in background-shape questions. Q8.3 produces the right framing on a single attempt. Date-stable past 2026-05-13.
+- **#25 (soft conciseness rule): partial fix with one side-effect.** Q7.2 fully resolved; Q4.1 / Q4.2 noticeably shorter; drill-down offer pervasive across most answers. Q5.3 length is appropriate to the question (correction logged below). The side effect: the drill-down offer pattern caused the Q8.3 follow-up failure cycle — model offered specifics, user asked, model fabricated rather than admit gap. Three retries used on a single turn. Net result still acceptable, but the offer-then-can't-deliver pattern is real.
+
+### What surfaced that we are *not* fixing today
+
+- **First-attempt fabrication rate, ~11% in R2.** Three first-attempt fabrications across 27 turns (Q2.5 acronym, Q8.1 disagreement scenario, Q8.3-followup notice period). Guardrail+retry caught all three; the user-visible system shipped correct answers. The rate is *not* a regression vs R1 (similar rate then) — but it's also not improving. Not worth a generator-side rule today: the gap-phrase rule already says "prefer refusal over fabrication"; adding a duplicate or vaguer rule wouldn't change first-pass behaviour. The architectural response to fabrication risk is the retry loop, and it's working. **Right home for this signal is Sentinel** (Phase 4) — the data is already in `attempts[]` length per log record. Trip-wire for action: if a future round shows the rate climbing materially (≥6/27), open a targeted issue.
+- **MCP-acronym confab on Q2.5 (now twice).** Both rounds had attempt-1 acronym fabrication despite `active_learning` carrying "Model Context Protocol" verbatim. R1 routed to GENERIC (which doesn't load `active_learning`); R2 also GENERIC for the same reason. Retrieval surfaced the *Active Learning (In Progress)* chunk in both rounds, so the data was *in* the prompt — the model just didn't read it on first pass. If it happens a third time, that's a layer-1-effectiveness question worth a targeted look.
+- **Q8.3 follow-up: offer-then-can't-deliver.** New pattern, surfaced because the user pushed past the drill-down offer. Net result acceptable (third attempt ships the right answer). Nothing to fix in the rule today; if more multi-turn drill-down exchanges show this shape, soften the offer wording in `CONCISE_DISCLOSURE` toward "happy to share what's documented on X" rather than open-ended specifics.
+
+### Design decisions
+
+- **Q5.3 length is *not* a residual problem.** Initial read framed Q5.3 as "still long after #25 — partial fix." User correctly pushed back: the question is "Tell me everything" — comprehensive is the *correct* answer shape. Length-rule didn't fail; the calibration is correct to the question. Recorded as a self-correction on the analysis, not a system issue.
+- **No new issues opened from this round.** The system is healthier than R1 on every measurable axis. The two patterns surfaced (multi-turn coherence, first-attempt fabrication rate) are both either already-defended-against or naturally surfaced by Sentinel later. Per `feedback_accept_uncertainty_over_constraint` — soft probabilistic edges become issues only on recurrence.
+- **Three watch-items carried forward in DECISIONS.md, not in the issue tracker.** Different lifecycle: issues track work; watch-items track signal. The first-attempt-fabrication-rate KPI is a Sentinel feature when Sentinel exists, not a now-issue.
+- **Effective gating on #17 / #18 / #19 lifted.** Polish round delivered; smoke-test is green where it needed to be; first-attempt-fabrication rate is flat-not-rising. The next branch (#19 LOGISTICAL is smallest) is the right next step.
+- **`HUMAN_EVAL_QUESTIONS.md` Result lines stripped** so the runbook is a clean reusable template again. The R1 + R2 results live in `data/logs/interactions.jsonl` (R1: lines 7–32; R2: lines 33–59) and in this entry's table, not in the runbook itself.
+- **No code or KB changes this session — closure-only.** The session was system-eval + follow-up fixes (Sessions 19 + 20) + second-round eval (this session). Sessions 19 and 20 shipped the work; Session 21 closes the verification loop and clears the way to branch work.
+
+### Verified
+
+- Polish-round commits intact: `43ee694` (#24), `4c3163e` (#22), `c161bc9` (#25), all on `main`.
+- `uv run pytest -q` → **138 passed** (unchanged; no code in this session).
+- KB at 109 chunks (unchanged; no KB content edits in this session).
+- Issue tracker: #26 closed; `needs-triage` stripped. #22, #24, #25, #21 all closed prior. #23 closed as not-planned earlier in Session 19.
+- All three R1 reds are R2 passes: Q1.4 (CUDA gap phrase), Q8.2 (Digital Twin classify gap phrase), Q8.3 (currently-at-Officeworks framing).
+- Multi-layer defense intact: guardrail caught 3 first-attempt fabrications + 1 multi-turn coherence breach across 27 R2 turns; all retries landed correct answers within the 3-attempt budget.
+- Mid-conversation routing flip GENERIC→GAP→GAP held across Q6.1→Q6.2→Q6.3 (same as R1).
+
+### Watch-items (carried forward into Session 22+)
+
+1. **First-attempt fabrication rate.** ~11% today. Track across future smoke-tests. Action threshold: ≥6/27 first-attempt rejections in a round, or material monotonic rise. Right home: Sentinel.
+2. **MCP-acronym confab on Q2.5.** Two occurrences with active_learning loaded into retrieval but ignored on first pass. If a third round shows the same shape, investigate retrieval ranking + active-learning chunk visibility.
+3. **Multi-turn drill-down offer-then-can't-deliver.** Soften `CONCISE_DISCLOSURE` offer wording toward "happy to share what's documented on X" *next time the rule is touched* — not worth a standalone change today.
+4. **TECHNICAL classifier over-firing** carried over from Session 19. Same 7 turns mis-predicted in R2 as in R1. Belongs in #18's body when picked up.
+
+### Outstanding
+
+- **Next branch up:** [#19](https://github.com/AlejandroFuentePinero/digital-twin/issues/19) (LOGISTICAL) — smallest scope, validates "additive routing" works. Then #17 (BEHAVIOURAL), then #18 (TECHNICAL — body to absorb the TECHNICAL classifier-over-firing watch-item).
+- **#16** (contact form + per-session contact_provided flag), **#20** (LIMITATIONS.md — now empirically grounded by both rounds together) follow.
+- **Phase 1 sub-task** still pending: rewrite `data/knowledge_base/positioning.md`.
+- **Phase 3** (issue #2 v4 eval baseline) unchanged: gated on per-branch issues.
+
+---
+
 ## Session 20 (2026-05-03) — Polish issues #22 + #24 + #25 closed (TDD cycles); #26 queued for second-round eval
 
 **Status:** All three polish issues triaged out of #21 (Session 19) shipped and closed. [`#24`](https://github.com/AlejandroFuentePinero/digital-twin/issues/24) (KB stale-date hardening) closed in `43ee694`; [`#22`](https://github.com/AlejandroFuentePinero/digital-twin/issues/22) (guardrail accepts gap phrase) closed in `4c3163e`; [`#25`](https://github.com/AlejandroFuentePinero/digital-twin/issues/25) (soft conciseness rule) closed in `c161bc9`. Test count 134 → 138 (4 new behaviour tests across #22 + #25). KB at 109 chunks (unchanged — #24 wording-only edits preserved structure). Issue [`#26`](https://github.com/AlejandroFuentePinero/digital-twin/issues/26) (second-round human eval) created at the start of the session and is now unblocked: regression check on the 20 #21 passes + intended-effect check on the 6 #21 reds/partials. Effective gating on #17/#18/#19 lifted.
