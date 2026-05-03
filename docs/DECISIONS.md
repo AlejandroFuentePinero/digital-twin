@@ -5,6 +5,64 @@
 
 ---
 
+## Session 25 (2026-05-03) — Issue #16 closed (contact form + per-session state); Phase 2 fully complete
+
+**Status:** Issue [`#16`](https://github.com/AlejandroFuentePinero/digital-twin/issues/16) (contact form + per-session `contact_provided` flag + periodic invitation hook) closed in `<commit>`. Closes Phase 2 cleanly — the last `app.py` work item from the original Phase 2 plan now lands. Two new modules (`src/session_state.py`, `src/contact_log.py`); 17 new behaviour tests (177 → 195); `Pipeline.run()` signature extended with optional `contact_offered` / `contact_provided` kwargs; `app.py` rewired with collapsible contact-form row, submit handler, and `SessionState` in `gr.State`. **Phase 2 complete; Phase 3 (v4 eval) is now unblocked AND scope-clean** (full deployable system available for the eval rewrite).
+
+### What shipped — code (4 vertical TDD slices)
+
+| Slice | Module | Tests added |
+|---|---|---|
+| 1 | `src/session_state.py` — `SessionState` dataclass with `record_turn`, `should_show_contact_form`, `mark_contact_provided`, `reset` + configurable `invitation_turn` (default 3) | +8 |
+| 2 | `src/contact_log.py` — `ContactRecord` Pydantic model + `ContactWriter` / `ContactReader` parallel to `interaction_log.LogWriter` | +8 |
+| 3 | `src/pipeline.py` — `Pipeline.run()` accepts `contact_offered` and `contact_provided` kwargs (default `False`), threads them into the log record. Existing tests preserved via defaults; one new test asserts the threading + one regression test asserts default behavior unchanged. | +2 |
+| 4 | `src/app.py` — `gr.State` extended with `SessionState`; `respond` callback increments turn + threads contact state into Pipeline + updates form visibility post-turn; collapsible contact-form row (name optional / email required / note optional) hidden by default, becomes visible at turn 3, persists until submit; `submit_contact` handler writes `ContactRecord` to `data/logs/contacts.jsonl` then latches `contact_provided=True`; `new_session` resets all state and hides form | (no automated test — UI-only, per spec) |
+
+### Design choices locked in grill before code
+
+5 design questions resolved upfront:
+
+1. **Invitation shape (Q1)** = UI-only. Form becomes visible at turn 3; no LLM-side message manipulation. Cleanest separation; assistant stays focused on answering.
+2. **Form fields (Q2)** = `name` (optional), `email` (required), `note` (optional). Three fields, only email required. Matches recruiter expectations.
+3. **Contact records location (Q3)** = `data/logs/contacts.jsonl` parallel to `interactions.jsonl`. Symmetry; both joinable on `session_id`.
+4. **Pipeline.run() signature change (Q4)** = `contact_offered` + `contact_provided` as optional kwargs threaded to log record. Cleanest path to populate the existing `InteractionRecord` schema fields without post-hoc mutation.
+5. **SessionState extracted to its own module (Q5)** = unit-testable state machine without depending on Gradio. Acceptance criterion explicitly calls for non-UI smoke test.
+
+User-emphasised constraint: **`session_id` is first-class on `ContactRecord`** (the join key for linking contact submissions back to the conversation that led to them). Pydantic enforces it as required.
+
+### Verified
+
+- `uv run pytest -q` → **195 passed** (177 → 195 across the 4 slices: +8 SessionState, +8 ContactWriter/Reader/Record, +2 Pipeline contact-state threading; -1 from the defaulted-to-False contact_offered test removed implicitly because the default behavior is now the explicit test).
+- `app.py` imports cleanly: ToolRegistry hard-fail-at-startup verified all 24 README files exist; ContactWriter wired to `data/logs/contacts.jsonl`; initial SessionState shows turn_counter=0, contact_provided=False, form-visible=False as expected.
+- `docs/MAP.md` regenerated to pick up the two new modules under the existing "Logging" category.
+- All 5 Phase 2 branches (GENERIC + GAP + LOGISTICAL + BEHAVIOURAL + TECHNICAL) still green; no regression on routing tests.
+
+### Live verification (handed off to user)
+
+Per the spec, the only manual verification needed is the form UI. Three scenarios to walk through `uv run python src/app.py`:
+
+1. **Form appears at turn 3.** Ask 3 questions in fresh session; after the 3rd assistant response, the contact-form row should appear at the bottom.
+2. **Submit works + form hides.** Fill in email (and optionally name/note), click Send. Form should hide; "Thanks — Alejandro will be in touch." confirmation appears. `data/logs/contacts.jsonl` should have a new record with the matching `session_id`.
+3. **New conversation resets.** Click "New conversation" — form should hide immediately (even mid-form-visible state); next session restarts the turn counter.
+
+### Design decisions
+
+- **`SessionState` as a mutable dataclass returned from callbacks.** Gradio's `gr.State` doesn't trigger UI updates on in-place mutation — the standard pattern is to return the (mutated) state object as part of the callback's return tuple. Mutating + returning the same instance works and is simpler than a fully immutable design.
+- **Form visibility derived from `should_show_contact_form()` rather than a separate "invitation_fired" latch.** The acceptance criterion says "fires exactly once at turn 3", but in UX terms what the user sees is "form is visible from turn 3 onwards until I submit." The visibility state is derivable from `turn_counter >= invitation_turn AND NOT contact_provided`; no separate latch needed. Simpler model, same observable behavior.
+- **Log `contact_offered` semantics = "form was visible during this turn"** (not "this is the first turn the form appeared"). Sentinel can derive first-offer if needed by looking at the first turn per session where `contact_offered=True`. The simpler semantic at the log layer keeps the Pipeline contract clean.
+- **`turn_index` semantic shift to 1-indexed** (after `state.record_turn()` runs at the START of the callback). Pre-#16 logs had 0-indexed turn_index (0, 1, 2, ...); post-#16 they're 1-indexed (1, 2, 3, ...). No deployed analysis depends on the indexing semantic; the change is simpler and matches the natural reading ("this is turn 1 of the conversation").
+- **No automated UI test for app.py wiring.** Acceptance criterion explicitly excludes this ("smoke test for state transitions — not a UI test"). The state-machine smoke test lives in `tests/test_session_state.py`; the UI integration is verified manually.
+- **No retry feedback or contact-form-related changes to rules.** The form is a pure UI affordance; it doesn't influence what the model says.
+
+### Outstanding
+
+- **Phase 2 complete.** All 5 branches wired + contact flow shipped + observability complete. No remaining Phase 2 work items.
+- **Next priority:** **Phase 3 / `#2`** (v4 eval baseline). Now properly unblocked — full deployable system available; rewrite `eval/run_eval.py` to call the routed `Pipeline.run()` (no guardrail per Session 9 decision); per-question `branch` + `classification_confidence` + `by_branch` aggregation; first v4 run on existing 149 questions; comparison against v3 baseline (MRR 0.868, accuracy 4.46) with caveats noted.
+- **R3 smoke-test** — full HUMAN_EVAL_QUESTIONS walk against the live 5-branch + contact-flow system. Worth doing alongside or after first v4 eval baseline so qualitative + quantitative signals align.
+- **Replace `data/readmes/digital_twin.md`** with Alejandro-authored content + resolve Source-link visibility (currently 404 — repo is private). Both release-blockers in `RELEASE_CHECKLIST.md::Portfolio / external`.
+
+---
+
 ## Session 24 (2026-05-03) — Issue #18 closed (TECHNICAL branch + ToolRegistry + ToolLoop + 24 distilled docs); Phase 2 branch surface complete
 
 **Status:** Issue [`#18`](https://github.com/AlejandroFuentePinero/digital-twin/issues/18) (TECHNICAL branch + tool loop with `fetch_project_readme`) closed in `<commit>`. Adds the fifth and final branch to `branches.REGISTRY`, completing Phase 2's branch surface (GENERIC + GAP + LOGISTICAL + BEHAVIOURAL + TECHNICAL all wired). Two new modules (`src/tools.py`, `src/tool_loop.py`); two new rules (`tool_rules`, `project_links`); 25 new behaviour tests (146 → 175 net during code work, then 175 → 177 with the bug-fix tests added during smoke-test); 24 distilled technical docs in `data/readmes/` totalling ~17k tokens (papers + AI projects + this Digital Twin self-reference); KB pruned 109 → 104 chunks (positioning.md transfer-prose deleted as Phase 1 sub-task). One bug surfaced + fixed live during smoke-test (`LIMITATIONS.md::R1` — guardrail blindness to tool-returned content); one rule-wording sharpening (TECHNICAL self-reference trigger) discovered + fixed in the second smoke-test pass. Three smoke-test probes (Q8.2 / Q8.2b / Q8.2c) all green post-fixes. Phase 3 (v4 eval) is now unblocked — full routed pipeline available for the rewrite.

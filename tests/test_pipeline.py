@@ -494,6 +494,47 @@ def test_technical_branch_per_attempt_tool_budget_resets_on_retry(real_composer,
     assert len(record["attempts"]) == 2
 
 
+def test_pipeline_threads_contact_state_into_log_record(real_composer, fake_chunks, tmp_path):
+    """Pipeline.run() accepts contact_offered + contact_provided kwargs and threads them into the log record.
+
+    Per #16: app.py owns per-session contact state (in gr.State); Pipeline doesn't track it
+    itself, but the InteractionRecord schema has the fields. Pipeline must accept them as
+    inputs and write them to the record so Sentinel can aggregate "fraction of turns where
+    contact was offered" / "fraction where it was provided" without reconstructing state.
+    """
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["GENERIC"], confidence=1.0))
+    generator = FakeGenerator(answers=["A"])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run(
+            "q", history=[], session_id="s1", turn_index=3,
+            contact_offered=True, contact_provided=False,
+        )
+
+    record = LogReader(log_path).read_all()[0]
+    assert record["contact_offered"] is True
+    assert record["contact_provided"] is False
+
+
+def test_pipeline_contact_state_defaults_to_false_for_existing_call_sites(real_composer, fake_chunks, tmp_path):
+    """Pipeline.run() called without contact kwargs preserves the existing False default — no break for non-app callers."""
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["GENERIC"], confidence=1.0))
+    generator = FakeGenerator(answers=["A"])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run("q", history=[], session_id="s1", turn_index=0)
+
+    record = LogReader(log_path).read_all()[0]
+    assert record["contact_offered"] is False
+    assert record["contact_provided"] is False
+
+
 def test_log_record_carries_full_schema_with_branch_classification_chunks_and_latencies(real_composer, fake_chunks, tmp_path):
     """Every required schema field appears in the log record and carries plausible values."""
     log_path = tmp_path / "interactions.jsonl"

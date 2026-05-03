@@ -59,6 +59,8 @@ class Pipeline:
         history: list[dict],
         session_id: str,
         turn_index: int,
+        contact_offered: bool = False,
+        contact_provided: bool = False,
     ) -> str:
         t_total = time.perf_counter()
 
@@ -210,8 +212,8 @@ class Pipeline:
                 "total": total_ms,
             },
             "knew_answer": knew_answer,
-            "contact_offered": False,
-            "contact_provided": False,
+            "contact_offered": contact_offered,
+            "contact_provided": contact_provided,
         })
 
         return final_answer if final_answer is not None else CANNED_REFUSAL

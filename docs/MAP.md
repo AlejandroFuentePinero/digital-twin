@@ -109,7 +109,9 @@ graph LR
 
   subgraph sg_logging["Logging"]
     direction TB
+    contact_log["contact_log.py"]:::logging
     interaction_log["interaction_log.py"]:::logging
+    session_state["session_state.py"]:::logging
   end
 
   subgraph sg_appui["App / UI"]
@@ -135,11 +137,13 @@ graph LR
   app --> branches
   app --> classifier
   app --> composer
+  app --> contact_log
   app --> generator
   app --> guardrail
   app --> interaction_log
   app --> pipeline
   app --> profile
+  app --> session_state
   app --> tools
   composer --> branches
   composer --> profile
@@ -188,6 +192,7 @@ graph LR
 | `branches.py` | Branch registry for classify-then-route orchestration (ADR-0003). |
 | `classifier.py` | Branch classifier (ADR-0003). |
 | `composer.py` | Prompt composer — assembles per-branch system prompts (ADR-0003). |
+| `contact_log.py` | Contact-form record schema + JSONL writer/reader (#16). |
 | `generator.py` | Generator — wraps the answer LLM call. |
 | `guardrail.py` | Guardrail — branch-aware quality evaluator (ADR-0003). |
 | `ingest.py` | Ingest the digital twin knowledge base into ChromaDB. |
@@ -198,6 +203,7 @@ graph LR
 | `retrieval.py` | Retrieval helpers — embedding, ChromaDB query, merge, rewrite, rerank, format. |
 | `rules.py` | Shared rule fragments composed into generator and guardrail system prompts. |
 | `sample_chunks.py` | Sample and inspect chunks from the ChromaDB knowledge base. |
+| `session_state.py` | Per-session state for #16's contact-flow. |
 | `system_map.py` | System map generator — walks src/ and emits docs/MAP.md. |
 | `tool_loop.py` | Generic bounded tool loop for the TECHNICAL branch (#18 / ADR-0003). |
 | `tools.py` | Tool registry for the TECHNICAL branch (ADR-0003 + #18). |

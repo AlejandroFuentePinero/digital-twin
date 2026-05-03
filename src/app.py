@@ -7,10 +7,18 @@ Wires the routed pipeline (classifier → branch → retrieval → composer →
 generator → guardrail → log) per ADR-0003. Pipeline + its collaborators are
 constructed once as a module-level singleton; per-conversation state lives in
 Gradio `gr.State` slots.
+
+Per #16: per-session `SessionState` (in `gr.State`) tracks turn count and
+contact-provided latch. A collapsible contact-form row appears at the
+configured invitation turn (default 3) and persists until the user submits;
+on submit, the form writes a `ContactRecord` to `data/logs/contacts.jsonl`
+joinable to the interaction log on `session_id`, and `contact_provided` latches
+True for the rest of the session.
 """
 
 import sys
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import gradio as gr
@@ -23,11 +31,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 from branches import REGISTRY
 from classifier import Classifier
 from composer import PromptComposer
+from contact_log import ContactRecord, ContactWriter
 from generator import Generator
 from guardrail import Guardrail
 from interaction_log import LogWriter
 from pipeline import Pipeline
 from profile import ProfileLoader
+from session_state import SessionState
 from tools import ToolRegistry, make_litellm_tool_callable
 
 MAX_HISTORY_TURNS = 10  # last N user+assistant pairs passed to the pipeline
@@ -52,39 +62,90 @@ _pipeline = Pipeline(
     tool_registry=_tool_registry,
     tool_model_callable=make_litellm_tool_callable(),
 )
+_contact_writer = ContactWriter()
 
 
 def respond(
     message: str,
     history: list[dict],
     session_id: str,
-    turn_count: int,
-) -> tuple[str, list[dict], int]:
-    """Called on every user submission. Threads turn_count through to the log."""
+    state: SessionState,
+):
+    """Called on every user submission. Increments turn counter, threads contact state into the pipeline, and updates the form visibility post-turn."""
+    state.record_turn()
     chat_history = [
         {"role": m["role"], "content": m["content"]}
         for m in history[-(MAX_HISTORY_TURNS * 2):]  # each turn = 1 user + 1 assistant msg
     ]
+    contact_offered = state.should_show_contact_form()
     reply = _pipeline.run(
         question=message,
         history=chat_history,
         session_id=session_id,
-        turn_index=turn_count,
+        turn_index=state.turn_counter,
+        contact_offered=contact_offered,
+        contact_provided=state.contact_provided,
     )
     history.append({"role": "user", "content": message})
     history.append({"role": "assistant", "content": reply})
-    return "", history, turn_count + 1
+    form_visible = gr.update(visible=state.should_show_contact_form())
+    return "", history, state, form_visible
 
 
-def new_session() -> tuple[list, str, int]:
-    """Reset conversation, fresh session ID, turn_count back to 0."""
-    return [], str(uuid.uuid4()), 0
+def submit_contact(
+    name: str,
+    email: str,
+    note: str,
+    session_id: str,
+    state: SessionState,
+):
+    """Form submit handler. Writes a ContactRecord (joinable to interactions.jsonl on session_id) and latches contact_provided=True so the form hides for the rest of the session."""
+    email_clean = (email or "").strip()
+    if not email_clean:
+        return (
+            gr.update(visible=True),
+            gr.update(value="⚠️ Please enter an email address.", visible=True),
+            state,
+        )
+    try:
+        record = ContactRecord(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            session_id=session_id,
+            turn_index=state.turn_counter,
+            name=(name or "").strip() or None,
+            email=email_clean,
+            note=(note or "").strip() or None,
+        )
+        _contact_writer.append(record)
+        state.mark_contact_provided()
+        return (
+            gr.update(visible=False),
+            gr.update(value="✅ Thanks — Alejandro will be in touch.", visible=True),
+            state,
+        )
+    except Exception as e:
+        return (
+            gr.update(visible=True),
+            gr.update(value=f"⚠️ Submission error: {e}", visible=True),
+            state,
+        )
+
+
+def new_session():
+    """Reset conversation, fresh session ID, fresh SessionState, hide contact form + status."""
+    return (
+        [],
+        str(uuid.uuid4()),
+        SessionState(),
+        gr.update(visible=False),
+        gr.update(visible=False),
+    )
 
 
 with gr.Blocks(title="Alejandro de la Fuente — Digital Twin", theme=gr.themes.Soft()) as demo:
     session_id = gr.State(str(uuid.uuid4()))
     history = gr.State([])
-    turn_count = gr.State(0)
+    state = gr.State(SessionState())
 
     gr.Markdown(
         "## Alejandro de la Fuente\n"
@@ -112,15 +173,41 @@ with gr.Blocks(title="Alejandro de la Fuente — Digital Twin", theme=gr.themes.
     with gr.Row():
         clear = gr.Button("New conversation", size="sm", variant="secondary")
 
+    # Contact form — hidden by default; becomes visible at the invitation turn
+    # (default 3) and persists until the user submits or starts a new session.
+    with gr.Group(visible=False) as contact_form:
+        gr.Markdown(
+            "**Want a follow-up?** Drop your details and Alejandro will get in touch directly."
+        )
+        contact_name = gr.Textbox(label="Name (optional)", scale=1)
+        contact_email = gr.Textbox(label="Email", placeholder="you@example.com", scale=1)
+        contact_note = gr.Textbox(
+            label="Anything you'd like to share? (optional)",
+            lines=3,
+            scale=1,
+        )
+        contact_submit = gr.Button("Send", variant="primary", size="sm")
+
+    contact_status = gr.Markdown(visible=False)
+
     msg.submit(
         respond,
-        inputs=[msg, history, session_id, turn_count],
-        outputs=[msg, history, turn_count],
+        inputs=[msg, history, session_id, state],
+        outputs=[msg, history, state, contact_form],
     ).then(
         lambda h: h, inputs=[history], outputs=[chatbot]
     )
 
-    clear.click(new_session, outputs=[history, session_id, turn_count]).then(
+    contact_submit.click(
+        submit_contact,
+        inputs=[contact_name, contact_email, contact_note, session_id, state],
+        outputs=[contact_form, contact_status, state],
+    )
+
+    clear.click(
+        new_session,
+        outputs=[history, session_id, state, contact_form, contact_status],
+    ).then(
         lambda h: h, inputs=[history], outputs=[chatbot]
     )
 
