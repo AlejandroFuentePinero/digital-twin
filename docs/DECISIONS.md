@@ -67,12 +67,17 @@
 - Multi-layer defense intact: guardrail caught 3 first-attempt fabrications + 1 multi-turn coherence breach across 27 R2 turns; all retries landed correct answers within the 3-attempt budget.
 - Mid-conversation routing flip GENERIC→GAP→GAP held across Q6.1→Q6.2→Q6.3 (same as R1).
 
-### Watch-items (carried forward into Session 22+)
+### Watch-items (lifted to standing register)
 
-1. **First-attempt fabrication rate.** ~11% today. Track across future smoke-tests. Action threshold: ≥6/27 first-attempt rejections in a round, or material monotonic rise. Right home: Sentinel.
-2. **MCP-acronym confab on Q2.5.** Two occurrences with active_learning loaded into retrieval but ignored on first pass. If a third round shows the same shape, investigate retrieval ranking + active-learning chunk visibility.
-3. **Multi-turn drill-down offer-then-can't-deliver.** Soften `CONCISE_DISCLOSURE` offer wording toward "happy to share what's documented on X" *next time the rule is touched* — not worth a standalone change today.
-4. **TECHNICAL classifier over-firing** carried over from Session 19. Same 7 turns mis-predicted in R2 as in R1. Belongs in #18's body when picked up.
+Cross-session standing concerns from this round have been promoted to [`docs/LIMITATIONS.md`](./LIMITATIONS.md), partially implementing [issue #20](https://github.com/AlejandroFuentePinero/digital-twin/issues/20). New entries:
+
+- **O1** — first-attempt fabrication rate (~11% on R2's stress-test sample; trip-wire ≥6/27 or monotonic rise across rounds; needs `attempts[*].rejection_reason` field for clean Sentinel tracking).
+- **O2** — TECHNICAL classifier over-firing on tool-name probes (filter-fallback masks today; becomes a real risk when [#18](https://github.com/AlejandroFuentePinero/digital-twin/issues/18) lands).
+- **O3** — MCP-acronym confab pattern (two occurrences; trip-wire is the third).
+- **O4** — multi-turn drill-down offer-then-can't-deliver (one occurrence; trip-wire is the second).
+- **O5** — classifier confidence variance on edge cases (handled by low-confidence override; logged for completeness).
+
+ADR-0003's predicted operational risks also lifted into LIMITATIONS.md as P1–P3, plus three architectural-choice limitations (P4–P6) called out for the first time. **Future-us reads `LIMITATIONS.md` first** when interpreting smoke-test results or planning new branches; session-specific watch-items in DECISIONS now cross-reference it rather than duplicate it.
 
 ### Outstanding
 
