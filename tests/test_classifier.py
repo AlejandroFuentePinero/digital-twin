@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from classifier import Classifier, ClassifierResult
+from classifier import SYSTEM_PROMPT, Classifier, ClassifierResult
 
 
 def _completion_returning(json_text: str):
@@ -49,6 +49,22 @@ def test_history_window_passes_only_last_two_turns_to_the_llm():
     assert "TURN-2-Q" in full_text and "TURN-2-A" in full_text
     # Older turns stripped — they would dilute the routing signal
     assert "TURN-0-Q" not in full_text and "TURN-1-Q" not in full_text
+
+
+def test_system_prompt_includes_digital_twin_self_reference_in_technical_definition():
+    """TECHNICAL definition must explicitly cover meta-questions about this chatbot itself.
+
+    Surfaced in Session 26 smoke-test: 'How does the Digital Twin classify questions?'
+    routed to GENERIC (not TECHNICAL), so the tool wasn't even available — model
+    answered from training-data knowledge with no grounding. Friction-lock pins both
+    the self-reference inclusion AND the example phrasing so future edits can't
+    regress without intentional confirmation.
+    """
+    body = SYSTEM_PROMPT.lower()
+    assert "digital twin chatbot itself" in body or "this digital twin chatbot itself" in body, \
+        "TECHNICAL definition must explicitly cover meta-questions about this chatbot"
+    assert "how does the digital twin classify questions" in body, \
+        "the canonical example probe (which mis-routed in Session 26) must be in the prompt as a positive case"
 
 
 def test_low_confidence_prediction_overrides_labels_to_generic():

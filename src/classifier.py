@@ -31,7 +31,10 @@ motivations, "tell me about a time when..."). Answers draw on stories authorised
 profile or politely deflect.
 - **TECHNICAL** — the visitor asks a deep technical question about Alejandro's projects, \
 methods, or code (architecture, modelling choices, implementation details, trade-offs in \
-a specific project). May trigger a tool call to fetch a project README.
+a specific project). **Includes meta-questions about this Digital Twin chatbot itself** — \
+how it works, how it classifies questions, how the routing/retrieval/guardrail/tool \
+layers operate (e.g. "how does the Digital Twin classify questions?", "how do you decide \
+what to answer?", "what model are you?"). May trigger a tool call to fetch a project README.
 - **GENERIC** — broad background questions (career arc, research summary, work experience, \
 education, what kind of roles he's looking for). The safe fallback when nothing more \
 specific fits.

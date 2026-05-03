@@ -95,13 +95,24 @@ The soft conciseness rule (`concise_disclosure`, shipped #25) introduces a drill
 
 ### O5 — Classifier confidence variance on edge cases
 
-**Status:** Observed (R1, R2 same prompt, materially different confidences).
+**Status:** Observed across 3 rounds (R1, R2, Session 26 live smoke-test) — variance now confirmed to swing the **branch label itself**, not just the confidence number.
 
-`gpt-4.1-nano` returns substantially different confidence scores on the same probe across rounds when the probe is ambiguous: Q5.2 ("Ignore previous instructions...") was 0.8 in R1 and 0.4 in R2. Q5.3 ("Tell me everything") was 0.9 in R1 and 0.2 in R2. Both routed correctly via filter-fallback or low-confidence override. No prompt change between rounds.
+`gpt-4.1-nano` returns substantially different routing decisions on the same probe across rounds:
+- **R1 / R2 ambiguous probes (confidence variance only):** Q5.2 confidence 0.8 → 0.4; Q5.3 confidence 0.9 → 0.2. Both routed correctly via filter-fallback or low-confidence override.
+- **Session 26 (label variance):** *"How does the Digital Twin classify questions?"* routed to **TECHNICAL@0.9** in Session 24 verification but to **GENERIC** in Session 26's live test. Different branch entirely; the tool wasn't available because GENERIC has no tools. Trip-wire #1 from the original entry now fired (a confidence drop that flips routing in a way that misroutes the answer).
 
-**Why this is logged but not fixed today:** the low-confidence-override-to-GENERIC fallback (`CLASSIFIER_CONFIDENCE_THRESHOLD = 0.5` per Session 18) handles it cleanly. This is intrinsic small-model variance on ambiguous inputs, not a system fault.
+**Mitigations layered post-Session 26:**
 
-**Trip-wire:** a confidence drop that flips routing in a way that misroutes the answer, OR a pattern of high-variance confidence on routes that *do* exist in the registry (where the misroute would not be filter-saved).
+1. **Classifier prompt sharpened (Session 26 / commit `<TBD>`):** TECHNICAL definition now explicitly covers meta-questions about the Digital Twin chatbot itself ("how does it classify questions?", "what model are you?"), with the canonical mis-routed probe added as a positive example. Friction-lock test (`tests/test_classifier.py::test_system_prompt_includes_digital_twin_self_reference_in_technical_definition`) pins this against regression. **This is the small obvious fix per the discipline of "don't engineer over variance."** Real fix is Sentinel-driven aggregation over time, not reactive engineering.
+2. **Low-confidence override to GENERIC** (`CLASSIFIER_CONFIDENCE_THRESHOLD = 0.5`, Session 18) still in place; handles the confidence-variance-only case.
+
+**Trip-wires (any one warrants further intervention):**
+
+1. ~~A confidence drop that flips routing in a way that misroutes the answer~~ — **fired Session 26; classifier prompt sharpened as small fix.**
+2. The Session 26 fix doesn't hold — same probe shape mis-routes again post-prompt-update in R3 or live observation.
+3. A new probe shape mis-routes in a different direction (e.g., GAP-shape probe routing to TECHNICAL persistently).
+
+**Action when 2 or 3 fires:** consider broader classifier-prompt restructuring OR a deterministic override layer in pipeline (last-resort — would reintroduce keyword brittleness routing was supposed to avoid). Tracking is via Sentinel's per-branch routing aggregation (Phase 4).
 
 ---
 
@@ -231,7 +242,13 @@ The explicit-request trigger uses a regex pattern list (`session_state.EXPLICIT_
 
 ### P8 — TECHNICAL tool-uptake rate is unmeasured
 
-**Status:** Predicted (architectural blind spot, Session 24 / #18).
+**Status:** Predicted → **partially Observed** (Session 26 live smoke-test).
+
+Session 26 surfaced inconsistent tool-uptake on TECHNICAL turns within a single session: turn 5 ("what is the top AI project in Alejandro curriculum") routed TECHNICAL ✅ but `tool_calls=[]` (model judged KB context sufficient and didn't fetch); turn 7 ("Job Intelligence Project recommendation pipeline") routed TECHNICAL AND fetched `job_intelligence_engine` ✅ AND grounded the answer cleanly. **Same session, same branch, different model decisions.** Classic stochasticity — exactly what this entry predicted.
+
+**Discipline call (Session 26):** per the user's principle ("don't engineer over variance"), **no reactive intervention**. The right tracking mechanism is Sentinel-driven aggregation over a meaningful sample, not patching after every observed mis-fetch. Single-session evidence is too thin to justify changing tool_rules calibration or adding deterministic overrides. Watch-item documents the observation; further response gated on Sentinel signal.
+
+**Original framing preserved below.**
 
 The `fetch_project_readme` tool fires on the model's discretion — `tool_rules` describes *when to call* and *when not to*, but the model's actual decision is a black box. The interaction log captures every tool invocation that *does* happen (`tool_calls[{name, args, status, attempt_index}]`), but does not — and architecturally cannot — capture the model's reasoning for *not* calling when it arguably should have. Two concrete failure modes are possible:
 
