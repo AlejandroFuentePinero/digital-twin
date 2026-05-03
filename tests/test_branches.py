@@ -134,6 +134,75 @@ def test_behavioural_deflection_rule_reaches_guardrail_too(fixture_profile):
     assert "fabricat" in judge_prompt.lower()
 
 
-def test_registry_has_generic_gap_logistical_and_behavioural_today():
-    """REGISTRY exposes GENERIC + GAP + LOGISTICAL + BEHAVIOURAL — adding a fifth branch without test update is intentional friction."""
-    assert set(REGISTRY.keys()) == {"GENERIC", "GAP", "LOGISTICAL", "BEHAVIOURAL"}
+def test_technical_branch_matches_locked_spec():
+    """REGISTRY['TECHNICAL'] loads identity + transfer_principles + active_learning, tool_rules + concise_disclosure rules, fetch_project_readme tool.
+
+    Per #18 / Session 24: TECHNICAL absorbs both shapes (deep project Q + tool-name probe).
+    `active_learning` Layer 1 grounding handles the latter via the section's own
+    "Never claim trained/familiar/shipped/hands-on for these keywords" framing — no
+    separate calibration_ladder rule needed (Q1 design call).
+    """
+    technical = REGISTRY["TECHNICAL"]
+    assert isinstance(technical, BranchSpec)
+    assert technical.name == "TECHNICAL"
+    assert technical.profile_sections == ["identity", "transfer_principles", "active_learning"]
+    assert technical.final_k == 6
+    assert technical.tools == ["fetch_project_readme"]
+    assert technical.branch_rules == ["tool_rules", "concise_disclosure"]
+
+
+def test_technical_branch_composer_loads_correct_sections_and_rules(fixture_profile):
+    """compose(['TECHNICAL']) reaches the prompt with identity + transfer_principles + active_learning + tool_rules.
+
+    All four content elements must be present so the model has: cross-branch identity,
+    research-to-AI bridges (transfer_principles), in-progress curriculum framing
+    (active_learning per O2 mitigation), and tool-call guidance (tool_rules).
+    """
+    composer = PromptComposer(fixture_profile, REGISTRY)
+    prompt = composer.compose(["TECHNICAL"], "generator")
+    assert "IDENTITY-MARKER" in prompt
+    assert "TRANSFER-MARKER" in prompt, "transfer_principles must reach the generator"
+    assert "ACTIVE-LEARNING-MARKER" in prompt, "active_learning grounds tool-name probes (O2 mitigation)"
+    # Distinctive tool_rules signals
+    assert "fetch_project_readme" in prompt, "tool_rules must name the tool"
+    # Cross-branch conciseness rule still applies
+    assert "Length and disclosure" in prompt
+    # Universal project_links rule applies
+    assert "Project links" in prompt, "project_links is universal — must reach every branch including TECHNICAL"
+
+
+def test_technical_branch_excludes_other_branch_sections(fixture_profile):
+    """TECHNICAL must not pull narrative_summary / gap_inventory / logistics / personal_stories.
+
+    Branch-shape leak guard: TECHNICAL is for project-deep Q + tool-name probes;
+    other branches' sections would either over-share narrative or shift framing
+    away from technical content.
+    """
+    composer = PromptComposer(fixture_profile, REGISTRY)
+    prompt = composer.compose(["TECHNICAL"], "generator")
+    assert "NARRATIVE-MARKER" not in prompt
+    assert "GAP-MARKER" not in prompt
+    assert "LOGISTICS-MARKER" not in prompt
+    assert "PERSONAL-STORIES-MARKER" not in prompt
+
+
+def test_technical_branch_does_not_load_calibration_ladder_or_deflection(fixture_profile):
+    """TECHNICAL relies on active_learning's own framing for calibration; deflection is BEHAVIOURAL-only.
+
+    Per Q1 design: trust the model to infer depth from active_learning section content
+    rather than wiring an explicit calibration_ladder rule. Deflection is BEHAVIOURAL-
+    specific (P7 in LIMITATIONS.md governs whether to extract a cross-branch variant later).
+    """
+    composer = PromptComposer(fixture_profile, REGISTRY)
+    prompt = composer.compose(["TECHNICAL"], "generator")
+    assert "Calibration ladder" not in prompt, "TECHNICAL does not load calibration_ladder; active_learning section's own framing handles tool-name probes"
+    assert "Personal stories" not in prompt, "deflection is BEHAVIOURAL-only per P7"
+
+
+def test_registry_has_all_five_branches_today():
+    """REGISTRY exposes GENERIC + GAP + LOGISTICAL + BEHAVIOURAL + TECHNICAL — adding a sixth branch without test update is intentional friction.
+
+    Phase 2 branch surface complete with #18; further branches would need a new acceptance
+    criterion + spec discussion (no candidates today).
+    """
+    assert set(REGISTRY.keys()) == {"GENERIC", "GAP", "LOGISTICAL", "BEHAVIOURAL", "TECHNICAL"}

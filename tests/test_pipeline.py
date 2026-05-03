@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 import pytest
@@ -10,6 +11,8 @@ from interaction_log import LogReader, LogWriter
 from pipeline import CANNED_REFUSAL, MAX_ATTEMPTS, Pipeline
 from profile import ProfileLoader
 from retrieval import Chunk
+from tool_loop import ModelResponse, ToolCall
+from tools import ToolRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +54,50 @@ class FakeGuardrail:
         return self.evaluations.pop(0)
 
 
+class FakeToolModelCallable:
+    """Returns scripted ModelResponses; records every call. Used for the TECHNICAL/ToolLoop path."""
+
+    def __init__(self, responses: list[ModelResponse]):
+        self.responses = list(responses)
+        self.calls: list[dict] = []
+
+    def __call__(self, messages, tools):
+        self.calls.append({"messages": list(messages), "tools": list(tools)})
+        if not self.responses:
+            raise RuntimeError("FakeToolModelCallable: no scripted responses left")
+        return self.responses.pop(0)
+
+
+@pytest.fixture
+def fake_tool_registry(tmp_path):
+    """Tiny fixture registry with two project READMEs."""
+    (tmp_path / "ai_jie.md").write_text(
+        "# AI-JIE\n\n**Source:** https://github.com/example/ai-jie\n\nAI-JIE README BODY."
+    )
+    (tmp_path / "expert_knowledge_worker.md").write_text(
+        "# Expert Knowledge Worker\n\n**Source:** https://github.com/example/ekw\n\nEKW README BODY."
+    )
+    registry = {
+        "ai_jie": {
+            "path": "ai_jie.md",
+            "title": "AI-JIE",
+            "summary": "Structured extraction pipeline.",
+            "kb_cross_reference": "projects_ai_flagship.md",
+            "link": "https://github.com/example/ai-jie",
+        },
+        "expert_knowledge_worker": {
+            "path": "expert_knowledge_worker.md",
+            "title": "Expert Knowledge Worker",
+            "summary": "RAG chatbot.",
+            "kb_cross_reference": "projects_ai_flagship.md",
+            "link": "https://github.com/example/ekw",
+        },
+    }
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(json.dumps(registry))
+    return ToolRegistry(registry_path)
+
+
 @pytest.fixture
 def real_composer(tmp_path):
     """A real PromptComposer wired to a minimal profile fixture covering every section any registered branch loads."""
@@ -75,13 +122,23 @@ def fake_chunks():
     ]
 
 
-def _build_pipeline(real_composer, classifier, generator, guardrail, log_path):
+def _build_pipeline(
+    real_composer,
+    classifier,
+    generator,
+    guardrail,
+    log_path,
+    tool_registry=None,
+    tool_model_callable=None,
+):
     return Pipeline(
         classifier=classifier,
         composer=real_composer,
         generator=generator,
         guardrail=guardrail,
         log_writer=LogWriter(log_path),
+        tool_registry=tool_registry,
+        tool_model_callable=tool_model_callable,
     )
 
 
@@ -189,9 +246,9 @@ def test_gap_classification_routes_to_gap_branch_with_calibration_ladder_and_gap
 
 
 def test_pipeline_falls_back_to_generic_when_classifier_predicts_unknown_branch(real_composer, fake_chunks, tmp_path):
-    """Classifier predicts a label not yet in REGISTRY (e.g. TECHNICAL before #18 lands) — pipeline falls back to GENERIC for safety."""
+    """Classifier predicts a label not in REGISTRY (e.g. a future branch) — pipeline falls back to GENERIC for safety."""
     log_path = tmp_path / "interactions.jsonl"
-    classifier = FakeClassifier(ClassifierResult(labels=["TECHNICAL"], confidence=0.9))
+    classifier = FakeClassifier(ClassifierResult(labels=["UNKNOWN_FUTURE_BRANCH"], confidence=0.9))
     generator = FakeGenerator(answers=["A"])
     guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
 
@@ -206,7 +263,7 @@ def test_pipeline_falls_back_to_generic_when_classifier_predicts_unknown_branch(
 def test_pipeline_filters_unknown_labels_and_keeps_known_ones(real_composer, fake_chunks, tmp_path):
     """Multi-label classifier output mixing known + unknown branches — unknown filtered, known kept; primary is the first surviving label."""
     log_path = tmp_path / "interactions.jsonl"
-    classifier = FakeClassifier(ClassifierResult(labels=["TECHNICAL", "GAP"], confidence=0.9))
+    classifier = FakeClassifier(ClassifierResult(labels=["UNKNOWN_FUTURE_BRANCH", "GAP"], confidence=0.9))
     generator = FakeGenerator(answers=["A"])
     guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
 
@@ -215,13 +272,13 @@ def test_pipeline_filters_unknown_labels_and_keeps_known_ones(real_composer, fak
         pipeline.run("q", history=[], session_id="s1", turn_index=0)
 
     record = LogReader(log_path).read_all()[0]
-    assert record["branch"] == "GAP", "TECHNICAL filtered (unknown today); GAP becomes primary"
+    assert record["branch"] == "GAP", "UNKNOWN_FUTURE_BRANCH filtered (not in REGISTRY); GAP becomes primary"
 
 
 def test_pipeline_logs_raw_classifier_labels_distinct_from_used_branch(real_composer, fake_chunks, tmp_path):
     """The log carries `classifier_labels` (raw) alongside `branch` (used) so misroute patterns stay observable for the Sentinel."""
     log_path = tmp_path / "interactions.jsonl"
-    classifier = FakeClassifier(ClassifierResult(labels=["TECHNICAL", "GAP"], confidence=0.9))
+    classifier = FakeClassifier(ClassifierResult(labels=["UNKNOWN_FUTURE_BRANCH", "GAP"], confidence=0.9))
     generator = FakeGenerator(answers=["A"])
     guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
 
@@ -230,8 +287,8 @@ def test_pipeline_logs_raw_classifier_labels_distinct_from_used_branch(real_comp
         pipeline.run("q", history=[], session_id="s1", turn_index=0)
 
     record = LogReader(log_path).read_all()[0]
-    assert record["classifier_labels"] == ["TECHNICAL", "GAP"], "raw classifier output preserved for observability"
-    assert record["branch"] == "GAP"
+    assert record["classifier_labels"] == ["UNKNOWN_FUTURE_BRANCH", "GAP"], "raw classifier output preserved for observability"
+    assert record["branch"] == "GAP", "unknown label filtered, GAP becomes primary"
 
 
 def test_logistical_classification_routes_to_logistical_branch_with_logistics_section(real_composer, fake_chunks, tmp_path):
@@ -284,6 +341,114 @@ def test_behavioural_classification_routes_to_behavioural_branch_with_personal_s
     record = LogReader(log_path).read_all()[0]
     assert record["branch"] == "BEHAVIOURAL"
     assert record["classifier_labels"] == ["BEHAVIOURAL"]
+
+
+def test_technical_classification_routes_to_technical_branch_with_transfer_principles(real_composer, fake_chunks, fake_tool_registry, tmp_path):
+    """End-to-end: classifier predicts TECHNICAL → ToolLoop path → transfer_principles + tool_rules reach the system prompt.
+
+    Per #18. The model returns text directly (no tool call) for this happy-path case;
+    the tool-execution paths are exercised in subsequent tests.
+    """
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["TECHNICAL"], confidence=0.9))
+    generator = FakeGenerator(answers=["unused — TECHNICAL uses ToolLoop"])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+    tool_model = FakeToolModelCallable([
+        ModelResponse(content="answer about Expert Knowledge Worker", tool_calls=[]),
+    ])
+
+    pipeline = _build_pipeline(
+        real_composer, classifier, generator, guardrail, log_path,
+        tool_registry=fake_tool_registry, tool_model_callable=tool_model,
+    )
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        out = pipeline.run("How does EKW work?", history=[], session_id="s1", turn_index=0)
+
+    assert out == "answer about Expert Knowledge Worker"
+    # Generator NOT called — ToolLoop path took over for TECHNICAL branch
+    assert generator.calls == [], "TECHNICAL branch must use ToolLoop, not Generator"
+    # ToolLoop's system prompt carries TECHNICAL's signals
+    sys_msg = tool_model.calls[0]["messages"][0]
+    assert sys_msg["role"] == "system"
+    assert "TRANSFER body" in sys_msg["content"], "transfer_principles must reach the tool-loop system prompt"
+    assert "fetch_project_readme" in sys_msg["content"], "tool_rules names the tool — must reach the prompt"
+    # Tool schemas passed to model_callable include the project enum
+    schemas = tool_model.calls[0]["tools"]
+    assert len(schemas) == 1
+    assert schemas[0]["function"]["name"] == "fetch_project_readme"
+    enum = schemas[0]["function"]["parameters"]["properties"]["project"]["enum"]
+    assert "ai_jie" in enum and "expert_knowledge_worker" in enum
+    record = LogReader(log_path).read_all()[0]
+    assert record["branch"] == "TECHNICAL"
+    assert record["tool_calls"] == [], "no tool call invoked on this happy-path turn"
+
+
+def test_technical_branch_records_tool_calls_in_log_when_model_invokes_tool(real_composer, fake_chunks, fake_tool_registry, tmp_path):
+    """Model issues a tool_call → handler fetches the README → tool_calls log captures {name, args, status}."""
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["TECHNICAL"], confidence=0.9))
+    generator = FakeGenerator(answers=[])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+    tool_model = FakeToolModelCallable([
+        ModelResponse(
+            content=None,
+            tool_calls=[ToolCall(id="c1", name="fetch_project_readme", arguments={"project": "ai_jie"})],
+        ),
+        ModelResponse(content="grounded answer about AI-JIE", tool_calls=[]),
+    ])
+
+    pipeline = _build_pipeline(
+        real_composer, classifier, generator, guardrail, log_path,
+        tool_registry=fake_tool_registry, tool_model_callable=tool_model,
+    )
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        out = pipeline.run("Tell me about AI-JIE's chain-of-thought scaffolding.", history=[], session_id="s1", turn_index=0)
+
+    assert out == "grounded answer about AI-JIE"
+    record = LogReader(log_path).read_all()[0]
+    assert record["branch"] == "TECHNICAL"
+    assert record["tool_calls"] == [
+        {"name": "fetch_project_readme", "args": {"project": "ai_jie"}, "status": "success"}
+    ]
+    # The tool result reached the second model call
+    second_messages = tool_model.calls[1]["messages"]
+    tool_result_msgs = [m for m in second_messages if m.get("role") == "tool"]
+    assert tool_result_msgs and "AI-JIE README BODY" in tool_result_msgs[0]["content"]
+
+
+def test_technical_branch_per_attempt_tool_budget_resets_on_retry(real_composer, fake_chunks, fake_tool_registry, tmp_path):
+    """Per Q5: each retry attempt gets its own ToolLoop budget. Tool calls accumulate across attempts in the log."""
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["TECHNICAL"], confidence=0.9))
+    generator = FakeGenerator(answers=[])
+    guardrail = FakeGuardrail(evaluations=[
+        Evaluation(is_acceptable=False, feedback="not specific enough"),
+        Evaluation(is_acceptable=True, feedback="ok"),
+    ])
+    # Attempt 1: model calls tool, then text. Attempt 2: model calls tool, then text.
+    tool_model = FakeToolModelCallable([
+        ModelResponse(content=None, tool_calls=[ToolCall(id="c1", name="fetch_project_readme", arguments={"project": "ai_jie"})]),
+        ModelResponse(content="first attempt answer", tool_calls=[]),
+        ModelResponse(content=None, tool_calls=[ToolCall(id="c2", name="fetch_project_readme", arguments={"project": "expert_knowledge_worker"})]),
+        ModelResponse(content="second attempt answer", tool_calls=[]),
+    ])
+
+    pipeline = _build_pipeline(
+        real_composer, classifier, generator, guardrail, log_path,
+        tool_registry=fake_tool_registry, tool_model_callable=tool_model,
+    )
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        out = pipeline.run("Q", history=[], session_id="s1", turn_index=0)
+
+    assert out == "second attempt answer"
+    record = LogReader(log_path).read_all()[0]
+    # Both attempts' tool calls accumulate in log
+    assert record["tool_calls"] == [
+        {"name": "fetch_project_readme", "args": {"project": "ai_jie"}, "status": "success"},
+        {"name": "fetch_project_readme", "args": {"project": "expert_knowledge_worker"}, "status": "success"},
+    ]
+    # Two attempts in attempts[]
+    assert len(record["attempts"]) == 2
 
 
 def test_log_record_carries_full_schema_with_branch_classification_chunks_and_latencies(real_composer, fake_chunks, tmp_path):

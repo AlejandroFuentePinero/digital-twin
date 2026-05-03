@@ -12,15 +12,18 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
+from typing import Callable
 
+import tool_loop
 from branches import REGISTRY
 from classifier import Classifier
 from composer import PromptComposer
-from generator import Generator
+from generator import Generator, wrap_with_retry_feedback
 from guardrail import Guardrail
 from interaction_log import LogWriter
 from retrieval import fetch_context, format_context
 from rules import GAP_PHRASE
+from tools import ToolRegistry, build_fetch_project_readme_tool
 
 MAX_ATTEMPTS = 3
 CANNED_REFUSAL = (
@@ -37,6 +40,8 @@ class Pipeline:
         generator: Generator,
         guardrail: Guardrail,
         log_writer: LogWriter,
+        tool_registry: ToolRegistry | None = None,
+        tool_model_callable: Callable | None = None,
         registry: dict = REGISTRY,
     ):
         self._classifier = classifier
@@ -44,6 +49,8 @@ class Pipeline:
         self._generator = generator
         self._guardrail = guardrail
         self._log_writer = log_writer
+        self._tool_registry = tool_registry
+        self._tool_model_callable = tool_model_callable
         self._registry = registry
 
     def run(
@@ -77,6 +84,19 @@ class Pipeline:
         sys_prompt_judge = self._composer.compose(branches, "guardrail", retrieved_context=context)
 
         # 4. Generate + evaluate, retry loop
+        # For branches with tools (today: TECHNICAL), generation goes through ToolLoop
+        # rather than Generator. Per Q5: each retry attempt gets its own tool budget;
+        # tool_calls accumulate across attempts in the log.
+        use_tools = (
+            bool(branch_spec.tools)
+            and self._tool_registry is not None
+            and self._tool_model_callable is not None
+        )
+        tool_calls_log: list[dict] = []
+
+        def _on_tool_call(name: str, args: dict, status: str) -> None:
+            tool_calls_log.append({"name": name, "args": args, "status": status})
+
         attempts: list[dict] = []
         previous_attempt: dict | None = None
         gen_total_ms = 0
@@ -86,7 +106,21 @@ class Pipeline:
 
         for _ in range(MAX_ATTEMPTS):
             t = time.perf_counter()
-            answer = self._generator.generate(sys_prompt_gen, history, question, previous_attempt)
+            if use_tools:
+                wrapped = wrap_with_retry_feedback(sys_prompt_gen, previous_attempt)
+                messages = (
+                    [{"role": "system", "content": wrapped}]
+                    + history
+                    + [{"role": "user", "content": question}]
+                )
+                tool_specs = [
+                    build_fetch_project_readme_tool(self._tool_registry, on_call=_on_tool_call)
+                    for tool_name in branch_spec.tools
+                    if tool_name == "fetch_project_readme"
+                ]
+                answer = tool_loop.loop(self._tool_model_callable, messages, tool_specs)
+            else:
+                answer = self._generator.generate(sys_prompt_gen, history, question, previous_attempt)
             gen_total_ms += int((time.perf_counter() - t) * 1000)
             last_answer = answer
 
@@ -132,7 +166,7 @@ class Pipeline:
                 }
                 for c in chunks
             ],
-            "tool_calls": [],
+            "tool_calls": tool_calls_log,
             "latency_ms": {
                 "classifier": classifier_ms,
                 "retrieval": retrieval_ms,

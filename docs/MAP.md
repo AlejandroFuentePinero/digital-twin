@@ -20,7 +20,8 @@ How a user question becomes a response — branch routing, retry loop, side effe
 %% auto-generated module graph).
 %% Colour conventions: orange = LLM call, green = pure transform,
 %% yellow = decision, pink = side effect, red = canned refusal,
-%% dashed grey = future / not yet wired tool.
+%% cyan = model-callable tool (TECHNICAL branch),
+%% dashed grey = future / not yet wired.
 flowchart TD
   classDef io fill:#fbbf24,stroke:#92400e,color:#1f2937,stroke-width:2px
   classDef llm fill:#f59e0b,stroke:#b45309,color:#ffffff,stroke-width:2px
@@ -28,6 +29,7 @@ flowchart TD
   classDef pure fill:#10b981,stroke:#047857,color:#ffffff,stroke-width:2px
   classDef sideEffect fill:#ec4899,stroke:#be185d,color:#ffffff,stroke-width:2px
   classDef refusal fill:#ef4444,stroke:#b91c1c,color:#ffffff,stroke-width:2px
+  classDef tool fill:#06b6d4,stroke:#0e7490,color:#ffffff,stroke-width:2px
   classDef future fill:#cbd5e1,stroke:#64748b,color:#1f2937,stroke-width:2px,stroke-dasharray:5 4
 
   USER([User question + history]):::io
@@ -43,8 +45,8 @@ flowchart TD
   ROUTE --> RETR["Retrieval — fetch_context<br/>ChromaDB top-K<br/>K = branch.final_k"]:::pure
   RETR --> COMP["PromptComposer<br/>UNIVERSAL rules + branch_rules<br/>+ profile sections (incl. active_learning for GAP)<br/>+ retrieved context"]:::pure
   COMP --> GEN["Generator — gpt-4.1<br/>system + history + question"]:::llm
-  GEN -.->|"TECHNICAL only<br/>future #18"| TOOL["fetch_project_readme<br/>tool loop<br/>(README into next turn)"]:::future
-  TOOL -.-> GEN
+  GEN -->|"TECHNICAL branch only<br/>ToolLoop, MAX_TOOL_CALLS = 3<br/>per attempt"| TOOL["fetch_project_readme<br/>distilled README<br/>from data/readmes/"]:::tool
+  TOOL --> GEN
   GEN --> JUDGE["Guardrail — Claude Sonnet 4.6<br/>same composed prompt + answer<br/>distinct model family"]:::llm
   JUDGE --> ACCEPT{"is_acceptable?"}:::decision
   ACCEPT -->|yes| LOG["InteractionLog append (JSONL)<br/>branch, classifier_labels, attempts,<br/>retrieved_chunks, latency_ms"]:::sideEffect
@@ -64,6 +66,7 @@ graph LR
   classDef llm fill:#f59e0b,stroke:#b45309,color:#ffffff,stroke-width:2px
   classDef retrieval fill:#10b981,stroke:#047857,color:#ffffff,stroke-width:2px
   classDef pipeline fill:#ef4444,stroke:#b91c1c,color:#ffffff,stroke-width:2px
+  classDef tools fill:#06b6d4,stroke:#0e7490,color:#ffffff,stroke-width:2px
   classDef logging fill:#ec4899,stroke:#be185d,color:#ffffff,stroke-width:2px
   classDef appui fill:#3b82f6,stroke:#1d4ed8,color:#ffffff,stroke-width:2px
   classDef legacy fill:#94a3b8,stroke:#475569,color:#ffffff,stroke-width:2px,stroke-dasharray:5 4
@@ -95,6 +98,12 @@ graph LR
   subgraph sg_pipeline["Pipeline"]
     direction TB
     pipeline["pipeline.py"]:::pipeline
+  end
+
+  subgraph sg_tools["Tools"]
+    direction TB
+    tool_loop["tool_loop.py"]:::tools
+    tools["tools.py"]:::tools
   end
 
   subgraph sg_logging["Logging"]
@@ -134,6 +143,7 @@ graph LR
   composer --> profile
   composer --> rules
   guardrail --> rules
+  pipeline --> tool_loop
   pipeline --> branches
   pipeline --> classifier
   pipeline --> composer
@@ -142,6 +152,8 @@ graph LR
   pipeline --> interaction_log
   pipeline --> retrieval
   pipeline --> rules
+  pipeline --> tools
+  tools --> tool_loop
   app --> ext_Gradio__UI_
   classifier --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   generator --> ext_OpenAI___Anthropic_API__via_LiteLLM_
@@ -153,11 +165,13 @@ graph LR
   retrieval --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   retrieval --> ext_OpenAI_API
   sample_chunks --> ext_ChromaDB
+  tools --> ext_OpenAI___Anthropic_API__via_LiteLLM_
 
   style sg_frame fill:#eef2ff,stroke:#a5b4fc,stroke-width:1.5px,color:#4338ca
   style sg_llm fill:#fef3c7,stroke:#fcd34d,stroke-width:1.5px,color:#b45309
   style sg_retrieval fill:#d1fae5,stroke:#6ee7b7,stroke-width:1.5px,color:#047857
   style sg_pipeline fill:#fee2e2,stroke:#fca5a5,stroke-width:1.5px,color:#b91c1c
+  style sg_tools fill:#cffafe,stroke:#67e8f9,stroke-width:1.5px,color:#0e7490
   style sg_logging fill:#fce7f3,stroke:#f9a8d4,stroke-width:1.5px,color:#be185d
   style sg_appui fill:#dbeafe,stroke:#93c5fd,stroke-width:1.5px,color:#1d4ed8
   style sg_tooling fill:#ede9fe,stroke:#c4b5fd,stroke-width:1.5px,color:#6d28d9
@@ -183,3 +197,5 @@ graph LR
 | `rules.py` | Shared rule fragments composed into generator and guardrail system prompts. |
 | `sample_chunks.py` | Sample and inspect chunks from the ChromaDB knowledge base. |
 | `system_map.py` | System map generator — walks src/ and emits docs/MAP.md. |
+| `tool_loop.py` | Generic bounded tool loop for the TECHNICAL branch (#18 / ADR-0003). |
+| `tools.py` | Tool registry for the TECHNICAL branch (ADR-0003 + #18). |

@@ -1,9 +1,10 @@
 """Branch registry for classify-then-route orchestration (ADR-0003).
 
 Each `BranchSpec` declares which `profile.md` sections to load, the retrieval
-`FINAL_K`, the model-callable tools, and the branch-specific rule keys (resolved
-later against `rules.RULES`). Today `GENERIC`, `GAP`, `LOGISTICAL`, and
-`BEHAVIOURAL` are wired — `TECHNICAL` (#18) lands in a subsequent slice.
+`FINAL_K`, the model-callable tools (resolved against `tools.ToolRegistry`
+keys), and the branch-specific rule keys (resolved against `rules.RULES`).
+All five Phase 2 branches are wired: `GENERIC`, `GAP`, `LOGISTICAL`,
+`BEHAVIOURAL`, `TECHNICAL`.
 """
 
 from pydantic import BaseModel
@@ -45,5 +46,12 @@ REGISTRY: dict[str, BranchSpec] = {
         final_k=6,
         tools=[],
         branch_rules=["deflection", "concise_disclosure"],
+    ),
+    "TECHNICAL": BranchSpec(
+        name="TECHNICAL",
+        profile_sections=["identity", "transfer_principles", "active_learning"],
+        final_k=6,
+        tools=["fetch_project_readme"],
+        branch_rules=["tool_rules", "concise_disclosure"],
     ),
 }

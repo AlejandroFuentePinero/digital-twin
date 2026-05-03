@@ -7,7 +7,8 @@
 %% auto-generated module graph).
 %% Colour conventions: orange = LLM call, green = pure transform,
 %% yellow = decision, pink = side effect, red = canned refusal,
-%% dashed grey = future / not yet wired tool.
+%% cyan = model-callable tool (TECHNICAL branch),
+%% dashed grey = future / not yet wired.
 flowchart TD
   classDef io fill:#fbbf24,stroke:#92400e,color:#1f2937,stroke-width:2px
   classDef llm fill:#f59e0b,stroke:#b45309,color:#ffffff,stroke-width:2px
@@ -15,6 +16,7 @@ flowchart TD
   classDef pure fill:#10b981,stroke:#047857,color:#ffffff,stroke-width:2px
   classDef sideEffect fill:#ec4899,stroke:#be185d,color:#ffffff,stroke-width:2px
   classDef refusal fill:#ef4444,stroke:#b91c1c,color:#ffffff,stroke-width:2px
+  classDef tool fill:#06b6d4,stroke:#0e7490,color:#ffffff,stroke-width:2px
   classDef future fill:#cbd5e1,stroke:#64748b,color:#1f2937,stroke-width:2px,stroke-dasharray:5 4
 
   USER([User question + history]):::io
@@ -30,8 +32,8 @@ flowchart TD
   ROUTE --> RETR["Retrieval — fetch_context<br/>ChromaDB top-K<br/>K = branch.final_k"]:::pure
   RETR --> COMP["PromptComposer<br/>UNIVERSAL rules + branch_rules<br/>+ profile sections (incl. active_learning for GAP)<br/>+ retrieved context"]:::pure
   COMP --> GEN["Generator — gpt-4.1<br/>system + history + question"]:::llm
-  GEN -.->|"TECHNICAL only<br/>future #18"| TOOL["fetch_project_readme<br/>tool loop<br/>(README into next turn)"]:::future
-  TOOL -.-> GEN
+  GEN -->|"TECHNICAL branch only<br/>ToolLoop, MAX_TOOL_CALLS = 3<br/>per attempt"| TOOL["fetch_project_readme<br/>distilled README<br/>from data/readmes/"]:::tool
+  TOOL --> GEN
   GEN --> JUDGE["Guardrail — Claude Sonnet 4.6<br/>same composed prompt + answer<br/>distinct model family"]:::llm
   JUDGE --> ACCEPT{"is_acceptable?"}:::decision
   ACCEPT -->|yes| LOG["InteractionLog append (JSONL)<br/>branch, classifier_labels, attempts,<br/>retrieved_chunks, latency_ms"]:::sideEffect
