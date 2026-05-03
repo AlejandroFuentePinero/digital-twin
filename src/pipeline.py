@@ -93,9 +93,18 @@ class Pipeline:
             and self._tool_model_callable is not None
         )
         tool_calls_log: list[dict] = []
+        # Mutable index so the callback closure can stamp each tool call with the
+        # attempt that triggered it — lets per-attempt debugging trace which retry
+        # invoked which tool, separately from the per-attempt accumulation in attempts[].
+        current_attempt_index = [0]
 
         def _on_tool_call(name: str, args: dict, status: str) -> None:
-            tool_calls_log.append({"name": name, "args": args, "status": status})
+            tool_calls_log.append({
+                "name": name,
+                "args": args,
+                "status": status,
+                "attempt_index": current_attempt_index[0],
+            })
 
         attempts: list[dict] = []
         previous_attempt: dict | None = None
@@ -104,7 +113,8 @@ class Pipeline:
         final_answer: str | None = None
         last_answer: str | None = None
 
-        for _ in range(MAX_ATTEMPTS):
+        for attempt_idx in range(MAX_ATTEMPTS):
+            current_attempt_index[0] = attempt_idx
             t = time.perf_counter()
             if use_tools:
                 wrapped = wrap_with_retry_feedback(sys_prompt_gen, previous_attempt)

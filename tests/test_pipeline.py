@@ -408,7 +408,7 @@ def test_technical_branch_records_tool_calls_in_log_when_model_invokes_tool(real
     record = LogReader(log_path).read_all()[0]
     assert record["branch"] == "TECHNICAL"
     assert record["tool_calls"] == [
-        {"name": "fetch_project_readme", "args": {"project": "ai_jie"}, "status": "success"}
+        {"name": "fetch_project_readme", "args": {"project": "ai_jie"}, "status": "success", "attempt_index": 0}
     ]
     # The tool result reached the second model call
     second_messages = tool_model.calls[1]["messages"]
@@ -442,10 +442,10 @@ def test_technical_branch_per_attempt_tool_budget_resets_on_retry(real_composer,
 
     assert out == "second attempt answer"
     record = LogReader(log_path).read_all()[0]
-    # Both attempts' tool calls accumulate in log
+    # Both attempts' tool calls accumulate in log; attempt_index attributes each call to its retry
     assert record["tool_calls"] == [
-        {"name": "fetch_project_readme", "args": {"project": "ai_jie"}, "status": "success"},
-        {"name": "fetch_project_readme", "args": {"project": "expert_knowledge_worker"}, "status": "success"},
+        {"name": "fetch_project_readme", "args": {"project": "ai_jie"}, "status": "success", "attempt_index": 0},
+        {"name": "fetch_project_readme", "args": {"project": "expert_knowledge_worker"}, "status": "success", "attempt_index": 1},
     ]
     # Two attempts in attempts[]
     assert len(record["attempts"]) == 2

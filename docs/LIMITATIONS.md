@@ -199,6 +199,36 @@ The `deflection` rule is registered in `branches.REGISTRY` only for `BEHAVIOURAL
 
 ---
 
+### P8 — TECHNICAL tool-uptake rate is unmeasured
+
+**Status:** Predicted (architectural blind spot, Session 24 / #18).
+
+The `fetch_project_readme` tool fires on the model's discretion — `tool_rules` describes *when to call* and *when not to*, but the model's actual decision is a black box. The interaction log captures every tool invocation that *does* happen (`tool_calls[{name, args, status, attempt_index}]`), but does not — and architecturally cannot — capture the model's reasoning for *not* calling when it arguably should have. Two concrete failure modes are possible:
+
+1. **False negatives:** model routes to TECHNICAL on a project-deep question, judges the KB context sufficient, doesn't call the tool, and produces a shallower-than-warranted answer that the guardrail accepts. Log shows `branch=TECHNICAL, tool_calls=[]`; the answer reads OK in isolation but a tool fetch would have produced a materially better one.
+2. **False positives:** model calls the tool on a question that didn't need it (e.g., a general "tell me about your projects"), bloating the prompt with a 1–2k-token README the model then half-uses. Log shows `tool_calls=[...]` but the tool result didn't move the answer.
+
+**Why this is logged but not fixed today:**
+
+- The wiring is unit-tested (`test_technical_classification_routes_to_technical_branch_with_transfer_principles`, `test_technical_branch_records_tool_calls_in_log_when_model_invokes_tool`) — *if* the model calls the tool, the system handles + logs correctly. The model's *decision* is what we can't unit-test.
+- Per project policy (TESTING.md), no LLM API calls in pytest. Behavioural verification of "does the model call when appropriate" lives in the live smoke-test runbook, not unit tests.
+
+**Trip-wires (any one promotes this to Observed):**
+
+1. Live smoke-test (issue #18 task #24, or any future R3 round) surfaces a TECHNICAL turn where the model demonstrably should have called the tool and didn't, AND the answer is materially weaker for it.
+2. Aggregate uptake rate over time (Sentinel, Phase 4) shows TECHNICAL turns calling the tool at a rate that doesn't match the question shape (e.g., consistently 0% when realistic question mix should be 40-60%).
+3. Inverse: model calls the tool on >70% of TECHNICAL turns including general "tell me about your projects" shapes — false-positive over-firing.
+
+**Action when a trip-wire fires:**
+
+- For false negatives: tighten `tool_rules`'s "When to call" clause with sharper triggers, OR add explicit affirmative cues like "if the visitor names a specific project, default to fetching unless the question is unambiguously general."
+- For false positives: tighten "When not to call" with the offending pattern; add an explicit example of the false-positive shape.
+- For aggregate misalignment without a clear shape signal: add an LLM-as-judge pass over `(question, branch, tool_calls, answer)` to label each turn as "appropriate / under-called / over-called" and surface the breakdown in Sentinel.
+
+**What would help observe this cleanly:** a Sentinel panel showing `branch == TECHNICAL` turn count vs `len(tool_calls) > 0` count, broken down by question shape (project-named vs general). The data is already in the log; surfacing requires Sentinel work in Phase 4.
+
+---
+
 ## Resolved
 
 *(Empty. Entries graduate to this section with a fix-commit pointer when their trip-wire conditions are addressed.)*
