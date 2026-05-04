@@ -13,9 +13,10 @@ import os
 from datetime import datetime, timezone
 
 import gradio as gr
+import pandas as pd
 
 from branches import REGISTRY as BRANCH_REGISTRY
-from dashboard_model import DashboardModel
+from dashboard_model import METRIC_GETTERS, DashboardModel
 from failure_feed import (
     FAILURE_MODES,
     FailureRow,
@@ -26,7 +27,7 @@ from failure_feed import (
 )
 from interaction_log import InteractionRecord
 from log_reader import HFReader, LocalReader, LogReader
-from metric_status import WoWDelta, metric_status, wow_delta
+from metric_status import THRESHOLDS, WoWDelta, metric_status, wow_delta
 
 WINDOWS = [("Global", None), ("30d", 30), ("7d", 7)]
 
@@ -369,6 +370,115 @@ def format_session_view(session: Session) -> str:
     return "\n".join(parts)
 
 
+# ---- Trend Explorer (issue #30) ---------------------------------------------
+
+# Display labels for each plottable metric (mirrors format_panel's row labels). Single
+# source of truth so scan-mode headers and investigate-mode chart titles stay in sync.
+METRIC_LABELS: dict[str, str] = {
+    "gap_rate": "Gap rate",
+    "deflection_rate": "Deflection rate",
+    "refusal_rate": "Refusal rate",
+    "guardrail_rejection_rate": "Guardrail rejection rate",
+    "retry_exhausted_rate": "Retry-exhaustion rate",
+    "low_confidence_rate": "Low-confidence rate (<0.7)",
+    "confident_failure_rate": "Confident-failure rate (≥0.8 & failed)",
+    "latency_p95_total": "Total latency p95",
+    "technical_tool_uptake_rate": "Tool uptake (TECHNICAL)",
+    "contact_conversion_rate": "Contact-conversion rate",
+    "turns_per_session_median": "Turns/session (median)",
+}
+
+# 5 thematic blocks mirroring Panel 1's organisation. Every plottable metric appears
+# in exactly one block. Adding a metric to METRIC_GETTERS without adding it here
+# trips test_thematic_blocks_partition_every_plottable_metric_exactly_once.
+THEMATIC_BLOCKS: dict[str, list[str]] = {
+    "Outcome": [
+        "gap_rate", "deflection_rate", "refusal_rate",
+        "guardrail_rejection_rate", "retry_exhausted_rate",
+    ],
+    "Routing": ["low_confidence_rate", "confident_failure_rate"],
+    "Engagement": ["turns_per_session_median", "contact_conversion_rate"],
+    "Tool use": ["technical_tool_uptake_rate"],
+    "Latency": ["latency_p95_total"],
+}
+
+# Investigate-mode window choices. days=None ("All-time") spans the data's date range.
+TREND_WINDOWS: list[tuple[str, int | None]] = [
+    ("7d", 7), ("30d", 30), ("90d", 90), ("All-time", None),
+]
+
+
+def _fmt_metric_value(metric: str, value: float | None) -> str:
+    """Format a metric value per its threshold-table unit (pp / ms / decimal)."""
+    threshold = THRESHOLDS.get(metric)
+    if threshold is None:
+        return _fmt_num(value)
+    if threshold.unit == "pp":
+        return _fmt_pct(value)
+    if threshold.unit == "ms":
+        return _fmt_ms(value)
+    return _fmt_num(value)
+
+
+def chart_dataframe(
+    model: DashboardModel,
+    metric: str,
+    days: int | None,
+    *,
+    prior_model: DashboardModel | None = None,
+) -> pd.DataFrame:
+    """Long-format DataFrame for ``gr.LinePlot``.
+
+    Columns: ``date`` (date), ``value`` (float), ``series`` (str). Series values:
+    ``"value"`` for the metric, ``"healthy"`` / ``"warning"`` for horizontal threshold
+    references, ``"prior"`` when ``prior_model`` is supplied (the prior period shifted
+    forward by ``days`` so it overlays the current window).
+
+    Empty model → empty DataFrame (chart layer renders 'insufficient data' placeholder).
+    """
+    series = model.time_series_by_day(metric, days=days)
+    if not series:
+        return pd.DataFrame(columns=["date", "value", "series"])
+    rows: list[dict] = [
+        {"date": d, "value": v, "series": "value"}
+        for d, v in series if v is not None
+    ]
+    threshold = THRESHOLDS.get(metric)
+    if threshold is not None:
+        first_date = series[0][0]
+        last_date = series[-1][0]
+        rows.extend([
+            {"date": first_date, "value": threshold.healthy, "series": "healthy"},
+            {"date": last_date, "value": threshold.healthy, "series": "healthy"},
+            {"date": first_date, "value": threshold.warning, "series": "warning"},
+            {"date": last_date, "value": threshold.warning, "series": "warning"},
+        ])
+    if prior_model is not None and days is not None:
+        from datetime import timedelta as _td
+        prior_series = prior_model.time_series_by_day(metric, days=days)
+        for d, v in prior_series:
+            if v is None:
+                continue
+            # Shift prior dates forward by `days` so they overlay the current window.
+            rows.append({"date": d + _td(days=days), "value": v, "series": "prior"})
+    return pd.DataFrame(rows)
+
+
+def format_trend_header(
+    metric: str,
+    model: DashboardModel,
+    prior_model: DashboardModel | None = None,
+) -> str:
+    """Inline markdown header above each mini chart: label · value · badge · WoW arrow."""
+    label = METRIC_LABELS.get(metric, metric)
+    value = METRIC_GETTERS[metric](model)
+    value_str = _fmt_metric_value(metric, value)
+    badge = _badge(metric, value)
+    prior_value = METRIC_GETTERS[metric](prior_model) if prior_model is not None else None
+    delta = _delta(metric, value, prior_value)
+    return f"**{label}:** {value_str} {badge}{delta}"
+
+
 def _load(reader: LogReader) -> tuple[DashboardModel, datetime]:
     return DashboardModel(reader.read()), datetime.now(timezone.utc)
 
@@ -536,6 +646,109 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
             return gr.update(visible=True), gr.update(visible=False)
 
         back_btn.click(fn=_back_to_feed, outputs=[feed_view, session_view])
+
+        # ---- Trend Explorer (issue #30) ------------------------------------
+        gr.Markdown("---\n## Trend Explorer · last 30 days")
+
+        selected_metric = gr.State(None)
+
+        # Scan mode: 5 thematic blocks of mini charts; each unit = header markdown + LinePlot
+        # + Investigate button. Stash buttons by metric so we can wire each click handler.
+        scan_buttons: dict[str, gr.Button] = {}
+
+        with gr.Column(visible=True) as scan_view:
+            for block_name, block_metrics in THEMATIC_BLOCKS.items():
+                gr.Markdown(f"### {block_name}")
+                with gr.Row():
+                    for metric in block_metrics:
+                        with gr.Column(min_width=220):
+                            gr.Markdown(format_trend_header(metric, model))
+                            gr.LinePlot(
+                                value=chart_dataframe(model, metric, days=30),
+                                x="date", y="value", color="series",
+                                height=140,
+                                show_label=False,
+                            )
+                            scan_buttons[metric] = gr.Button(
+                                f"Investigate {METRIC_LABELS[metric]} ↗",
+                                size="sm", variant="secondary",
+                            )
+
+        with gr.Column(visible=False) as investigate_view:
+            investigate_title = gr.Markdown("")
+            with gr.Row():
+                window_radio = gr.Radio(
+                    choices=[label for label, _ in TREND_WINDOWS],
+                    value="30d", label="Window", scale=1,
+                )
+                prior_chk = gr.Checkbox(
+                    label="Show prior period", value=False, scale=0,
+                )
+            investigate_chart = gr.LinePlot(
+                value=pd.DataFrame(columns=["date", "value", "series"]),
+                x="date", y="value", color="series",
+                height=420, show_label=False,
+            )
+            back_to_scan_btn = gr.Button("← Back to scan", variant="secondary")
+
+        # Investigate-mode renderer used by metric-button clicks AND filter changes.
+        def _build_investigate_chart(
+            metric: str | None, window_label: str, show_prior: bool
+        ):
+            if not metric:
+                return gr.update(), pd.DataFrame(columns=["date", "value", "series"])
+            days = dict(TREND_WINDOWS).get(window_label, 30)
+            current_records = DashboardModel(reader.read())
+            prior = current_records.for_prior_window(days=days) if show_prior else None
+            df = chart_dataframe(current_records, metric, days=days, prior_model=prior)
+            title = (
+                f"### Investigating: {METRIC_LABELS[metric]}\n"
+                + format_trend_header(metric, current_records, prior_model=prior)
+            )
+            return title, df
+
+        # Per-metric Investigate button: enter investigate view + render initial chart.
+        def _enter_investigate_for(metric: str):
+            def _handler(window_label, show_prior):
+                title, df = _build_investigate_chart(metric, window_label, show_prior)
+                return (
+                    metric,                      # selected_metric state
+                    gr.update(visible=False),    # hide scan
+                    gr.update(visible=True),     # show investigate
+                    title,
+                    df,
+                )
+            return _handler
+
+        for metric, btn in scan_buttons.items():
+            btn.click(
+                fn=_enter_investigate_for(metric),
+                inputs=[window_radio, prior_chk],
+                outputs=[
+                    selected_metric, scan_view, investigate_view,
+                    investigate_title, investigate_chart,
+                ],
+            )
+
+        # Window or prior toggle change → re-render investigate chart in place.
+        def _refresh_investigate(metric, window_label, show_prior):
+            title, df = _build_investigate_chart(metric, window_label, show_prior)
+            return title, df
+
+        for control in (window_radio, prior_chk):
+            control.change(
+                fn=_refresh_investigate,
+                inputs=[selected_metric, window_radio, prior_chk],
+                outputs=[investigate_title, investigate_chart],
+            )
+
+        # ← Back to scan: reverse the swap; selected_metric retained for if user re-enters.
+        def _back_to_scan():
+            return gr.update(visible=True), gr.update(visible=False)
+
+        back_to_scan_btn.click(
+            fn=_back_to_scan, outputs=[scan_view, investigate_view]
+        )
 
     return app
 

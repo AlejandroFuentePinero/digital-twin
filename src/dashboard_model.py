@@ -7,10 +7,11 @@ Sentinel UI in `sentinel.py` is the only consumer.
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from statistics import median, quantiles
+from typing import Callable
 
 from interaction_log import InteractionRecord
 
@@ -174,6 +175,42 @@ class DashboardModel:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         return DashboardModel([r for r in self.records if r.timestamp >= cutoff])
 
+    def time_series_by_day(
+        self, metric: str, days: int | None
+    ) -> list[tuple[date, float | None]]:
+        """Daily values for a thresholded metric (see METRIC_GETTERS).
+
+        Returns one ``(utc_date, value)`` per day. Days with no records report ``None``
+        — rendered as gaps in the line chart, not zeros. Empty record set → ``[]`` so the
+        chart layer can show an "insufficient data" placeholder.
+
+        ``days=N`` covers the trailing window ending today (UTC). ``days=None`` spans
+        the data's full date range (earliest record → today).
+        """
+        if not self.records:
+            return []
+        getter = METRIC_GETTERS[metric]
+        by_day: dict[date, list[InteractionRecord]] = defaultdict(list)
+        for r in self.records:
+            by_day[_record_date(r)].append(r)
+
+        today = datetime.now(timezone.utc).date()
+        if days is None:
+            start = min(by_day.keys())
+            span = (today - start).days + 1
+        else:
+            span = days
+            start = today - timedelta(days=span - 1)
+
+        return [
+            (
+                start + timedelta(days=offset),
+                getter(DashboardModel(by_day[start + timedelta(days=offset)]))
+                if (start + timedelta(days=offset)) in by_day else None,
+            )
+            for offset in range(span)
+        ]
+
     def for_prior_window(self, days: int | None) -> "DashboardModel":
         """Records from the window immediately preceding `for_window(days)`.
 
@@ -189,3 +226,26 @@ class DashboardModel:
         return DashboardModel(
             [r for r in self.records if prior_start <= r.timestamp < prior_end]
         )
+
+
+def _record_date(record: InteractionRecord) -> date:
+    """UTC calendar date for a record's timestamp (ISO-8601 string)."""
+    return datetime.fromisoformat(record.timestamp).astimezone(timezone.utc).date()
+
+
+# Registry of plottable metrics — every key in `metric_status.THRESHOLDS` (issue #36)
+# needs a getter here so `time_series_by_day` and the Trend Explorer (issue #30) can
+# compute it per day. Keep in sync with THRESHOLDS; tests pin both keysets together.
+METRIC_GETTERS: dict[str, Callable[["DashboardModel"], float | None]] = {
+    "gap_rate": lambda m: m.gap_rate,
+    "deflection_rate": lambda m: m.deflection_rate,
+    "refusal_rate": lambda m: m.refusal_rate,
+    "guardrail_rejection_rate": lambda m: m.guardrail_rejection_rate,
+    "retry_exhausted_rate": lambda m: m.retry_exhausted_rate,
+    "low_confidence_rate": lambda m: m.low_confidence_rate(),
+    "confident_failure_rate": lambda m: m.confident_failure_rate(),
+    "latency_p95_total": lambda m: m.latency_percentiles("total").get(95),
+    "technical_tool_uptake_rate": lambda m: m.technical_tool_uptake_rate,
+    "contact_conversion_rate": lambda m: m.contact_conversion_rate,
+    "turns_per_session_median": lambda m: m.turns_per_session_median,
+}

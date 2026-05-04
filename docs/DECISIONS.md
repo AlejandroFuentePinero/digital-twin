@@ -5,6 +5,55 @@
 
 ---
 
+## Session 33 (2026-05-04) — `#30` shipped: Trend Explorer (small multiples + investigate mode)
+
+**Status:** [`#30`](https://github.com/AlejandroFuentePinero/digital-twin/issues/30) (Phase 4 slice 3/7) closed locally. Suite **322 → 333** (+11 tests). New `DashboardModel.time_series_by_day` + `METRIC_GETTERS` registry; new Sentinel section "Trend Explorer" below Failure Feed: scan mode (5-block grid of 11 mini `gr.LinePlot`s with inline value/WoW headers and Investigate buttons) + investigate mode (large chart, 7d/30d/90d/All-time radio, "Show prior period" overlay toggle, back-to-scan affordance). **Phase 4: 4 of 7 slices complete** — Health Overview (#29 + #35 + #36) + Failure Feed (#31) + Trends (#30) all online; replay (#38) and gap-clustering (#32 / #33 / #34) still ahead.
+
+### What shipped — code
+
+| Commit | Scope |
+|---|---|
+| `<this-session>` | `#30` — `DashboardModel.time_series_by_day(metric, days)` + `METRIC_GETTERS` registry mapping every `THRESHOLDS` key to a per-day getter (`days=None` = all-time). New `_record_date` UTC-grouping helper. Sentinel gains `THEMATIC_BLOCKS` (5 blocks → 11 metrics partition), `METRIC_LABELS`, `TREND_WINDOWS`, `chart_dataframe(model, metric, days, prior_model=)`, `format_trend_header(metric, model, prior_model=)`, and the Trend Explorer UI. +5 tests in `test_dashboard_model.py`, +5 in `test_sentinel.py`. |
+
+### TDD slices (2 waves)
+
+- **Wave A — `time_series_by_day` (5 slices, 5 tests)**: empty input → `[]`; single-day records → N entries with one populated and the rest `None`; multi-day records aggregate correctly with gaps as `None` (not 0); `days=None` spans `min(record_date) → today`; forcing-function asserting `METRIC_GETTERS` keys ⊇⊆ `THRESHOLDS` keys; per-metric runtime check that every getter executes against a synthetic record without raising.
+- **Wave B — Trend Explorer UI (5 slices, 5 tests)**: `chart_dataframe` includes `value` + `healthy` + `warning` series; adds a `prior` series when `prior_model` supplied; returns an empty frame for an empty model (chart layer's "insufficient data" entry point); `THEMATIC_BLOCKS` partitions every plottable metric into exactly one of the 5 Panel-1 blocks (forcing function); `format_trend_header` renders `**label:** value` with the metric's per-unit format and `_badge` / `_delta` helpers reused. UI wiring (~110 lines in `build_app`) verified by `build_app` smoke + manual `PYTHONPATH=src uv run python src/sentinel.py`.
+
+### Live-log smoke (85 records, 4-day span)
+
+- 11 mini-charts render in scan mode; each `chart_dataframe` over the 30-day window has 6 rows (2 populated value points × `value`/`healthy`/`warning` series + endpoint pairs for the threshold lines).
+- Investigate-mode preview for `gap_rate` × {7d, 30d, 90d, All-time} all build without raising.
+- Sample header HTML: `**Gap rate:** 9.4% [healthy badge] [↑ 9.4pp degrading]` — picks up `metric_status` + `wow_delta` cleanly.
+
+### Design choices
+
+- **`METRIC_GETTERS` lives in `dashboard_model.py`, not a sibling.** The registry is fundamentally about `DashboardModel` introspection (each entry is a callable on the model). Splitting it out would force a circular import or a registration-at-startup ceremony. Keeping it co-located keeps "the thresholded metrics this model knows how to serve" in one file. Forcing-function test pins it to `THRESHOLDS`.
+- **`time_series_by_day` returns `None` for empty days, not 0.** The chart layer needs to distinguish "no data" (gap in the line) from "real 0% rate." Without `None` semantics a flat-zero stretch reads as healthy when really the system was offline. Live data shows this matters: only 4 of last 30 days have records; the other 26 must render as gaps.
+- **Empty model → `[]`, not an N-entry all-`None` series.** Two equivalent designs; chose explicit empty return so `chart_dataframe` can short-circuit to an "insufficient data" placeholder without iterating an all-`None` array. UI layer asserts on `len(df) == 0`.
+- **Explicit `Investigate ↗` button per mini chart, not chart-`select` event handler.** `gr.LinePlot.select` only fires on data-point selection — empty / sparse charts (the live-log reality) wouldn't be clickable. A button below each chart is unambiguously clickable always, and reads like "click here to drill down" rather than "click somewhere on the line."
+- **Threshold reference lines drawn as endpoint pairs `[(first_date, threshold), (last_date, threshold)]`, not per-day repeats.** A horizontal line only needs two points; emitting 30 rows per threshold per chart would 5× the dataframe size for no visual gain. Vega/Altair under `gr.LinePlot` interpolates between the endpoints.
+- **Prior-period overlay shifts dates forward by `days`, not plotted on its native dates.** The intent is visual *overlay* — "look how today's gap rate stacks against the same window a fortnight ago" — so prior dates have to land on the same X positions. Side-by-side wouldn't be an overlay.
+- **Anomaly annotations deferred — no stub, no placeholder series.** The AC item ("anomaly markers for any Flag panel events") sources from `#34` (Flags / FlagDetector), which doesn't exist yet. Building a no-op stub series would add a phantom entry to the chart legend with nothing to populate it. Per `feedback_design_decisions_are_hypotheses`: explicit deferral with a one-line comment in `chart_dataframe` reads cleaner than dead code today. When `#34` lands, anomaly markers are an additive series — same shape as `prior`. Documented here so the next slice owner knows where to wire in.
+- **Back-to-scan keeps `selected_metric` in state**, not nulled. Re-entering investigate mode picks up the last metric/window/prior toggle. Cheap UX win — Gradio loses no state on the visibility flip.
+- **No system map churn.** The new code adds methods/exports to existing modules; no new top-level module. `MAP.md` regenerated with no diff. Aligns with the registry convention from `metric_status.py` / `failure_feed.py`: not every cross-cutting feature needs a new file.
+- **Each filter change re-reads from disk** (same pattern as Failure Feed). For a single-user local dashboard at portfolio traffic, the cost is sub-millisecond and the alternative (caching at app construction) silently goes stale on new log writes. Ergonomic over performant.
+
+### Verified
+
+- `uv run pytest -q` → **333 passed** (322 → 333; +5 in `test_dashboard_model.py`, +5 in `test_sentinel.py` — the `test_metric_getters_keys_match_threshold_registry` forcing-function test counts inside dashboard_model).
+- Live runtime: `PYTHONPATH=src uv run python -c "from sentinel import build_app; app = build_app()"` → boots cleanly against the 85-record live log.
+- Live-log per-metric chart_dataframe smoke: every entry in `METRIC_GETTERS` builds a non-error dataframe across 7d / 30d / 90d / All-time windows.
+
+### Outstanding
+
+- **Push the local commits** — Sessions 28+29+30+31+32 + this session's `#30` commit are local; `main` push is harness-protected.
+- **Strip `needs-triage`** from `#30` (this session) and from carry-over `#38` `#32` `#33` `#34`.
+- **Anomaly annotations** — wire in once `#34` (Flags / FlagDetector) ships. Extension point: add a fourth conditional branch in `chart_dataframe` that appends `series='anomaly'` rows for flagged dates.
+- **Next: `#38` (Replay-from-record)** — unblocked by `#37`'s reproducibility schema and `#31`'s drilldown surface. Or `#32` (gap clustering batch + Cluster panel) if recruiter-conversation analytics are higher priority.
+
+---
+
 ## Session 32 (2026-05-04) — `#31` shipped: Failure Feed (filterable + per-session view)
 
 **Status:** [`#31`](https://github.com/AlejandroFuentePinero/digital-twin/issues/31) (Phase 4 slice 4/7) closed locally. Suite **298 → 322** (+24 tests). New module `src/failure_feed.py`. Sentinel now has the per-turn debugging surface — a Dataframe of failure turns above (filterable by branch / mode / window / question text), drilldown markdown below, and a "View full session" affordance that swaps in the full conversation. **Phase 4: first-glance triage (Panel 1) + per-turn debug (Panel 4) both online; replay + clustering remain.** Next: `#30` (Trend Explorer) ∥ `#38` (replay-from-record, unblocked by this).

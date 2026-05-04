@@ -13,13 +13,17 @@ from failure_feed import Session, group_by_session
 from interaction_log import DEFAULT_LOG_PATH, InteractionRecord
 from log_reader import LocalReader
 from sentinel import (
+    THEMATIC_BLOCKS,
     build_app,
+    chart_dataframe,
     format_failure_drilldown,
     format_header,
     format_panel,
     format_session_view,
+    format_trend_header,
 )
-from dashboard_model import DashboardModel
+from dashboard_model import METRIC_GETTERS, DashboardModel
+from metric_status import THRESHOLDS
 
 
 def _record_dict(timestamp: str | None = None, event_type: str = "answered", total_latency: int = 1000) -> dict:
@@ -353,3 +357,94 @@ def test_format_session_view_uses_drilldown_for_each_turn_body():
     assert "first try" in md
     assert "second try" in md
     assert "fix it" in md
+
+
+# ----- Trend Explorer (issue #30) ---------------------------------------------
+
+
+def test_chart_dataframe_includes_value_series_and_threshold_reference_lines():
+    """chart_dataframe returns a long-format pandas frame with `date`, `value`, `series`
+    columns. Series column carries 'value' for the metric line plus 'healthy'/'warning'
+    horizontal threshold references — gr.LinePlot can colour them via the series column."""
+    from datetime import datetime, timezone
+
+    record = InteractionRecord.model_validate({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "session_id": "s", "turn_index": 0, "question": "q?", "event_type": "answered",
+        "branch": "GENERIC", "classification_confidence": 1.0,
+        "attempts": [{"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""}],
+        "retrieved_chunks": [],
+        "latency_ms": {"classifier": 0, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 0},
+        "knew_answer": True,
+    })
+    model = DashboardModel([record])
+    df = chart_dataframe(model, metric="gap_rate", days=7)
+
+    assert set(df.columns) >= {"date", "value", "series"}
+    series_set = set(df["series"].unique())
+    assert "value" in series_set
+    assert "healthy" in series_set, "healthy threshold reference line must be drawn"
+    assert "warning" in series_set, "warning threshold reference line must be drawn"
+
+
+def test_chart_dataframe_includes_prior_period_series_when_prior_model_supplied():
+    """When prior_model is passed, chart_dataframe adds a 'prior' series — the basis for the
+    'Show prior period' overlay in investigate mode (issue #30 spec)."""
+    from datetime import datetime, timezone
+
+    rec = lambda: InteractionRecord.model_validate({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "session_id": "s", "turn_index": 0, "question": "q?", "event_type": "answered",
+        "branch": "GENERIC", "classification_confidence": 1.0,
+        "attempts": [{"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""}],
+        "retrieved_chunks": [],
+        "latency_ms": {"classifier": 0, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 0},
+        "knew_answer": True,
+    })
+    model = DashboardModel([rec()])
+    prior = DashboardModel([rec()])
+    df = chart_dataframe(model, metric="gap_rate", days=7, prior_model=prior)
+    assert "prior" in set(df["series"].unique())
+
+
+def test_chart_dataframe_returns_empty_dataframe_for_empty_model():
+    """An empty model yields a chart with no rows — the chart layer renders an
+    'insufficient data' placeholder instead of crashing on missing series."""
+    df = chart_dataframe(DashboardModel([]), metric="gap_rate", days=7)
+    assert len(df) == 0
+
+
+def test_thematic_blocks_partition_every_plottable_metric_exactly_once():
+    """THEMATIC_BLOCKS maps Panel-1's 5 blocks (Outcome / Routing / Engagement / Tool use /
+    Latency) to lists of metric names; every plottable metric appears in exactly one block.
+    Forcing function: adding a metric to METRIC_GETTERS forces an entry in THEMATIC_BLOCKS."""
+    all_assigned = [m for metrics in THEMATIC_BLOCKS.values() for m in metrics]
+    assert sorted(all_assigned) == sorted(METRIC_GETTERS.keys()), (
+        "THEMATIC_BLOCKS must enumerate every plottable metric (no duplicates, no omissions)"
+    )
+    assert sorted(all_assigned) == sorted(set(all_assigned)), "no metric in two blocks"
+    # Five blocks, matching Panel 1's headings
+    assert set(THEMATIC_BLOCKS.keys()) == {
+        "Outcome", "Routing", "Engagement", "Tool use", "Latency"
+    }
+
+
+def test_format_trend_header_surfaces_metric_label_and_current_value():
+    """Each mini-chart's inline header renders the metric's display label + current value
+    (formatted per the metric's unit). Used in scan mode above each small multiple."""
+    from datetime import datetime, timezone
+
+    bad = lambda: InteractionRecord.model_validate({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "session_id": "s", "turn_index": 0, "question": "q?", "event_type": "gap",
+        "branch": "GAP", "classification_confidence": 1.0,
+        "attempts": [{"answer": "a", "is_acceptable": True, "guardrail_feedback": ""}],
+        "retrieved_chunks": [],
+        "latency_ms": {"classifier": 0, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 0},
+        "knew_answer": False,
+    })
+    model = DashboardModel([bad(), bad(), bad(), bad()])  # 100% gap_rate
+    header = format_trend_header("gap_rate", model)
+
+    assert "gap" in header.lower()  # metric label
+    assert "100" in header           # current value 100% rendered as percentage

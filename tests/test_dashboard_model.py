@@ -511,6 +511,135 @@ def test_for_window_with_days_none_returns_self_unchanged():
     assert {r.turn_index for r in out.records} == {1, 2}
 
 
+def test_time_series_by_day_empty_records_returns_empty_list():
+    """time_series_by_day([]) returns [] — no fabricated dates from no data. Empty model
+    is a valid state; the chart layer renders an 'insufficient data' placeholder."""
+    model = DashboardModel([])
+    assert model.time_series_by_day("gap_rate", days=7) == []
+
+
+def test_time_series_by_day_single_day_returns_full_window_with_one_populated_day():
+    """For days=N, the result has exactly N entries (one per UTC day in the window),
+    and the day containing the records carries the metric value; other days are None."""
+    from datetime import date as _date
+    today = datetime.now(timezone.utc).date()
+    record = _record(timestamp=datetime.now(timezone.utc).isoformat(), event_type="answered")
+    model = DashboardModel([record])
+
+    series = model.time_series_by_day("gap_rate", days=3)
+    assert len(series) == 3
+    dates = [d for d, _ in series]
+    assert dates == sorted(dates)  # ascending
+    assert today in dates
+    today_value = next(v for d, v in series if d == today)
+    assert today_value == 0.0  # one clean record → 0% gap
+    # Earlier days have no records → None
+    other_values = [v for d, v in series if d != today]
+    assert all(v is None for v in other_values), "days without records must be None, not 0"
+    # Every entry's first element is a date object
+    assert all(isinstance(d, _date) for d, _ in series)
+
+
+def test_time_series_by_day_aggregates_per_day_records_with_gaps_as_none():
+    """Multiple records on the same day collapse into one metric value computed over that
+    day's records; days with no records render as None — never zero, so the chart can
+    distinguish 'no data' from 'a real 0% rate'."""
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    yesterday = today - timedelta(days=1)
+    two_days_ago = today - timedelta(days=2)
+
+    # Today: 1 gap of 4 → 25% gap_rate
+    today_records = [
+        _record(timestamp=(now - timedelta(hours=1)).isoformat()),  # clean
+        _record(timestamp=(now - timedelta(hours=2)).isoformat(), event_type="gap"),
+        _record(timestamp=(now - timedelta(hours=3)).isoformat()),  # clean
+        _record(timestamp=(now - timedelta(hours=4)).isoformat()),  # clean
+    ]
+    # Two-days-ago: 2 records, 1 gap → 50%
+    two_days_ago_records = [
+        _record(timestamp=(now - timedelta(days=2, hours=1)).isoformat()),
+        _record(timestamp=(now - timedelta(days=2, hours=2)).isoformat(), event_type="gap"),
+    ]
+    model = DashboardModel(today_records + two_days_ago_records)
+
+    series = dict(model.time_series_by_day("gap_rate", days=3))
+    assert series[today] == 0.25
+    assert series[yesterday] is None  # no records → None, not 0.0
+    assert series[two_days_ago] == 0.5
+
+
+def test_time_series_by_day_with_days_none_spans_earliest_record_to_today():
+    """days=None is the All-time window: series starts at the earliest record's date and
+    ends today (UTC), filling intervening days with None when no records hit them."""
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    five_days_ago = (now - timedelta(days=5))
+    records = [
+        _record(timestamp=five_days_ago.isoformat()),
+        _record(timestamp=now.isoformat()),
+    ]
+    series = model = DashboardModel(records).time_series_by_day("gap_rate", days=None)
+
+    assert len(series) == 6  # five_days_ago, -4d, -3d, -2d, -1d, today
+    assert series[0][0] == five_days_ago.date()
+    assert series[-1][0] == today
+    # Bookend days have records → 0.0; middle days → None
+    assert series[0][1] == 0.0
+    assert series[-1][1] == 0.0
+    middle_values = [v for _, v in series[1:-1]]
+    assert all(v is None for v in middle_values)
+
+
+def test_metric_getters_keys_match_threshold_registry():
+    """Every thresholded metric must have a getter so the Trend Explorer can plot it,
+    and getters must not exist for metrics that have no threshold (would be unused).
+    Forcing-function: adding a metric to one registry forces an entry in the other."""
+    from dashboard_model import METRIC_GETTERS
+    from metric_status import THRESHOLDS
+
+    assert set(METRIC_GETTERS) == set(THRESHOLDS), (
+        "METRIC_GETTERS and THRESHOLDS must enumerate the same plottable metrics. "
+        f"Missing getters: {set(THRESHOLDS) - set(METRIC_GETTERS)}; "
+        f"extra getters: {set(METRIC_GETTERS) - set(THRESHOLDS)}"
+    )
+
+
+def test_time_series_by_day_works_for_every_plottable_metric():
+    """Calling time_series_by_day(metric, days=1) for each registered metric must not raise
+    and must return a list whose single value is either a number or None — exercises every
+    getter against a real (synthetic) record so plumbing failures surface in tests, not at runtime."""
+    from dashboard_model import METRIC_GETTERS
+
+    record = InteractionRecord.model_validate(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "session_id": "sess-x",
+            "turn_index": 0,
+            "question": "q?",
+            "event_type": "answered",
+            "branch": "TECHNICAL",
+            "classification_confidence": 0.9,
+            "classifier_labels": ["TECHNICAL"],
+            "attempts": [{"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""}],
+            "retrieved_chunks": [],
+            "tool_calls": [{"name": "fetch_project_readme", "args": {}, "status": "success", "attempt_index": 0}],
+            "latency_ms": {"classifier": 100, "retrieval": 200, "generation": 300, "guardrail": 400, "total": 1000},
+            "knew_answer": True,
+            "contact_offered": True,
+            "contact_provided": True,
+        }
+    )
+    model = DashboardModel([record])
+    for metric in METRIC_GETTERS:
+        series = model.time_series_by_day(metric, days=1)
+        assert len(series) == 1
+        value = series[0][1]
+        assert value is None or isinstance(value, (int, float)), (
+            f"{metric}: got {value!r}"
+        )
+
+
 def test_event_counts_buckets_records_by_event_type():
     """event_counts returns the count of each event_type seen across the records."""
     model = DashboardModel(
