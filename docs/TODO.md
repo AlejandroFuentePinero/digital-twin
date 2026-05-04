@@ -3,12 +3,12 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-04 (Session 27 + #27 deferral)
-**Current phase:** **Phase 3 complete.** Issue `#2` closed: `eval/run_eval.py` rewired through the routed pipeline; v4 baseline (`eval/results/v4_2026-05-03.json`) ran on the existing 149 questions; v4 autopsy surfaced two surgical fixes (citation discipline in `PROJECT_LINKS` + judge knowledge-cutoff caveat) which v5 (`eval/results/v5_2026-05-04.json`) validated cleanly. **v3 → v5: accuracy 4.46 → 4.81 (+0.35); completeness 4.51 → 4.80 (+0.29); relevance 4.84 → 4.91; retrieval flat at MRR 0.865; gap rate 0.7% (unchanged from v3, system now properly humble on un-retrievable specific-detail questions).** Temporal regression in v4 (4.53 → 3.87) **fully resolved in v5** (3.87 → 4.93, +1.06). 6 residual acc<4 failures all pre-existing classifier-routing or tool-rules patterns logged in `LIMITATIONS::O6/O7`; deliberately not bundled into #2's measurement scope. Registry grew 24 → 28 keys (4 paper distillations added: Bosque 2017, GCB 2023, Oecologia 2024, Siri 2025); KB `publications.md` already covered them — no re-ingestion needed. Tool surface 1,206 → 1,373 lines. Test count 222 → 224. KB at 104 chunks (unchanged). Phase 1 + Phase 2 + Phase 3 **complete**.
+**Last updated:** 2026-05-04 (Session 28 — Phase 4 slices 1+2 shipped, Phase 4 plan restructured)
+**Current phase:** **Phase 4 in progress.** Slices 1 (`#28` LogReader) and 2 (`#29` Sentinel skeleton + Panel 1 v1) closed in `da77567` + `f2c1231` (local, push-protected). Suite 224 → 245 (+21). Phase 4 plan was restructured this session from "5 panels + 3-flag panel" into an 11-issue surface organised around the **9 failure modes Sentinel exists to detect**; 4 new issues filed (`#35` `#36` `#37` `#38`), 2 existing rewritten (`#30` `#31`). Senior-engineer audit surfaced four hidden gaps before TDD started: proxy-metric caveats (lands in `docs/SENTINEL.md` per `#36`), structural observability blind spot (no `git_sha` / `prompt_hash` for replay or deployment markers — filed as `#37` prereq), confident-failure detection gap (added to `#35`), and replay capability (filed as `#38`). Live-log inventory of `data/logs/interactions.jsonl` (85 records, 64 sessions) drove all metric definitions. See `DECISIONS.md` Session 28 for full rationale.
 
-**Issue #27 (classifier-routing tightening) closed wontfix on 2026-05-04** — v5 is at the ceiling, the 3 paper-title acc<4 failures are correct gap-phrase humility (gap rate held at v3's 0.7%), and both proposed fixes (prescriptive classifier examples; promoting `deflection`/`calibration_ladder` to universal) violate stated discipline (`feedback_accept_uncertainty_over_constraint`, `LIMITATIONS::P7`'s un-fired trip-wires). `O6` trip-wires amended to require Sentinel-aggregated or recurring-shape evidence before any classifier-side intervention. The companion `O7` (tool-rules / TECHNICAL number-misread) follows the same discipline — no follow-up issue queued ahead of Phase 4 observability.
+**Phase 1 + Phase 2 + Phase 3 complete.**
 
-**Next: Phase 4 (Sentinel)** — produces the aggregated misroute / deflection / fabrication signals that single-eval-round evidence can't, so any future classifier or rule-set work is evidence-based.
+**Next: `#37`** — schema additions to `InteractionRecord` (`prompt_hash` / `model_id` / `git_sha` / `temperature`). Prerequisite for `#30` (Trend deployment markers) and `#38` (replay). Independent of `#35` and `#36` — those can ship in parallel.
 
 ---
 
@@ -116,17 +116,29 @@ Follow-up surfaced from v4 (separate issue, not this PRD): citation-scope-creep 
 
 ---
 
-## Phase 4 — Sentinel + LLM failure summaries
+## Phase 4 — Sentinel observability layer
 
-- [ ] `src/sentinel.py` — local Gradio app, 5 panels + 3-flag panel:
-  1. Health overview (today / 7d / 30d)
-  2. Trend chart
-  3. Failure feed (recent unacceptable answers, all attempts, feedback)
-  4. Gap clusters
-  5. Deflection feed
-- [ ] `cluster_gaps.py` — weekly batch script; clusters gap-phrase questions with LLM labels; writes `data/logs/gap_clusters.json`.
-- [ ] `summarize_failures.py` — three weekly LLM passes, one per failure-mode group (unacceptable, deflection, gap). Output cached as Markdown reports under `data/logs/summaries/`.
-- [ ] Sentinel reads precomputed cluster/summary files (no live LLM calls in dashboard).
+Restructured (Session 28) around the **9 failure modes** Sentinel exists to detect: fabrication, mis-routing, tool non-uptake, unfair gap, engagement collapse, contact-form failure, latency regression, guardrail loops, repeat failure. Plus 3 orientation signals: volume, branch mix, multi-label routing.
+
+GitHub Issues are the source of truth for slice-level scope; this list is a checklist of execution order.
+
+- [x] `#28` — `src/log_reader.py` (typed `LocalReader` + `HFReader` Phase-6 stub).
+- [x] `#29` — `src/sentinel.py` skeleton + `src/dashboard_model.py` + Panel 1 v1 (Health Overview).
+- [ ] `#37` — **Prerequisite.** `InteractionRecord` schema additions (`prompt_hash` / `model_id` / `git_sha` / `temperature`) for replay + deployment markers.
+- [ ] `#35` — Panel 1 v2: 14 metrics across Outcome / Routing / Engagement / Tool use / Latency blocks (incl. `confident_failure_rate`, `dropoff_by_turn`, `multi_label_rate`).
+- [ ] `#36` — Per-metric thresholds + WoW deltas + `docs/SENTINEL.md` (proxy caveats, runbooks, low-N notes, definitional precision).
+- [ ] `#30` — Trend Explorer: small-multiples grid (every metric, organised by Panel 1 blocks) + click-to-zoom investigate mode (7d / 30d / 90d / All-time + prior-period comparison + flag annotations).
+- [ ] `#31` — Failure Feed: filterable (branch / failure-mode / window / question search) + per-session conversation view.
+- [ ] `#38` — Replay: button in Failure Feed → re-run record through current pipeline → side-by-side diff.
+- [ ] `#32` — `src/cluster_gaps.py` weekly LLM batch + Cluster panel.
+- [ ] `#33` — `src/summarize_failures.py` weekly LLM batch (unacceptable / deflection / gap) + Deflection panel.
+- [ ] `#34` — Flags panel + `FlagDetector` (`gap_rate_jump` / `new_cluster` / `repeat_failure`).
+
+Sentinel reads precomputed cluster/summary files — no live LLM calls in the dashboard hot path.
+
+### Explicitly punted as YAGNI (reopen if signal demands)
+
+Cohort cross-tabs (e.g. conversion-by-branch); CSV / JSONL export; pagination; custom date-range picker; multi-metric overlay in investigate mode; side-by-side attempt diff; configurable thresholds via UI; cost tracking (`tokens_in` / `tokens_out`); KB version stamp in records; materialised daily aggregates. Documented in respective issue Out-of-scope sections.
 
 ---
 

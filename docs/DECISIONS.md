@@ -5,6 +5,94 @@
 
 ---
 
+## Session 28 (2026-05-04) — Phase 4 slices 1+2 shipped; Phase 4 plan restructured around the 9 failure modes Sentinel must detect
+
+**Status:** [`#28`](https://github.com/AlejandroFuentePinero/digital-twin/issues/28) (LogReader) closed in `da77567` (local), [`#29`](https://github.com/AlejandroFuentePinero/digital-twin/issues/29) (Sentinel skeleton + Panel 1 v1) closed in `f2c1231` (local) — both push-protected on `main`, awaiting manual push. Suite **224 → 245** (+21 tests). The original PLAN.md "5 panels + 3-flag panel" Phase 4 scope was **restructured into an 11-issue surface organised around the 9 failure modes Sentinel exists to detect**; 4 new issues filed (`#35` `#36` `#37` `#38`), 2 existing issues rewritten (`#30` `#31`).
+
+### What shipped — code
+
+| Commit | Scope |
+|---|---|
+| `da77567` | `#28` — `src/log_reader.py` (typed `LocalReader` + `HFReader` Phase-6 stub); 8 tests; `system_map` registration; `MAP.md` regenerated |
+| `f2c1231` | `#29` — `src/dashboard_model.py` (pure aggregations) + `src/sentinel.py` (Gradio shell + Health Overview v1); 13 tests (9 dashboard_model + 4 sentinel including a live-log smoke); `TESTING.md` sentinel partial-exemption note; both modules registered under `Tooling` in `system_map` |
+
+### Live-log inventory (85 records, 64 sessions, 2026-05-01 → 05-03)
+
+A diagnostic scan of `data/logs/interactions.jsonl` to ground Phase 4 decisions in actual data instead of plan-theoretical metrics:
+
+| Field | Live signal |
+|---|---|
+| Sessions | 64 unique, **1.3 turns/session median** — recruiter abandonment signal |
+| `event_type` | **84/85 = "answered", 1 = "refused", 0 = "gap" or "deflected"** — schema underused in production |
+| `knew_answer` | False in 8/85 = **9.4%** — the *real* gap-phrase rate, not `event_type=="gap"` |
+| `branch` | GENERIC 42% / GAP 42% / TECHNICAL 11% / LOGISTICAL 5% |
+| `classification_confidence` | median 0.90; **8% at ≤0.7** |
+| `classifier_labels` | 79/85 populated, **0 multi-label** — composition routing dormant in practice |
+| `attempts` | 10.6% retried, 2.4% hit max retries |
+| `latency_ms` | median 13s, p95 25s, max 52s; generation up to 17s, guardrail up to 28s |
+| `tool_calls` | 8 calls / 6 turns, all `success`; **TECHNICAL tool-uptake = 6/9 = 66.7%** (LIMITATIONS::P8 first measurement) |
+| `contact_offered` / `contact_provided` | 11 offers, 1 submission = ~9% conversion |
+
+### Definitional bug — `event_type` writer vs reality
+
+`event_type` is essentially dead in production (84/85 = `"answered"`). The actual gap signal is `knew_answer=False`. The `gap_rate` metric in `#29`'s Panel 1 v1 reports **0%** on live data because it uses `event_type=="gap"` per the literal spec. Sentinel works around this in `#35` by switching the gap definition to `knew_answer=False OR event_type=="gap"`. Underlying writer fix in `pipeline.py` is a separate cleanup ticket (not yet filed).
+
+### Phase 4 plan — restructured around the 9 failure modes
+
+The original PLAN.md scoped Phase 4 as "5 panels + 3-flag panel". This session reframed it around **the 9 failure modes Sentinel exists to detect** (fabrication / mis-routing / tool non-uptake / unfair gap / engagement collapse / contact-form failure / latency regression / guardrail loops / repeat failure) plus 3 orientation signals (volume, branch mix, multi-label routing). One headline metric per failure mode; orientation metrics carry no threshold.
+
+Senior-engineer audit additionally surfaced four issues hiding in the original plan:
+
+- **Proxy caveats.** Several headline metrics are proxies, not the thing they measure. Guardrail rejection rate is composite (fabrication + scope + tone + injection + dishonest-gap). Low-confidence rate catches uncertain routing but not confident misroutes. Gap rate ≠ unfair gap rate. Tool-uptake denominator is "all TECHNICAL" not "TECHNICAL warranting tool". Documenting these prevents over-reading metrics; lands in `docs/SENTINEL.md` per `#36`.
+- **Structural observability blind spot.** Today's `InteractionRecord` cannot correlate behaviour shifts with code changes (no `git_sha` / `prompt_hash` / `model_id`) and cannot support replay. Filed as `#37` (schema additions, prerequisite for `#30` deployment markers and `#38` replay).
+- **Detection gap.** Confident failures (confidence ≥ 0.8 AND failure) are invisible to `low_confidence_rate`. Added as `confident_failure_rate` metric in `#35`.
+- **Replay capability.** Highest-leverage debugging tool the dashboard can offer — collapses "see failure → re-type question → compare" to one click. Filed as `#38`.
+
+### Final Phase 4 issue set + execution order
+
+| # | Title | State | Blocked by |
+|---|---|---|---|
+| `#28` | LogReader scaffold | closed | — |
+| `#29` | Sentinel skeleton + Panel 1 v1 | closed | — |
+| `#37` | InteractionRecord schema additions (`prompt_hash` / `model_id` / `git_sha` / `temperature`) | open, **prereq** | — |
+| `#35` | Panel 1 v2 — 14 metrics across 5 thematic blocks (Outcome / Routing / Engagement / Tool use / Latency) | open | `#29` |
+| `#36` | Thresholds + WoW deltas + `docs/SENTINEL.md` (proxy caveats + runbooks + low-N notes) | open | `#35` |
+| `#30` | Trend Explorer — small multiples + zoom (rewritten from 3-metric scope) | open | `#35` `#36` `#37` |
+| `#31` | Failure Feed — filterable + per-session view (amended from most-recent-only) | open | `#29` |
+| `#38` | Replay-from-record affordance | open | `#31` `#37` |
+| `#32` | Gap clustering batch + Cluster panel | open | `#29` |
+| `#33` | Failure summarisation batch + Deflection panel | open | `#29` |
+| `#34` | Flags panel + FlagDetector | open | `#29` `#32` |
+
+**Suggested execution order:** `#37` → `#35` → `#36` → (`#30` ∥ `#31`) → `#38` → (`#32` ∥ `#33`) → `#34`.
+
+### Discipline calls
+
+- **Resisted bloating `#35` with cohort cross-tabs and CSV export** — explicit YAGNI at portfolio scale (~30 records/day, single-user dashboard). Reopen if signal demands.
+- **Resisted bundling cost tracking into `#37`** — same shape (schema addition) but separate concern; deserves its own ticket so `#37` stays scoped to reproducibility.
+- **Two issues rewritten rather than appended.** `#30` (was: 3 metrics, fixed view) and `#31` (was: most-recent ordering only) both required restructure to match the failure-mode framing — not just additions. Cleaner to rewrite the body than layer on amendments.
+- **Filed gaps as separate issues, not amendments to `#35`.** `#37` + `#38` are structural / cross-cutting; bundling into `#35` would have made `#35` unreviewable.
+- **Pre-existing memory respected.** `feedback_design_decisions_are_hypotheses` triggered the senior-engineer audit step rather than mechanically executing the original plan; surfaced the four hidden issues before TDD started.
+
+### Verified
+
+- `uv run pytest -q` → **245 passed** (224 → 232 after `#28` → 245 after `#29`).
+- Live runtime: `PYTHONPATH=src uv run python -c "from sentinel import build_app; app = build_app(); print(type(app).__name__)"` → `Blocks` (boots cleanly against the live 85-record log).
+- Source-label switching: `HF_WRITE_TOKEN=fake` → "HF Dataset" (HFReader.read would raise NotImplementedError on actual use — Phase 6 path stub working as intended).
+
+### Outstanding
+
+- **Push the local commits** — `da77567` + `f2c1231` are local; `main` push is harness-protected.
+- **Strip `needs-triage`** from `#35`, `#36`, `#37`, `#38`, `#30`, `#31` (only the closed `#28`/`#29` were stripped this session).
+- **Ticket the `event_type` writer fix** in `pipeline.py` as a separate cleanup before Phase 4 surfaces depend on it more.
+- **Ticket cost tracking** as a sibling to `#37` if/when LLM cost becomes a concern.
+
+### Phase 4 ready for execution
+
+Next session can start cold with **`TDD #37`** — the issue body is self-contained, the prereq positioning is explicit, and `feedback_read_latest_decisions_session` will pull this entry's context automatically.
+
+---
+
 ## Session 27 (2026-05-04) — Phase 3 / `#2` v4 baseline + eval-fairness fixes; v5 confirms; Phase 3 complete
 
 **Status:** Issue [`#2`](https://github.com/AlejandroFuentePinero/digital-twin/issues/2) closed in `e82529a`. `eval/run_eval.py` rewired through the routed pipeline (classifier → branch composer → generator/tool-loop → judge); v4 baseline run on the existing 149 questions; failure autopsy surfaced two surgical fixes (citation discipline + judge cutoff caveat); v5 validation eval ran cleanly against the fixes — temporal regression closed and overall quality up across the board. Registry grew 24 → 28 keys (4 paper readmes added). Tool surface 1,206 → 1,373 lines (~+14% bounded). Test count 222 → 224. No KB re-ingestion required. **Phase 3 complete.**
