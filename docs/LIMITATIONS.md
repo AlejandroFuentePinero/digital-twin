@@ -112,7 +112,7 @@ The soft conciseness rule (`concise_disclosure`, shipped #25) introduces a drill
 2. The Session 26 fix doesn't hold — same probe shape mis-routes again post-prompt-update in R3 or live observation.
 3. A new probe shape mis-routes in a different direction (e.g., GAP-shape probe routing to TECHNICAL persistently).
 
-**Action when 2 or 3 fires:** consider broader classifier-prompt restructuring OR a deterministic override layer in pipeline (last-resort — would reintroduce keyword brittleness routing was supposed to avoid). Tracking is via Sentinel's per-branch routing aggregation (Phase 4).
+**Action when 2 or 3 fires:** consider broader classifier-prompt restructuring OR a deterministic override layer in pipeline (last-resort — would reintroduce keyword brittleness routing was supposed to avoid). Tracking is via Sentinel's per-branch routing aggregation (`branch_distribution` in the Health Overview, plus the Failure Feed branch filter).
 
 ---
 
@@ -236,7 +236,7 @@ The explicit-request trigger uses a regex pattern list (`session_state.EXPLICIT_
 - False positive → tighten the conflicting pattern; add a unit test pinning the negative case.
 - Pattern list bloating → migrate to LLM-based classification (`gpt-4.1-nano` for cost), accept the ~200ms latency hit. Could reuse the classifier module's pattern (one-shot LLM call returning `bool`).
 
-**Companion observability:** Sentinel will be able to surface "turns where the user message contained 'contact' / 'reach' / 'in touch' words BUT explicit_request_seen wasn't latched" — gives a queryable signal for false-negative pattern discovery. Phase 4 work.
+**Companion observability:** Sentinel could surface "turns where the user message contained 'contact' / 'reach' / 'in touch' words BUT explicit_request_seen wasn't latched" — a queryable signal for false-negative pattern discovery. Not yet built; would be a custom Failure Feed filter, not in the current Sentinel scope.
 
 ---
 
@@ -263,7 +263,7 @@ The `fetch_project_readme` tool fires on the model's discretion — `tool_rules`
 **Trip-wires (any one promotes this to Observed):**
 
 1. Live smoke-test (issue #18 task #24, or any future R3 round) surfaces a TECHNICAL turn where the model demonstrably should have called the tool and didn't, AND the answer is materially weaker for it.
-2. Aggregate uptake rate over time (Sentinel, Phase 4) shows TECHNICAL turns calling the tool at a rate that doesn't match the question shape (e.g., consistently 0% when realistic question mix should be 40-60%).
+2. Aggregate uptake rate over time (Sentinel's `technical_tool_uptake_rate` + Trend Explorer) shows TECHNICAL turns calling the tool at a rate that doesn't match the question shape (e.g., consistently 0% when realistic question mix should be 40-60%).
 3. Inverse: model calls the tool on >70% of TECHNICAL turns including general "tell me about your projects" shapes — false-positive over-firing.
 
 **Action when a trip-wire fires:**
@@ -272,7 +272,7 @@ The `fetch_project_readme` tool fires on the model's discretion — `tool_rules`
 - For false positives: tighten "When not to call" with the offending pattern; add an explicit example of the false-positive shape.
 - For aggregate misalignment without a clear shape signal: add an LLM-as-judge pass over `(question, branch, tool_calls, answer)` to label each turn as "appropriate / under-called / over-called" and surface the breakdown in Sentinel.
 
-**What would help observe this cleanly:** a Sentinel panel showing `branch == TECHNICAL` turn count vs `len(tool_calls) > 0` count, broken down by question shape (project-named vs general). The data is already in the log; surfacing requires Sentinel work in Phase 4.
+**What would help observe this cleanly:** a Sentinel panel showing `branch == TECHNICAL` turn count vs `len(tool_calls) > 0` count, broken down by question shape (project-named vs general). The aggregate `technical_tool_uptake_rate` exists today; the question-shape breakdown is not yet built (would be a custom Sentinel surface, not part of the #34 FlagDetector scope).
 
 ---
 
@@ -294,7 +294,7 @@ The semantic shape — "give me a fact about a specific named publication / proj
 
 **Trip-wires (any one promotes priority):**
 
-1. Sentinel (Phase 4) flags `category="title fetch" AND branch="GENERIC" AND attempts > 1` as a recurring pattern in production logs over a meaningful sample.
+1. Sentinel's FlagDetector (#34, pending) flags `category="title fetch" AND branch="GENERIC" AND attempts > 1` as a recurring pattern in production logs over a meaningful sample.
 2. R3 or future smoke-test surfaces a recruiter probe asking for a paper title and getting a generic deflection — repeated shape, not a single instance.
 3. A future eval round shows the failure shape *expanding* (e.g. 3 → 6 specific-publication failures, or sibling shapes emerging where the system fabricates rather than emits the gap phrase).
 
@@ -304,7 +304,7 @@ The semantic shape — "give me a fact about a specific named publication / proj
 - Only if KB-side investigation is clean, revisit classifier scope — but as a structural redefinition of TECHNICAL's boundary (does it cover factual-lookup-about-named-publication?), not as example stuffing.
 - If misroute defense is still wanted at that point, the right factoring per `P7` is splitting `DEFLECTION` into a portable `offer_contact` half rather than promoting the whole rule.
 
-**Companion observability:** Sentinel can surface this as `category=direct_fact AND branch=GENERIC AND classification_confidence < 0.5 AND question_mentions_paper_or_project()` — a boolean signal for misroute-to-fallback patterns. Phase 4 work.
+**Companion observability:** Sentinel can surface this as `category=direct_fact AND branch=GENERIC AND classification_confidence < 0.5 AND question_mentions_paper_or_project()` — a boolean signal for misroute-to-fallback patterns. Pending #34 (FlagDetector).
 
 ---
 

@@ -186,7 +186,7 @@ When a metric fires, here's where to look and where the fix likely lives.
 ### `gap_rate` jump
 
 1. **Open Failure Feed** (#31) and filter to `knew_answer == False`.
-2. **Cluster the questions** (Gap Clusters #32 once shipped) — is there a new theme?
+2. **Cluster the questions** in the Gap Clusters panel (#32) — is there a new theme? Re-run the batch (`uv run python src/cluster_gaps.py`) to refresh.
 3. If a known KB topic is the cause: fix is in `data/knowledge_base/`. Re-run `uv run python src/ingest.py` after edits.
 4. If routing failure (TECHNICAL questions hitting GENERIC and emitting gap): fix is in `classifier.py::SYSTEM_PROMPT`. See LIMITATIONS::O6.
 5. If a real out-of-scope question (genuine gap with no anchor in KB): no fix; this is honest behaviour.
@@ -261,8 +261,9 @@ Sentinel is on-demand only. There is no background process watching for threshol
 Several headline metrics are proxies (see per-metric caveats above). The dashboard surfaces *signals*; confirming a hypothesis still requires:
 
 1. **Failure Feed** (#31) — read the actual questions and feedback.
-2. **Replay** (#38, future) — re-run failed turns through current code to confirm a fix worked.
-3. **Trend Explorer** (#30, future) — watch the metric over time, anchored to commit markers from `git_sha` (#37).
+2. **Replay** (#38) — re-run failed turns through current code to confirm a fix worked.
+3. **Trend Explorer** (#30) — watch the metric over time, anchored to commit markers from `git_sha` (#37).
+4. **Gap Clusters** (#32) and **Deflection summary** (#33) — weekly LLM-batched aggregations of the gap and deflection records, cached to `data/logs/gap_clusters.json` and `data/logs/summaries/deflection_*.md`. Run `uv run python src/cluster_gaps.py` and `uv run python src/summarize_failures.py` to refresh.
 
 The dashboard tells you "something looks off." The other affordances tell you "what."
 
@@ -272,4 +273,4 @@ All thresholds live in `src/metric_status.py::THRESHOLDS`. Tune by editing the d
 
 ### Schema versioning
 
-Records pre-#37 carry `schema_version="1"` (no `git_sha` / `model_id` / `prompt_hash` / `temperature`). `LocalReader` parses them with `None` defaults — these records still aggregate correctly into Sentinel metrics, they just can't anchor a deployment marker on the trend chart (#30 once shipped) or be replayed (#38).
+Records pre-#37 carry `schema_version="1"` (no `git_sha` / `model_id` / `prompt_hash` / `temperature`). `LocalReader` parses them with `None` defaults — these records still aggregate correctly into Sentinel metrics, they just can't anchor a deployment marker on the Trend Explorer (#30) or be replayed (#38) under their original conditions.
