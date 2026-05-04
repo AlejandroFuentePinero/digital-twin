@@ -40,6 +40,7 @@ MODULE_CATEGORY: dict[str, str] = {
     "branches": "Frame & Rules",
     "profile": "Frame & Rules",
     "composer": "Frame & Rules",
+    "event_classifier": "Frame & Rules",
     "classifier": "LLM Callers",
     "generator": "LLM Callers",
     "guardrail": "LLM Callers",

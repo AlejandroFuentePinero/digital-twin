@@ -59,6 +59,30 @@ when numbers go missing.\
 
 GAP_PHRASE = "I don't have that information in my knowledge base."
 
+# Canonical sentence-prefixes the model uses to begin an out-of-scope redirect.
+# This constant is a *prompt↔producer contract*, not a detector vocabulary:
+#   - The DEFLECTION_INSTRUCTIONS rule below instructs the model to begin
+#     redirects with one of these phrases.
+#   - `event_classifier.classify_event_type` reads the same constant and
+#     classifies any non-GAP / non-LOGISTICAL turn whose answer contains one
+#     of these markers as `event_type='deflected'`.
+#   - A static prompt-drift test in `tests/test_composer.py` asserts the
+#     LOGISTICAL/BEHAVIOURAL/GENERIC composed prompts carry a literal marker,
+#     pinning the prompt and the classifier to the same source of truth.
+# Adding a marker is one edit (here) — the prompt rule and the classifier
+# pick it up automatically.
+#
+# Distinct from `rules.DEFLECTION` further down, which is the BEHAVIOURAL
+# branch's prompt-rule body governing personal-story routing.
+DEFLECTION_MARKERS: tuple[str, ...] = (
+    "I'm here to answer questions",
+    "I'm here to help with",
+    "I'm here to provide",
+    "outside the scope",
+    "falls outside",
+    "not in a position to answer",
+)
+
 CALIBRATION_LADDER = f"""\
 ## Calibration ladder
 A guide for choosing claim verbs that match the depth of evidence in the retrieved \

@@ -101,6 +101,7 @@ graph LR
     direction TB
     branches["branches.py"]:::frame
     composer["composer.py"]:::frame
+    event_classifier["event_classifier.py"]:::frame
     profile["profile.py"]:::frame
     rules["rules.py"]:::frame
   end
@@ -195,6 +196,8 @@ graph LR
   composer --> profile
   composer --> rules
   dashboard_model --> interaction_log
+  event_classifier --> interaction_log
+  event_classifier --> rules
   failure_feed --> dashboard_model
   failure_feed --> interaction_log
   flag_detector --> dashboard_model
@@ -271,6 +274,7 @@ graph LR
 | `composer.py` | Prompt composer — assembles per-branch system prompts (ADR-0003). |
 | `contact_log.py` | Contact-form record schema + JSONL writer/reader (#16). |
 | `dashboard_model.py` | Pure aggregations over interaction records — Sentinel's deep model (issue #29). |
+| `event_classifier.py` | Producer-side event-type classifier (PRD #41 / issue #42). |
 | `failure_feed.py` | Failure-feed pure logic — Sentinel's per-turn debugging surface (issue #31). |
 | `flag_detector.py` | Sentinel anomaly flags (issue #34). |
 | `generator.py` | Generator — wraps the answer LLM call. |
