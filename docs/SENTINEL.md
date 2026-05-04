@@ -30,21 +30,22 @@ When a metric goes red, the matching **runbook** at the bottom of this doc tells
 
 #### `gap_rate`
 
-- **Definition:** `count(knew_answer == False OR event_type == "gap") / total`.
-- **What it measures:** the share of turns where the system either emitted the canonical gap phrase ("I don't have that information in my knowledge base") or carried `event_type=="gap"`.
-- **What it proxies:** KB coverage. Rising `gap_rate` → users are asking things the KB cannot answer.
-- **Proxy caveats:** an `event_type=="gap"` record almost never appears in production today (writer bug — pipeline.py rarely sets it). The metric currently rides on `knew_answer=False` alone. Once the writer fix lands the metric stays correct without redefinition. Also: a "gap" can be a *routing* failure rather than a coverage failure — a TECHNICAL question that classifies to GENERIC may produce the gap phrase even though the README the model needed is sitting in the tool registry. Drill into Failure Feed to attribute.
-- **Thresholds:** healthy ≤ 10%, warning ≤ 15%, alert above. *Source:* live baseline (Session 28 inventory: 9.4%) + portfolio-scale tolerance.
+- **Definition:** `count(event_type == "gap") / total`.
+- **What it measures:** the share of turns where the system either acknowledged it didn't have the information (canonical gap phrase) or produced a structured gap-aware response about an absent skill (broader-skill reframe + active-learning).
+- **What it proxies:** KB / skill-coverage. Rising `gap_rate` → recruiters are probing skills the system can't speak to with substance.
+- **Source signal:** the producer (`pipeline.py` → `event_classifier.classify_event_type`) emits `event_type='gap'` for every GAP-branch turn (branch policy) and for any non-GAP turn whose answer carries the canonical `GAP_PHRASE`. `LogReader` smart-normalizes pre-v4 records carrying the gap phrase so historical records read consistently. No proxies, no `knew_answer` reads.
+- **Thresholds (post-#42 — recalibration pending):** the historical thresholds (healthy ≤ 10%, warning ≤ 15%) were calibrated against the pre-fix proxy that under-counted gaps. Post-#42 the metric reads materially higher on healthy traffic because constructive GAP-branch gap-aware responses now count (correctly) — the predicted live value sits around 40–45% on a typical recruiter-traffic mix. **Hold off on alerting from these thresholds** until a week of post-#42 traffic accumulates and the operator sets a new healthy band. Treat current thresholds as historical context, not actionable.
 - **Confidence:** at N < 30, ±2pp noise floor. Treat single-day jumps as preliminary.
+- **Routing-vs-coverage attribution:** a "gap" can also be a *routing* failure (a TECHNICAL question classified to GENERIC may emit the gap phrase even though the README the model needed sits in the tool registry). Drill into Failure Feed to attribute.
 
 #### `deflection_rate`
 
 - **Definition:** `count(event_type == "deflected") / total`.
-- **What it measures:** the share of turns where the BEHAVIOURAL branch deflected to a STAR anecdote in `personal_stories`.
-- **What it proxies:** behavioural-branch fidelity. Rising rate → recruiters are probing soft skills more (or routing is misfiring into BEHAVIOURAL on technical questions).
-- **Proxy caveats:** writer parity issue similar to `gap_rate` — `event_type=="deflected"` is set conservatively; not every BEHAVIOURAL turn flags it.
-- **Thresholds:** healthy ≤ 5%, warning ≤ 10%, alert above. *Source:* informed guess; revisit once behavioural traffic accumulates.
-- **Confidence:** very low N in production today; treat with skepticism until BEHAVIOURAL turns cross ~30.
+- **What it measures:** the share of turns where the system politely redirected an out-of-scope question (general coding help, trivia, opinions) instead of answering.
+- **What it proxies:** scope-discipline + recruiter-traffic shape. Rising rate → more out-of-scope traffic, or the routing is sending more questions through LOGISTICAL / GENERIC than usual. Falling to zero on healthy traffic → suspect the producer rule has drifted (the static prompt-drift test in `tests/test_composer.py` is the forcing function for the prompt↔producer contract).
+- **Source signal:** the producer emits `event_type='deflected'` for every LOGISTICAL-branch turn (branch policy) and for any non-LOGISTICAL turn whose answer begins with one of the canonical phrases in `rules.DEFLECTION_MARKERS`. The composer prompt instructs the model to use that phrasing on out-of-scope redirects in LOGISTICAL / BEHAVIOURAL / GENERIC; the producer reads the same constant. Adding a new deflection shape is one edit (in `rules.py`) — the prompt rule and the classifier pick it up automatically.
+- **Thresholds (post-#42 — recalibration pending):** the historical thresholds (healthy ≤ 5%, warning ≤ 10%) assumed the metric was always near zero because the producer never emitted the value. Post-#42 the predicted live value is around 5–10% on a typical recruiter-traffic mix; revisit thresholds once a week of traffic accumulates.
+- **Confidence:** moderate post-#42 — explicit producer signal, no proxy.
 
 #### `refusal_rate`
 

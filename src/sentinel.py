@@ -1308,8 +1308,8 @@ SECTION_CAPTIONS: dict[str, str] = {
 METRIC_GLOSSARY: dict[str, str] = {
     # Outcome
     "Total interactions":                                  "Count of all logged turns in the window — pure volume signal.",
-    "Gap rate":                                            "Share of turns where the system emitted the canonical \"I don't have that information\" phrase (knew_answer=False).",
-    "Deflection rate":                                     "Share of BEHAVIOURAL turns that redirected to a STAR anecdote in personal_stories.",
+    "Gap rate":                                            "Share of turns where the system either acknowledged it didn't have the information (canonical gap phrase) or produced a structured gap-aware response about an absent skill.",
+    "Deflection rate":                                     "Share of turns where the system politely redirected an out-of-scope question (general coding help, trivia, opinions) rather than answering.",
     "Refusal rate":                                        "Share of turns that bottomed out into the canned-refusal copy after 3 rejected guardrail attempts.",
     "Guardrail rejection rate":                            "Share of turns where the guardrail rejected at least one attempt — composite over fabrication, scope, tone, injection, dishonest gap.",
     "Retry-exhaustion rate":                               "Share of turns that consumed all 3 generation attempts — superset of refusal_rate; the gap is barely-accepted turns.",

@@ -477,6 +477,34 @@ The 50 canary questions were curated against the KB as it existed on 2026-05-04.
 
 ---
 
+### P15 — Graceful-deflect across non-GAP branches is correct, not erroneous
+
+**Status:** Observed (Session 43, PRD `#41` / `#42`).
+
+The classify-then-route architecture (ADR-0003) predicted GAP would be the only branch producing graceful-deflect outcomes. In practice TECHNICAL turns probing absent skills (CUDA, kdb+/q, …) and BEHAVIOURAL turns where no `personal_stories` entry maps to the question intent both produce graceful-deflect outcomes — a structured "I don't have hands-on yet, here's the broader skill + active learning" or "no story maps cleanly, happy to put you in touch with Alejandro directly". These are correct outcomes, not failures.
+
+Pre-#42 these outcomes silently mis-classified as `event_type='answered'` because the producer only emitted `answered` / `refused`. Post-#42 the `event_classifier` rule classifies them as `event_type='gap'` (when the canonical phrase is present) or `event_type='deflected'` (when a DEFLECTION_MARKERS prefix is present). The Live tab now surfaces the real outcome shape, but the operator should read these counts as expected-behaviour signals rather than alerts.
+
+**Why this is logged:**
+
+- The PRD's gap-rate threshold (≤10% healthy) was calibrated against the pre-fix proxy that under-counted gaps. Post-#42 healthy traffic carries a much higher gap_rate because constructive GAP-branch responses now count.
+- A future maintainer reading "gap_rate 44% — alert!" would otherwise treat it as a regression rather than the metric becoming honest.
+
+**Trip-wires (any one promotes priority):**
+
+1. A sustained drop in TECHNICAL `event_type='deflected'` co-occurring with a rise in `guardrail_rejection_rate` for fabrication — suggests the rule loosened its grip on canonical phrasing and the model is improvising deflections that the producer can't classify.
+2. `event_type='gap'` rate falls below pre-#42 baseline (~9%) on stable traffic — suggests the producer's GAP-branch rule isn't firing, or the classifier-routing changed materially.
+3. New "graceful-deflect-but-not-classified" pattern appears in Failure Feed drilldowns — the marker contract (`rules.DEFLECTION_MARKERS`) needs a new entry.
+
+**Action when a trip-wire fires:**
+
+- For (1) / (3): inspect a sample of the relevant turns in Failure Feed. If the model is producing legitimate deflections that don't carry a marker, extend `DEFLECTION_MARKERS` and re-run the static prompt-drift test. If the prompt has drifted off-contract, tighten the prompt rule.
+- For (2): check classifier branch distribution against `mean_classification_confidence` — a routing regression upstream is more likely than a producer bug.
+
+**Companion observability:** the post-#42 metric thresholds for `gap_rate` and `deflection_rate` need recalibration against a week of post-#42 traffic before alerting from them. Currently treated as descriptive, not actionable — see `docs/SENTINEL.md` § Outcome block notes.
+
+---
+
 ## Cross-references
 
 - [`docs/adr/0003-classify-then-route-orchestration.md`](./adr/0003-classify-then-route-orchestration.md) — architectural risks (predicted entries cite §Operational risks).
