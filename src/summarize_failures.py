@@ -205,7 +205,10 @@ def run_batch(
     from log_reader import LocalReader
 
     reader = LocalReader(log_path) if log_path is not None else LocalReader()
-    records = reader.read()
+    # Canary records share interactions.jsonl with live records (#39). Summarise
+    # only live failures — synthetic canary refusal / gap / deflection probes
+    # would otherwise pollute the operator-facing summary reports.
+    records = [r for r in reader.read() if not r.is_canary]
     today = datetime.now(timezone.utc).date().isoformat()
     summarizer = FailureSummarizer()
 

@@ -555,7 +555,7 @@ def test_pipeline_populates_reproducibility_fields_in_log_record(real_composer, 
         pipeline.run("q", history=[], session_id="s1", turn_index=0)
 
     record = LogReader(log_path).read_all()[0]
-    assert record["schema_version"] == "2"
+    assert record["schema_version"] == "3"
     # git_sha cached at import — must be a 40-char hex string (or 7+ short SHA, depending on rev-parse)
     assert isinstance(record["git_sha"], str) and len(record["git_sha"]) >= 7
     assert record["model_id"] == generator.MODEL
@@ -616,7 +616,7 @@ def test_log_record_carries_full_schema_with_branch_classification_chunks_and_la
 
     record = LogReader(log_path).read_all()[0]
     # Identity / addressing fields
-    assert record["schema_version"] == "2"
+    assert record["schema_version"] == "3"
     assert record["session_id"] == "sess-xyz"
     assert record["turn_index"] == 4
     assert record["question"] == "the question"

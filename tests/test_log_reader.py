@@ -132,7 +132,7 @@ def test_read_tolerates_records_missing_optional_fields(tmp_path):
     assert out[0].contact_provided is False
     # Default schema_version is "2" post-issue-#37; legacy records that omit
     # it inherit the new default. The 4 reproducibility fields default None.
-    assert out[0].schema_version == "2"
+    assert out[0].schema_version == "3"
     assert out[0].classifier_labels == []
 
 
@@ -155,3 +155,27 @@ def test_read_tolerates_v1_records_lacking_reproducibility_fields(tmp_path):
     assert out[0].model_id is None
     assert out[0].temperature is None
     assert out[0].prompt_hash is None
+
+
+def test_read_tolerates_pre_issue_39_records_lacking_canary_fields(tmp_path):
+    """Forcing function for the live log: the 99+ records on disk pre-issue-#39
+    have no `is_canary` / `run_id` / `replicate_index` keys at all. LocalReader
+    must parse them with `is_canary=False`, `run_id=None`, `replicate_index=None`
+    so they continue to flow through Sentinel's live tabs (which filter
+    `is_canary=True`) without backfill."""
+    log_path = tmp_path / "interactions.jsonl"
+    legacy = _record() | {"schema_version": "2"}
+    # The three canary fields are absent on pre-#39 records — never written.
+    for key in ("is_canary", "run_id", "replicate_index"):
+        legacy.pop(key, None)
+    _write_jsonl(log_path, [legacy])
+
+    out = LocalReader(log_path).read()
+
+    assert len(out) == 1
+    assert out[0].is_canary is False, (
+        "legacy records must default to is_canary=False so the live tabs see them"
+    )
+    assert out[0].run_id is None
+    assert out[0].replicate_index is None
+    assert out[0].schema_version == "2", "explicit v2 stamp preserved"

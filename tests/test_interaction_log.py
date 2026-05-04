@@ -45,7 +45,7 @@ def test_append_populates_default_fields_when_caller_omits_them(tmp_path):
     assert record["tool_calls"] == []
     assert record["contact_offered"] is False
     assert record["contact_provided"] is False
-    assert record["schema_version"] == "2"
+    assert record["schema_version"] == "3"
 
 
 def test_append_raises_on_missing_required_fields(tmp_path):
@@ -100,7 +100,7 @@ def test_schema_version_defaults_to_v2_with_reproducibility_fields(tmp_path):
     log_path = tmp_path / "interactions.jsonl"
     LogWriter(log_path).append(_full_record())
     record = LogReader(log_path).read_all()[0]
-    assert record["schema_version"] == "2"
+    assert record["schema_version"] == "3"
     assert record["git_sha"] is None
     assert record["model_id"] is None
     assert record["temperature"] is None
@@ -118,6 +118,30 @@ def test_compute_prompt_hash_is_deterministic_and_12_hex_chars():
     assert len(h1) == 12 and all(c in "0123456789abcdef" for c in h1)
     assert compute_prompt_hash("system B", "user A") != h1, "system change must change hash"
     assert compute_prompt_hash("system A", "user B") != h1, "user change must change hash"
+
+
+def test_canary_fields_default_to_live_record_shape_and_round_trip_when_set(tmp_path):
+    """Schema v3 (#39): is_canary defaults False, replicate_index + run_id default
+    None — so legacy v2 records still parse. When a canary writer populates them
+    they round-trip through writer/reader."""
+    log_path = tmp_path / "interactions.jsonl"
+    LogWriter(log_path).append(_full_record())
+    live = LogReader(log_path).read_all()[0]
+    assert live["is_canary"] is False
+    assert live["replicate_index"] is None
+    assert live["run_id"] is None
+
+    canary_log = tmp_path / "canary.jsonl"
+    canary = _full_record() | {
+        "is_canary": True,
+        "replicate_index": 2,
+        "run_id": "run-2026-05-04-abc",
+    }
+    LogWriter(canary_log).append(canary)
+    out = LogReader(canary_log).read_all()[0]
+    assert out["is_canary"] is True
+    assert out["replicate_index"] == 2
+    assert out["run_id"] == "run-2026-05-04-abc"
 
 
 def test_record_round_trips_reproducibility_fields_when_caller_populates_them(tmp_path):

@@ -64,6 +64,10 @@ MODULE_CATEGORY: dict[str, str] = {
     "cluster_gaps": "Tooling",
     "summarize_failures": "Tooling",
     "flag_detector": "Tooling",
+    "canary_corpus": "Tooling",
+    "canary_baseline": "Tooling",
+    "canary_drift": "Tooling",
+    "canary_runner": "Tooling",
 }
 
 UNCATEGORIZED = "Uncategorized"

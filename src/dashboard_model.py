@@ -35,6 +35,22 @@ class DashboardModel:
     # true conversion. Empty default preserves the legacy record-level
     # signal for callers that don't load the contact log.
     provided_session_ids: frozenset[str] = field(default_factory=frozenset)
+    # Canary filtering (issue #39). Default is "live tabs only" — every Metrics
+    # / Trends / Failures consumer constructs `DashboardModel(records)` and
+    # never sees canary records. The Canary tab opts in via
+    # `DashboardModel(records, include_canary=True, only_canary=True)`.
+    include_canary: bool = False
+    only_canary: bool = False
+
+    def __post_init__(self) -> None:
+        if self.only_canary:
+            kept = [r for r in self.records if r.is_canary]
+        elif self.include_canary:
+            kept = list(self.records)
+        else:
+            kept = [r for r in self.records if not r.is_canary]
+        # frozen dataclass — assign through object.__setattr__
+        object.__setattr__(self, "records", kept)
 
     @property
     def total_interactions(self) -> int:
@@ -202,6 +218,30 @@ class DashboardModel:
             return None
         return sum(1 for r in technical if r.tool_calls) / len(technical)
 
+    def branch_match_rate(self, corpus) -> float | None:
+        """Fraction of canary records whose observed branch matches the corpus's
+        ``expected_branch`` for the same question id (resolved via the question
+        text, which the runner mirrors verbatim into ``InteractionRecord.question``).
+
+        Canary-only signal — not meaningful on live traffic. Issue #39 § Canary
+        tab Block 2."""
+        expected = {q.question: q.expected_branch for q in corpus}
+        relevant = [r for r in self.records if r.question in expected]
+        if not relevant:
+            return None
+        return sum(1 for r in relevant if r.branch == expected[r.question]) / len(relevant)
+
+    def tool_uptake_on_warranted(self, corpus) -> float | None:
+        """Fraction of canary records WHOSE CORPUS ENTRY sets ``requires_tool=True``
+        that actually invoked a tool. Clean denominator — fixes
+        LIMITATIONS::P8 (the live ``technical_tool_uptake_rate`` denominator
+        includes branch-routed records that don't warrant a tool)."""
+        warranted_questions = {q.question for q in corpus if q.requires_tool}
+        warranted = [r for r in self.records if r.question in warranted_questions]
+        if not warranted:
+            return None
+        return sum(1 for r in warranted if r.tool_calls) / len(warranted)
+
     @property
     def tool_call_count(self) -> int:
         """Total number of tool invocations across all records — volume signal
@@ -254,9 +294,13 @@ class DashboardModel:
         if days is None:
             return self
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        # `self.records` has already been canary-filtered in __post_init__;
+        # pass include_canary=True so the child doesn't re-filter and
+        # accidentally drop canaries when the parent is only_canary.
         return DashboardModel(
             [r for r in self.records if r.timestamp >= cutoff],
             provided_session_ids=self.provided_session_ids,
+            include_canary=True,
         )
 
     def time_series_by_day(
@@ -310,6 +354,7 @@ class DashboardModel:
         return DashboardModel(
             [r for r in self.records if prior_start <= r.timestamp < prior_end],
             provided_session_ids=self.provided_session_ids,
+            include_canary=True,
         )
 
 

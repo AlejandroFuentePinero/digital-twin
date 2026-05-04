@@ -345,3 +345,44 @@ def test_read_cluster_history_returns_empty_list_when_archive_dir_missing(tmp_pa
     from cluster_gaps import read_cluster_history
 
     assert read_cluster_history(tmp_path / "nope") == []
+
+
+def test_run_batch_excludes_canary_records_from_clustering(tmp_path):
+    """Forcing function (#39): canary records share interactions.jsonl with
+    live records. cluster_gaps must filter `is_canary=True` before extracting
+    gap questions — otherwise synthetic canary GAP probes (C006-C009, C019-
+    C022) would contaminate the operator-facing cluster output."""
+    from cluster_gaps import run_batch
+
+    log_path = tmp_path / "interactions.jsonl"
+    out_path = tmp_path / "gap_clusters.json"
+
+    live_gap = _record(question="live gap question", knew_answer=False)
+    canary_gap = _record(
+        question="C006 — kdb+/q canary",
+        knew_answer=False,
+    ).model_copy(update={
+        "is_canary": True,
+        "run_id": "run-canary-A",
+        "replicate_index": 0,
+    })
+    log_path.write_text(
+        live_gap.model_dump_json() + "\n" + canary_gap.model_dump_json() + "\n"
+    )
+
+    response_json = json.dumps({
+        "clusters": [{"label": "stub", "count": 2, "examples": ["live gap question"]}]
+    })
+    with patch(
+        "cluster_gaps.completion",
+        return_value=_completion_returning(response_json),
+    ) as mock:
+        run_batch(days=7, out_path=out_path, log_path=log_path,
+                  archive_dir=tmp_path / "archive")
+
+    user_msg = mock.call_args.kwargs["messages"][-1]["content"]
+    assert "live gap question" in user_msg
+    assert "C006" not in user_msg, (
+        "canary records leaked into cluster batch — operator-facing clusters "
+        "would include synthetic canary probes"
+    )

@@ -682,6 +682,107 @@ def test_time_series_by_day_works_for_every_plottable_metric():
         )
 
 
+def _canary_record(branch: str = "TECHNICAL", **overrides) -> InteractionRecord:
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "session_id": "canary-sess",
+        "turn_index": 0,
+        "question": "C001",
+        "event_type": "answered",
+        "branch": branch,
+        "classification_confidence": 0.95,
+        "attempts": [{"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""}],
+        "retrieved_chunks": [],
+        "latency_ms": {"classifier": 0, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 0},
+        "knew_answer": True,
+        "is_canary": True,
+        "run_id": "run-1",
+        "replicate_index": 0,
+    }
+    payload.update(overrides)
+    return InteractionRecord.model_validate(payload)
+
+
+def test_dashboard_model_excludes_canary_records_by_default():
+    """Live tabs construct DashboardModel(records) and never see canary records:
+    aggregations operate on the live subset only. Default include_canary=False
+    is the canonical filter for Metrics / Trends / Failures."""
+    live = _record(event_type="answered")
+    canary = _canary_record(event_type="gap", branch="GAP").model_copy(
+        update={"knew_answer": False}
+    )
+    model = DashboardModel([live, canary])
+
+    assert model.total_interactions == 1
+    assert model.gap_rate == 0.0
+
+
+def test_dashboard_model_only_canary_inverts_the_filter():
+    """The Canary tab constructs DashboardModel(records, include_canary=True,
+    only_canary=True) — aggregations operate on the canary subset only."""
+    live = _record(event_type="answered")
+    canary = _canary_record(event_type="gap").model_copy(update={"knew_answer": False})
+    model = DashboardModel([live, canary], include_canary=True, only_canary=True)
+
+    assert model.total_interactions == 1
+    assert model.gap_rate == 1.0
+
+
+def test_dashboard_model_include_canary_keeps_both_subsets():
+    """include_canary=True without only_canary mixes live + canary — escape hatch
+    for ad-hoc analysis. The default-off behaviour is the load-bearing one."""
+    live = _record(event_type="answered")
+    canary = _canary_record()
+    model = DashboardModel([live, canary], include_canary=True)
+    assert model.total_interactions == 2
+
+
+def test_branch_match_rate_compares_observed_branch_to_corpus_expected():
+    """branch_match_rate(corpus) is the canary-only classifier-correctness signal:
+    fraction of canary records whose `branch` equals `corpus[id].expected_branch`."""
+    from canary_corpus import CanaryQuestion
+
+    corpus = [
+        CanaryQuestion(id="C001", question="q1", expected_branch="TECHNICAL",
+                       expected_event_type="answered", expected_chunk_sources=[],
+                       expected_keywords=[], category="x", requires_tool=False),
+        CanaryQuestion(id="C002", question="q2", expected_branch="GAP",
+                       expected_event_type="gap", expected_chunk_sources=[],
+                       expected_keywords=[], category="x", requires_tool=False),
+    ]
+    records = [
+        _canary_record(branch="TECHNICAL", question="q1"),
+        _canary_record(branch="TECHNICAL", question="q2"),  # mis-route → mismatch
+    ]
+    model = DashboardModel(records, include_canary=True, only_canary=True)
+    assert model.branch_match_rate(corpus) == 0.5
+
+
+def test_tool_uptake_on_warranted_uses_clean_denominator():
+    """tool_uptake_on_warranted(corpus) is uptake over canary records whose corpus
+    entry sets requires_tool=True. The denominator is the warranted subset only —
+    fixes LIMITATIONS::P8 (technical_tool_uptake_rate's noisy denominator)."""
+    from canary_corpus import CanaryQuestion
+
+    corpus = [
+        CanaryQuestion(id="C001", question="needs tool", expected_branch="TECHNICAL",
+                       expected_event_type="answered", expected_chunk_sources=[],
+                       expected_keywords=[], category="x", requires_tool=True),
+        CanaryQuestion(id="C002", question="no tool", expected_branch="BEHAVIOURAL",
+                       expected_event_type="answered", expected_chunk_sources=[],
+                       expected_keywords=[], category="x", requires_tool=False),
+    ]
+    records = [
+        _canary_record(question="needs tool", branch="TECHNICAL").model_copy(
+            update={"tool_calls": [{"name": "fetch_project_readme", "args": {},
+                                    "status": "success", "attempt_index": 0}]}
+        ),
+        _canary_record(question="no tool", branch="BEHAVIOURAL"),  # excluded from denom
+    ]
+    model = DashboardModel(records, include_canary=True, only_canary=True)
+    assert model.tool_uptake_on_warranted(corpus) == 1.0
+
+
 def test_event_counts_buckets_records_by_event_type():
     """event_counts returns the count of each event_type seen across the records."""
     model = DashboardModel(

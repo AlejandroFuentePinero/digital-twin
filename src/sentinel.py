@@ -45,7 +45,16 @@ from cluster_gaps import (
     read_clusters,
 )
 import cluster_gaps
+import canary_runner
 import summarize_failures
+from canary_baseline import DEFAULT_BASELINE_PATH, read_baseline, resolve_baseline_records
+from canary_corpus import DEFAULT_CORPUS_PATH, load_canaries
+from canary_drift import (
+    CanaryDriftFlag,
+    aggregate_question,
+    detect_drift,
+    stratified_summary,
+)
 from contact_log import read_provided_session_ids
 from dashboard_model import METRIC_GETTERS, DashboardModel
 from flag_detector import (
@@ -94,7 +103,13 @@ MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA = 14
 # Tab identifiers so flag-click handlers can switch tabs by ID.
 TAB_METRICS = "tab-metrics"
 TAB_TRENDS = "tab-trends"
+TAB_CANARY = "tab-canary"
 TAB_FAILURES = "tab-failures"
+
+# Sparklines render the last N canary runs as a tiny inline trend so each
+# metric row carries its own trajectory cell. 12 fits the natural cadence:
+# one weekly run × ~3 months of history.
+CANARY_SPARK_WINDOW = 12
 
 FLAG_TARGET_TAB: dict[str, str] = {
     "failure_feed": TAB_FAILURES,
@@ -615,6 +630,71 @@ body, .gradio-container {
     font-size: 0.82em;
     margin-top: 2px;
 }
+
+/* ---- Canary tab ---- */
+.canary-banner {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    color: var(--text-secondary);
+    padding: 10px 14px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin: 6px 0 16px;
+}
+.canary-banner .count-alert    { color: var(--alert);   font-weight: 600; }
+.canary-banner .count-warning  { color: var(--warning); font-weight: 600; }
+.canary-empty {
+    padding: 18px;
+    color: var(--text-secondary);
+    background: var(--bg-surface);
+    border: 1px dashed var(--border-strong);
+    border-radius: 4px;
+    text-align: center;
+    font-size: 0.92em;
+}
+.canary-drift-card {
+    padding: 12px 14px;
+    margin: 6px 0;
+    border-radius: 4px;
+    border-left: 3px solid var(--alert);
+    background: var(--alert-tint);
+}
+.canary-drift-card.sev-warning {
+    border-left-color: var(--warning);
+    background: var(--warning-tint);
+}
+.canary-drift-headline {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+.canary-drift-detail {
+    font-size: 0.88em;
+    color: var(--text-secondary);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.canary-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88em;
+    margin-top: 8px;
+}
+.canary-table th, .canary-table td {
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+}
+.canary-table th {
+    color: var(--text-secondary);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.78em;
+}
+.canary-row.sev-major { background: var(--alert-tint); }
+.canary-row.sev-minor { background: var(--warning-tint); }
+.canary-sev { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 
 /* Restraint: no shadows, no gradients, small radii everywhere */
 button { border-radius: 6px !important; }
@@ -1720,12 +1800,169 @@ def format_flags_summary(flags: list[Flag]) -> str:
     return "\n".join(format_flag_card(f) for f in flags)
 
 
+CANARY_EMPTY_PLACEHOLDER = (
+    "<div class='canary-empty'>"
+    "No canary runs yet. Run "
+    "<code>uv run python src/canary_runner.py</code> to populate."
+    "</div>"
+)
+
+CANARY_NO_BASELINE = (
+    "<div class='canary-empty'>"
+    "No baseline frozen yet. Run the canary CLI with "
+    "<code>--freeze-baseline</code> or use the Re-baseline button below."
+    "</div>"
+)
+
+
+def _short_sha(sha: str | None) -> str:
+    if not sha:
+        return "—"
+    return sha[:7]
+
+
+def format_canary_drift_summary(
+    pointer: dict | None,
+    current_run_records: list[InteractionRecord],
+    flags: list[CanaryDriftFlag],
+) -> str:
+    """One-row banner: flag counts + benchmark date + latest canary run date.
+
+    Both dates carry their git_sha so drift attribution is one glance away
+    (`from_sha → to_sha`)."""
+    if not current_run_records:
+        return CANARY_EMPTY_PLACEHOLDER
+    major = sum(1 for f in flags if f.severity == "major")
+    minor = sum(1 for f in flags if f.severity == "minor")
+    current_sha = _short_sha(current_run_records[0].git_sha)
+    latest_run_at = (current_run_records[0].timestamp or "")[:10]
+
+    if pointer is None:
+        return (
+            "<div class='canary-banner'>"
+            f"latest canary run {html.escape(latest_run_at)} on sha "
+            f"<code>{current_sha}</code> · "
+            "<em>no benchmark frozen — use "
+            "<code>uv run python src/canary_runner.py --freeze-baseline</code> "
+            "or the Re-baseline button below.</em>"
+            "</div>"
+        )
+
+    baseline_sha = _short_sha(pointer.get("frozen_git_sha"))
+    frozen_at = (pointer.get("frozen_at") or "")[:10]
+    return (
+        "<div class='canary-banner'>"
+        f"<span class='count-alert'>{major} major</span> · "
+        f"<span class='count-warning'>{minor} minor</span> · "
+        f"benchmark {html.escape(frozen_at)} (<code>{baseline_sha}</code>) → "
+        f"latest canary run {html.escape(latest_run_at)} "
+        f"(<code>{current_sha}</code>)"
+        "</div>"
+    )
+
+
+def format_canary_drift_card(flag: CanaryDriftFlag) -> str:
+    """One drift-flag card. Mirrors `format_flag_card` styling but reads the
+    `CanaryDriftFlag.severity` to pick neon-red (major) vs amber (minor)."""
+    sev = "alert" if flag.severity == "major" else "warning"
+    return (
+        f"<div class='canary-drift-card sev-{sev}'>"
+        f"<div class='canary-drift-headline'>{html.escape(flag.headline)}</div>"
+        f"<div class='canary-drift-detail'>"
+        f"<code>{html.escape(flag.question)}</code> · "
+        f"{html.escape(flag.detail)}</div>"
+        "</div>"
+    )
+
+
+def format_canary_per_question_table(
+    flags: list[CanaryDriftFlag],
+    corpus,
+    *,
+    show_all: bool = False,
+) -> str:
+    """Per-question drift rows. Defaults to drifting-only; ``show_all=True``
+    renders every corpus question with a dim row when no drift fired."""
+    drifting = {f.question for f in flags}
+    flags_by_question: dict[str, list[CanaryDriftFlag]] = {}
+    for f in flags:
+        flags_by_question.setdefault(f.question, []).append(f)
+
+    rows = []
+    for q in corpus:
+        if not show_all and q.question not in drifting:
+            continue
+        question_flags = flags_by_question.get(q.question, [])
+        if question_flags:
+            top_severity = "major" if any(
+                f.severity == "major" for f in question_flags
+            ) else "minor"
+            kind_summary = ", ".join(sorted({f.kind for f in question_flags}))
+        else:
+            top_severity = "healthy"
+            kind_summary = "—"
+        rows.append(
+            f"<tr class='canary-row sev-{top_severity}'>"
+            f"<td><code>{html.escape(q.id)}</code></td>"
+            f"<td>{html.escape(q.question)}</td>"
+            f"<td>{html.escape(q.expected_branch)}</td>"
+            f"<td>{html.escape(kind_summary)}</td>"
+            f"<td class='canary-sev'>{top_severity}</td>"
+            "</tr>"
+        )
+    if not rows:
+        msg = (
+            "No canary questions drifted this run."
+            if not show_all else "Empty corpus."
+        )
+        return f"<div class='canary-empty'>{msg}</div>"
+    return (
+        "<table class='canary-table'>"
+        "<thead><tr>"
+        "<th>ID</th><th>Question</th><th>Expected branch</th>"
+        "<th>Drift kinds</th><th>Severity</th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+    )
+
+
 def _kb_coverage_entries(records: list[InteractionRecord]) -> list[CoverageEntry]:
     """Flatten retrieved chunks across `records` and cross-reference against
     the canonical KB section list. Pure helper — Sentinel calls this at
     page-load and refresh."""
     flat = [chunk for r in records for chunk in r.retrieved_chunks]
     return compute_coverage(flat, load_sections())
+
+
+def _build_canary_drift_state(
+    all_records: list[InteractionRecord],
+    *,
+    corpus_path: Path = DEFAULT_CORPUS_PATH,
+    baseline_path: Path = DEFAULT_BASELINE_PATH,
+) -> tuple[list[CanaryDriftFlag], list[InteractionRecord], dict | None, list]:
+    """Resolve drift between the latest canary run and the frozen baseline.
+
+    Returns ``(flags, latest_run_records, baseline_pointer, corpus)``. Each
+    can be empty / None on cold start; the caller renders the appropriate
+    placeholder."""
+    try:
+        corpus = load_canaries(corpus_path)
+    except (FileNotFoundError, ValueError):
+        corpus = []
+
+    runs = _canary_runs_grouped(all_records)
+    latest_records: list[InteractionRecord] = runs[-1][1] if runs else []
+
+    pointer = read_baseline(baseline_path)
+    baseline_records = resolve_baseline_records(
+        [r for r in all_records if r.is_canary],
+        baseline_path,
+    )
+
+    flags: list[CanaryDriftFlag] = []
+    if latest_records and baseline_records and corpus:
+        flags = detect_drift(latest_records, baseline_records, corpus)
+    return flags, latest_records, pointer, corpus
 
 
 def _build_flags(model: DashboardModel) -> list[Flag]:
@@ -2034,6 +2271,95 @@ def ensure_fresh_summaries(
     )
 
 
+def _latest_canary_timestamp(records: list[InteractionRecord]) -> str | None:
+    canary = [r for r in records if r.is_canary]
+    if not canary:
+        return None
+    return max(r.timestamp for r in canary)
+
+
+def ensure_fresh_canaries(
+    reader: LogReader | None = None,
+    *,
+    max_age_days: int = DEFAULT_FRESHNESS_DAYS,
+    runner: callable = canary_runner.run_batch,
+) -> str | None:
+    """Run the canary batch when the most recent canary run is older than
+    ``max_age_days`` (or absent). Sentinel calls this on launch alongside
+    ``ensure_fresh_clusters`` / ``ensure_fresh_summaries`` per the issue
+    spec; failures surface as a banner rather than crashing."""
+    reader = reader or _default_reader()
+    latest = _latest_canary_timestamp(reader.read())
+    if latest is not None:
+        latest_dt = datetime.fromisoformat(latest)
+        if latest_dt > datetime.now(timezone.utc) - timedelta(days=max_age_days):
+            return None
+    return _run_with_capture("Canary", lambda: runner())
+
+
+def _canary_runs_grouped(
+    records: list[InteractionRecord],
+) -> list[tuple[str, list[InteractionRecord]]]:
+    """Group canary records by ``run_id``, ordered oldest-first by the run's
+    earliest timestamp. Sparklines + per-run drift comparisons consume this
+    chronologically."""
+    canary = [r for r in records if r.is_canary and r.run_id]
+    by_run: dict[str, list[InteractionRecord]] = {}
+    for r in canary:
+        by_run.setdefault(r.run_id, []).append(r)
+    return sorted(
+        by_run.items(),
+        key=lambda kv: min(r.timestamp for r in kv[1]),
+    )
+
+
+def canary_metric_history(
+    records: list[InteractionRecord],
+    metric: str,
+    *,
+    last_n: int = CANARY_SPARK_WINDOW,
+) -> list[float | None]:
+    """One value per canary run for ``metric``, oldest-first, capped to the
+    last ``last_n`` runs. Powers the inline sparkline column on the canary
+    health blocks."""
+    getter = METRIC_GETTERS.get(metric)
+    if getter is None:
+        return []
+    runs = _canary_runs_grouped(records)[-last_n:]
+    return [
+        getter(DashboardModel(rs, include_canary=True, only_canary=True))
+        for _, rs in runs
+    ]
+
+
+def render_sparkline(
+    values: list[float | None],
+    baseline: float | None,
+) -> Figure | None:
+    """Tiny matplotlib sparkline: line over ``values`` with a horizontal
+    reference line at ``baseline``. Returns ``None`` when there's nothing
+    to draw (≤ 1 valid value) so the caller can render a `—` placeholder."""
+    valid = [v for v in values if v is not None]
+    if len(valid) < 2:
+        return None
+    fig = Figure(figsize=(1.6, 0.32), dpi=150)
+    ax = fig.add_subplot(111)
+    fig.patch.set_facecolor("#1c1c20")  # bg-surface-2
+    ax.set_facecolor("#1c1c20")
+    xs = list(range(len(values)))
+    ys = [v if v is not None else float("nan") for v in values]
+    ax.plot(xs, ys, color="#9ca3af", linewidth=1.0)
+    if baseline is not None:
+        ax.axhline(baseline, color="#5a5a64", linewidth=0.6,
+                   linestyle="--", alpha=0.9)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    return fig
+
+
 def _autorefresh_banner(messages: list[str | None]) -> str:
     real = [m for m in messages if m]
     if not real:
@@ -2179,6 +2505,45 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                                         value=render_metric_bars(model, metric),
                                         show_label=False,
                                     )
+
+            # ---- Canary tab -----------------------------------------------
+            # Drift-focused panel: per-question regression detection against
+            # a frozen golden baseline. Sentinel never auto-runs the canary
+            # batch — operator triggers it via `uv run python src/canary_runner.py`.
+            with gr.Tab("Canary", id=TAB_CANARY):
+                gr.Markdown("<div class='section-header-major'>Canary drift</div>")
+                (
+                    initial_drift_flags,
+                    initial_latest_run,
+                    initial_pointer,
+                    canary_corpus,
+                ) = _build_canary_drift_state(reader.read())
+
+                canary_banner_md = gr.Markdown(format_canary_drift_summary(
+                    initial_pointer, initial_latest_run, initial_drift_flags
+                ))
+                canary_drift_md = gr.Markdown(
+                    "\n".join(format_canary_drift_card(f) for f in initial_drift_flags)
+                    if initial_drift_flags
+                    else ""
+                )
+
+                gr.Markdown("<div class='section-header'>Per-question</div>")
+                with gr.Row():
+                    canary_show_all = gr.Checkbox(
+                        value=False, label="Show all (not just drifting)"
+                    )
+                canary_table_md = gr.Markdown(format_canary_per_question_table(
+                    initial_drift_flags, canary_corpus, show_all=False,
+                ))
+
+                with gr.Row():
+                    rebaseline_btn = gr.Button(
+                        "Re-baseline current run",
+                        variant="secondary",
+                        size="sm",
+                    )
+                rebaseline_status_md = gr.Markdown("")
 
             # ---- Failures tab ---------------------------------------------
             with gr.Tab("Failures", id=TAB_FAILURES):
@@ -2332,6 +2697,24 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
 
             flags_empty_html = "" if flags else FLAGS_EMPTY_PLACEHOLDER
 
+            # Canary panel re-render — re-resolves drift state against the
+            # latest run + frozen baseline. No batch trigger here: canary
+            # runs are operator-driven via the CLI, not auto-refreshed.
+            all_records = reader.read()
+            (
+                drift_flags, latest_run_recs, baseline_pointer, corpus,
+            ) = _build_canary_drift_state(all_records)
+            canary_banner_html = format_canary_drift_summary(
+                baseline_pointer, latest_run_recs, drift_flags,
+            )
+            canary_drift_html = (
+                "\n".join(format_canary_drift_card(f) for f in drift_flags)
+                if drift_flags else ""
+            )
+            canary_table_html = format_canary_per_question_table(
+                drift_flags, corpus, show_all=False,
+            )
+
             return [
                 f"<div class='page-meta'>{format_header(source, new_loaded_at)}</div>",
                 _autorefresh_banner([cluster_msg, summary_msg]),
@@ -2348,6 +2731,9 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 format_cluster_panel(read_clusters(CLUSTERS_DEFAULT_PATH)),
                 format_deflection_panel(read_summary("deflection", DEFAULT_SUMMARIES_DIR)),
                 format_kb_coverage_panel(_kb_coverage_entries(new_model.records)),
+                canary_banner_html,
+                canary_drift_html,
+                canary_table_html,
                 # Trends — re-render every chart and its header. Aligned with
                 # `bar_headers` + `bar_charts` dicts which iterate THEMATIC_BLOCKS
                 # in the same order as the build-time pass below.
@@ -2376,9 +2762,48 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 *feed_drilldowns,
                 *feed_session_states,
                 cluster_md, deflection_md, kb_coverage_md,
+                canary_banner_md, canary_drift_md, canary_table_md,
                 *[bar_headers[m] for ms in THEMATIC_BLOCKS.values() for m in ms],
                 *[bar_charts[m] for ms in THEMATIC_BLOCKS.values() for m in ms],
             ],
+        )
+
+        # Canary "show all" toggle — re-renders the per-question table with
+        # the toggle's value passed through. Defaults to drifting-only.
+        def _refresh_canary_table(show_all):
+            (drift_flags, _latest, _ptr, corpus) = _build_canary_drift_state(
+                reader.read()
+            )
+            return format_canary_per_question_table(
+                drift_flags, corpus, show_all=bool(show_all),
+            )
+
+        canary_show_all.change(
+            fn=_refresh_canary_table,
+            inputs=[canary_show_all],
+            outputs=[canary_table_md],
+        )
+
+        # Re-baseline button — promote the latest canary run to the frozen
+        # golden baseline. No-op (with a status message) when there's no
+        # canary run to promote.
+        def _rebaseline():
+            from canary_baseline import freeze_baseline
+            from pipeline import GIT_SHA
+            runs = _canary_runs_grouped(reader.read())
+            if not runs:
+                return "<div class='canary-empty'>No canary run to promote.</div>"
+            run_id = runs[-1][0]
+            freeze_baseline(run_id, frozen_git_sha=GIT_SHA)
+            return (
+                f"<div class='canary-banner'>"
+                f"Frozen baseline → run <code>{html.escape(run_id)}</code>."
+                "</div>"
+            )
+
+        rebaseline_btn.click(
+            fn=_rebaseline,
+            outputs=[rebaseline_status_md],
         )
 
         # Per-flag click → switch to the target tab. The whole card-shaped

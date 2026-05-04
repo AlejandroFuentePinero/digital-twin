@@ -206,7 +206,7 @@ class Pipeline:
         knew_answer = bool(last_answer) and (GAP_PHRASE not in last_answer)
 
         self._log_writer.append({
-            "schema_version": "2",
+            "schema_version": "3",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "session_id": session_id,
             "turn_index": turn_index,

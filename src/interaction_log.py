@@ -29,7 +29,7 @@ def compute_prompt_hash(system: str, user: str) -> str:
 
 
 class InteractionRecord(BaseModel):
-    schema_version: str = "2"
+    schema_version: str = "3"
     timestamp: str
     session_id: str
     turn_index: int
@@ -53,6 +53,12 @@ class InteractionRecord(BaseModel):
     model_id: str | None = None
     temperature: float | None = None
     prompt_hash: str | None = None
+    # Canary fields (issue #39, schema v3 bump). Default to live-record shape
+    # (is_canary=False, replicate_index/run_id=None) so legacy v2 records still
+    # parse. Populated by canary_runner.py when replaying the corpus.
+    is_canary: bool = False
+    replicate_index: int | None = None
+    run_id: str | None = None
 
 
 class LogWriter:

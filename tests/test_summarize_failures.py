@@ -309,3 +309,44 @@ def test_run_batch_short_circuits_groups_with_no_records_to_placeholder(tmp_path
         path = out_dir / f"{group}_{today}.md"
         assert path.exists(), f"missing {path}"
         assert "no" in path.read_text().lower()
+
+
+def test_run_batch_excludes_canary_records_from_every_group(tmp_path):
+    """Forcing function (#39): canary records share interactions.jsonl with
+    live records. summarize_failures must filter `is_canary=True` before
+    selecting any of the three groups (gap / unacceptable / deflection) —
+    canary refusal / gap / deflection probes (C006-C009, C019-C022, C047-C050)
+    would otherwise pollute the operator-facing summary reports.
+
+    With only canary records in the log, every group falls back to the
+    no-records placeholder and the LLM is never called."""
+    from summarize_failures import run_batch
+
+    log_path = tmp_path / "interactions.jsonl"
+    out_dir = tmp_path / "summaries"
+
+    canary_records = [
+        _record(question="canary gap", knew_answer=False).model_copy(
+            update={"is_canary": True, "run_id": "run-A", "replicate_index": 0}
+        ),
+        _record(question="canary deflection", event_type="deflected").model_copy(
+            update={"is_canary": True, "run_id": "run-A", "replicate_index": 1}
+        ),
+        _record(question="canary unacceptable", attempts=[
+            {"answer": "x", "is_acceptable": False, "guardrail_feedback": "fix"},
+            {"answer": "y", "is_acceptable": True, "guardrail_feedback": ""},
+        ]).model_copy(
+            update={"is_canary": True, "run_id": "run-A", "replicate_index": 2}
+        ),
+    ]
+    log_path.write_text(
+        "\n".join(r.model_dump_json() for r in canary_records) + "\n"
+    )
+
+    with patch("summarize_failures.completion") as mock:
+        run_batch(days=7, out_dir=out_dir, log_path=log_path)
+
+    assert mock.call_count == 0, (
+        "canary records leaked into summary batch — operator-facing summaries "
+        "would mix synthetic canary probes with live failures"
+    )

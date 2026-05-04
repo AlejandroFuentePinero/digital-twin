@@ -175,7 +175,10 @@ def run_batch(
     from log_reader import LocalReader
 
     reader = LocalReader(log_path) if log_path is not None else LocalReader()
-    records = reader.read()
+    # Canary records share interactions.jsonl with live records (#39). Cluster
+    # only over live gap questions — synthetic canary GAP-aimed probes
+    # (C006-C009, C019-C022) would otherwise contaminate the cluster output.
+    records = [r for r in reader.read() if not r.is_canary]
     questions = extract_gap_questions(records, days=days)
     clusters = GapClusterer().cluster(questions)
     write_clusters(clusters, period_days=days, out_path=out_path)
