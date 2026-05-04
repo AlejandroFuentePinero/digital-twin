@@ -8,16 +8,32 @@ Dataset is Phase 6). Manual refresh only — no auto-poll. Run locally with:
 
 from __future__ import annotations
 
+import html
 import os
 from datetime import datetime, timezone
 
 import gradio as gr
 
+from branches import REGISTRY as BRANCH_REGISTRY
 from dashboard_model import DashboardModel
+from failure_feed import (
+    FAILURE_MODES,
+    FailureRow,
+    Session,
+    classify_failure,
+    group_by_session,
+    select_failures,
+)
+from interaction_log import InteractionRecord
 from log_reader import HFReader, LocalReader, LogReader
 from metric_status import WoWDelta, metric_status, wow_delta
 
 WINDOWS = [("Global", None), ("30d", 30), ("7d", 7)]
+
+# Branch dropdown choices in Failure Feed; "All" prefixes the canonical branch list.
+BRANCH_CHOICES = ["All", *BRANCH_REGISTRY.keys()]
+FAILURE_MODE_CHOICES = ["All", *FAILURE_MODES]
+FEED_TABLE_HEADERS = ["timestamp", "branch", "failure mode", "question", "attempts", "confidence"]
 
 
 SENTINEL_CSS = """
@@ -254,6 +270,105 @@ def format_panel(
     )
 
 
+# ---- Failure Feed (issue #31) -----------------------------------------------
+
+
+def _failure_table_rows(rows: list[FailureRow]) -> list[list]:
+    """Convert FailureRow list to gr.Dataframe-friendly 2D list (one row per failure)."""
+    return [
+        [
+            row.timestamp,
+            row.branch,
+            row.failure_mode,
+            row.question,
+            row.attempt_count,
+            f"{row.classification_confidence:.2f}",
+        ]
+        for row in rows
+    ]
+
+
+def format_failure_drilldown(record: InteractionRecord) -> str:
+    """Markdown rendering of every per-attempt + per-chunk + tool-call + latency field
+    needed to debug 'what failed and why' for a single turn."""
+    labels = ", ".join(record.classifier_labels) if record.classifier_labels else EM_DASH
+    parts: list[str] = [
+        "**Question:** " + record.question,
+        f"**Branch:** `{record.branch}`  ·  **Classifier labels:** `{labels}`  "
+        f"·  **Confidence:** {record.classification_confidence:.2f}  ·  **Event:** `{record.event_type}`",
+        f"**Timestamp:** {record.timestamp}",
+        "",
+        "**Attempts:**",
+    ]
+    for i, attempt in enumerate(record.attempts):
+        ok = attempt.get("is_acceptable", True)
+        badge = "PASS" if ok else "FAIL"
+        parts.append(f"- *Attempt {i}* — **{badge}**")
+        parts.append(f"    - **answer:** {attempt.get('answer', '')}")
+        parts.append(f"    - **guardrail_feedback:** {attempt.get('guardrail_feedback', '')}")
+    parts.append("")
+    parts.append("**Retrieved chunks:**")
+    if not record.retrieved_chunks:
+        parts.append("- _none_")
+    else:
+        for c in record.retrieved_chunks:
+            parts.append(
+                f"- `{c.get('source_file', '')}` · {c.get('section_heading', '')}"
+            )
+    parts.append("")
+    parts.append("**Tool calls:**")
+    if not record.tool_calls:
+        parts.append("- _none_")
+    else:
+        for c in record.tool_calls:
+            parts.append(
+                f"- `{c.get('name', '')}` · args={c.get('args', {})} · status={c.get('status', '')}"
+            )
+    parts.append("")
+    lat = record.latency_ms
+    parts.append("**Latency (ms):**")
+    parts.append(
+        f"- classifier {lat.get('classifier', 0)} · retrieval {lat.get('retrieval', 0)} "
+        f"· generation {lat.get('generation', 0)} · guardrail {lat.get('guardrail', 0)} "
+        f"· **total {lat.get('total', 0)}**"
+    )
+    return "\n".join(parts)
+
+
+def _turn_summary(record: InteractionRecord) -> str:
+    """One-line summary line for the per-turn `<details><summary>` row in the session view."""
+    mode = classify_failure(record)
+    badge = "PASS" if mode is None else f"FAIL · {mode}"
+    truncated = record.question[:80] + ("…" if len(record.question) > 80 else "")
+    return (
+        f"<b>Turn {record.turn_index}</b> · {record.branch} · {record.event_type} · "
+        f"{html.escape(truncated)} <i>[{badge}]</i>"
+    )
+
+
+def format_session_view(session: Session) -> str:
+    """Per-session view: header (id, turn count, contact state, total latency) + one
+    `<details>` collapsible per turn whose body is the per-turn drilldown."""
+    contact_bits = []
+    if session.contact_offered:
+        contact_bits.append("offered")
+    if session.contact_provided:
+        contact_bits.append("provided")
+    contact_str = ", ".join(contact_bits) if contact_bits else "neither"
+    parts = [
+        f"### Session `{session.session_id}`",
+        f"**Turns:** {session.turn_count}  ·  **Contact:** {contact_str}  "
+        f"·  **Total latency:** {session.total_latency_ms} ms",
+        "",
+    ]
+    for r in session.records:
+        body = format_failure_drilldown(r)
+        parts.append(
+            f"<details>\n<summary>{_turn_summary(r)}</summary>\n\n{body}\n\n</details>\n"
+        )
+    return "\n".join(parts)
+
+
 def _load(reader: LogReader) -> tuple[DashboardModel, datetime]:
     return DashboardModel(reader.read()), datetime.now(timezone.utc)
 
@@ -267,10 +382,18 @@ def _render_panels(model: DashboardModel) -> list[str]:
     ]
 
 
+def _filter_records(reader: LogReader, window_label: str) -> list[InteractionRecord]:
+    """Read all records and apply the window filter via DashboardModel.for_window."""
+    days = dict(WINDOWS).get(window_label)
+    return DashboardModel(reader.read()).for_window(days=days).records
+
+
 def build_app(reader: LogReader | None = None) -> gr.Blocks:
     reader = reader or _default_reader()
     source = _source_label(reader)
     model, loaded_at = _load(reader)
+
+    initial_failures = select_failures(model.records)
 
     with gr.Blocks(title="Digital Twin · Sentinel", css=SENTINEL_CSS) as app:
         with gr.Row():
@@ -284,11 +407,135 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
                 with gr.Column():
                     panels.append(gr.Markdown(panel_md))
 
-        def _refresh():
-            new_model, new_loaded_at = _load(reader)
-            return [format_header(source, new_loaded_at), *_render_panels(new_model)]
+        gr.Markdown("---\n## Failure Feed")
 
-        refresh_btn.click(fn=_refresh, outputs=[header_md, *panels])
+        with gr.Row():
+            branch_dd = gr.Dropdown(
+                choices=BRANCH_CHOICES, value="All", label="Branch", scale=1
+            )
+            mode_dd = gr.Dropdown(
+                choices=FAILURE_MODE_CHOICES, value="All", label="Failure mode", scale=1
+            )
+            window_dd = gr.Dropdown(
+                choices=[label for label, _ in WINDOWS], value="Global",
+                label="Window", scale=1,
+            )
+            search_in = gr.Textbox(value="", label="Search question", scale=2)
+
+        rows_state = gr.State(initial_failures)
+        selected_session_id = gr.State(None)
+
+        with gr.Column(visible=True) as feed_view:
+            failures_df = gr.Dataframe(
+                headers=FEED_TABLE_HEADERS,
+                value=_failure_table_rows(initial_failures),
+                interactive=False,
+                wrap=True,
+            )
+            drilldown_md = gr.Markdown("_Select a row above to see the per-turn drilldown._")
+            view_session_btn = gr.Button("View full session", interactive=False)
+
+        with gr.Column(visible=False) as session_view:
+            session_md = gr.Markdown("")
+            back_btn = gr.Button("← Back to feed")
+
+        # Refresh button — reload disk + re-render Health Overview + re-render Feed under
+        # the active filter set so a manual refresh updates everything coherently.
+        def _refresh(branch, mode, window_label, search):
+            new_model, new_loaded_at = _load(reader)
+            records = new_model.for_window(days=dict(WINDOWS).get(window_label)).records
+            rows = select_failures(
+                records, branch=branch, failure_mode=mode, question_search=search
+            )
+            return [
+                format_header(source, new_loaded_at),
+                *_render_panels(new_model),
+                _failure_table_rows(rows),
+                rows,
+                "_Select a row above to see the per-turn drilldown._",
+                None,
+                gr.update(interactive=False),
+            ]
+
+        refresh_btn.click(
+            fn=_refresh,
+            inputs=[branch_dd, mode_dd, window_dd, search_in],
+            outputs=[
+                header_md, *panels,
+                failures_df, rows_state, drilldown_md,
+                selected_session_id, view_session_btn,
+            ],
+        )
+
+        # Filter changes only refresh the failure feed (Panel 1 doesn't move with feed filters).
+        def _refresh_feed(branch, mode, window_label, search):
+            records = _filter_records(reader, window_label)
+            rows = select_failures(
+                records, branch=branch, failure_mode=mode, question_search=search
+            )
+            return (
+                _failure_table_rows(rows),
+                rows,
+                "_Select a row above to see the per-turn drilldown._",
+                None,
+                gr.update(interactive=False),
+            )
+
+        for control in (branch_dd, mode_dd, window_dd, search_in):
+            control.change(
+                fn=_refresh_feed,
+                inputs=[branch_dd, mode_dd, window_dd, search_in],
+                outputs=[
+                    failures_df, rows_state, drilldown_md,
+                    selected_session_id, view_session_btn,
+                ],
+            )
+
+        # Row click → drilldown + remember session_id for "View full session".
+        def _on_row_select(rows: list[FailureRow], evt: gr.SelectData):
+            if not rows or evt.index is None:
+                return "", None, gr.update(interactive=False)
+            row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+            if row_idx >= len(rows):
+                return "", None, gr.update(interactive=False)
+            row = rows[row_idx]
+            return (
+                format_failure_drilldown(row.record),
+                row.record.session_id,
+                gr.update(interactive=True),
+            )
+
+        failures_df.select(
+            fn=_on_row_select,
+            inputs=[rows_state],
+            outputs=[drilldown_md, selected_session_id, view_session_btn],
+        )
+
+        # "View full session" → swap visible columns + render full session.
+        def _show_session(session_id: str | None):
+            if not session_id:
+                return gr.update(), gr.update(), gr.update()
+            sessions = group_by_session(reader.read())
+            match = next((s for s in sessions if s.session_id == session_id), None)
+            if match is None:
+                return gr.update(), gr.update(), gr.update()
+            return (
+                gr.update(visible=False),
+                gr.update(visible=True),
+                format_session_view(match),
+            )
+
+        view_session_btn.click(
+            fn=_show_session,
+            inputs=[selected_session_id],
+            outputs=[feed_view, session_view, session_md],
+        )
+
+        # Back button → reverse the swap.
+        def _back_to_feed():
+            return gr.update(visible=True), gr.update(visible=False)
+
+        back_btn.click(fn=_back_to_feed, outputs=[feed_view, session_view])
 
     return app
 

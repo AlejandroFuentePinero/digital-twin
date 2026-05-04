@@ -137,6 +137,7 @@ graph LR
   subgraph sg_tooling["Tooling"]
     direction TB
     dashboard_model["dashboard_model.py"]:::tooling
+    failure_feed["failure_feed.py"]:::tooling
     metric_status["metric_status.py"]:::tooling
     module_health["module_health.py"]:::tooling
     sample_chunks["sample_chunks.py"]:::tooling
@@ -168,6 +169,8 @@ graph LR
   composer --> profile
   composer --> rules
   dashboard_model --> interaction_log
+  failure_feed --> dashboard_model
+  failure_feed --> interaction_log
   guardrail --> rules
   log_reader --> interaction_log
   pipeline --> tool_loop
@@ -180,7 +183,10 @@ graph LR
   pipeline --> retrieval
   pipeline --> rules
   pipeline --> tools
+  sentinel --> branches
   sentinel --> dashboard_model
+  sentinel --> failure_feed
+  sentinel --> interaction_log
   sentinel --> log_reader
   sentinel --> metric_status
   tools --> tool_loop
@@ -219,6 +225,7 @@ graph LR
 | `composer.py` | Prompt composer — assembles per-branch system prompts (ADR-0003). |
 | `contact_log.py` | Contact-form record schema + JSONL writer/reader (#16). |
 | `dashboard_model.py` | Pure aggregations over interaction records — Sentinel's deep model (issue #29). |
+| `failure_feed.py` | Failure-feed pure logic — Sentinel's per-turn debugging surface (issue #31). |
 | `generator.py` | Generator — wraps the answer LLM call. |
 | `guardrail.py` | Guardrail — branch-aware quality evaluator (ADR-0003). |
 | `ingest.py` | Ingest the digital twin knowledge base into ChromaDB. |

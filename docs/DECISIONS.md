@@ -5,6 +5,58 @@
 
 ---
 
+## Session 32 (2026-05-04) — `#31` shipped: Failure Feed (filterable + per-session view)
+
+**Status:** [`#31`](https://github.com/AlejandroFuentePinero/digital-twin/issues/31) (Phase 4 slice 4/7) closed locally. Suite **298 → 322** (+24 tests). New module `src/failure_feed.py`. Sentinel now has the per-turn debugging surface — a Dataframe of failure turns above (filterable by branch / mode / window / question text), drilldown markdown below, and a "View full session" affordance that swaps in the full conversation. **Phase 4: first-glance triage (Panel 1) + per-turn debug (Panel 4) both online; replay + clustering remain.** Next: `#30` (Trend Explorer) ∥ `#38` (replay-from-record, unblocked by this).
+
+### What shipped — code
+
+| Commit | Scope |
+|---|---|
+| `<this-session>` | `#31` — new `src/failure_feed.py` (FailureRow + Session dataclasses + `classify_failure` / `select_failures` / `group_by_session` pure helpers); `sentinel.py` extended with the Failure Feed panel: filter row (branch / failure_mode / window / question text), `gr.Dataframe` of failure rows, drilldown `gr.Markdown`, `View full session` button → swap to per-session view (`<details>`-collapsible per turn) → `Back to feed`. New pure formatters `format_failure_drilldown` / `format_session_view`. +18 tests in `test_failure_feed.py`, +6 in `test_sentinel.py`. `system_map` registers `failure_feed` under "Tooling"; `MAP.md` regenerated. |
+
+### TDD slices (4 waves)
+
+- **Wave A — `classify_failure` (7 slices, 7 tests)**: clean → None; refused / gap / retry-exhausted / rejected-then-recovered single-mode tests; refused-takes-precedence-over-gap; gap-takes-precedence-over-retry. Mutually-exclusive label per record so the dropdown filter doesn't double-count.
+- **Wave B — `select_failures` (7 slices, 7 tests)**: row shape (FailureRow with timestamp / branch / failure_mode / question / attempt_count / confidence + the source record for drilldown); branch filter; failure_mode filter; case-insensitive substring `question_search`; most-recent-first ordering; long-question truncation in the row preview (full text preserved on `row.record.question`); empty-input → empty list.
+- **Wave C — `group_by_session` (4 slices, 4 tests)**: groups by `session_id`; orders within session by `turn_index`; aggregates `turn_count` / `contact_offered` / `contact_provided` / `total_latency_ms`; default-False contact flags when no turn set them; empty input → empty list.
+- **Wave D — Sentinel UI (6 tests + smoke)**: `format_failure_drilldown` covers attempts (answer + guardrail_feedback + PASS/FAIL), retrieved_chunks, tool_calls, classifier_labels, classification_confidence, per-stage latency. `format_session_view` covers session header (id / turn count / contact state / total latency) and one `<details>` per turn with PASS/FAIL · `<mode>` badge, body = `format_failure_drilldown` output. `build_app` smoke against synthetic + live JSONL — boots cleanly.
+
+### Live-log smoke
+
+`PYTHONPATH=src uv run python -c "from sentinel import build_app; app = build_app()"` boots against the 85-record live log. Counts via the new helpers:
+
+- 15 failure turns total (matches Session 28 inventory)
+- by mode: `refused` 1 / `gap` 8 / `rejected-then-recovered` 5 / `retry-exhausted` 1
+- by branch: GENERIC 7 / TECHNICAL 2 / GAP+LOGISTICAL 6
+- 64 sessions; sample session view renders 1845 chars of markdown for a 1-turn session
+
+### Design choices
+
+- **Sibling module `failure_feed.py`, not methods on `DashboardModel`.** Mirrors `metric_status.py`. `DashboardModel` is for metrics (Panel 1's concern); the failure feed is a different aggregation surface (per-turn, not per-population). Keeping them separate means tuning either panel doesn't ripple into the other.
+- **Mutually-exclusive failure labels with explicit precedence** (`refused` → `gap` → `retry-exhausted` → `rejected-then-recovered`). The failure-mode dropdown spec is explicitly "All / refused / gap / rejected-then-recovered / retry-exhausted", which only makes sense if a record gets exactly one label. Two precedence tests pin the rule against accidental rebalancing.
+- **Window filter via `DashboardModel.for_window`, not duplicated in `failure_feed.py`.** The window logic already lives in `DashboardModel` and is well-tested; the feed UI calls `DashboardModel(records).for_window(days).records` and passes that into `select_failures`. No re-implementation.
+- **`FailureRow` carries the source `record` reference, not just the column values.** The dataframe needs only the visible columns, but the drilldown needs the full record. Keeping it on the row dataclass means the UI just looks up `rows[index].record` on row select — no parallel index-to-record map to maintain.
+- **HTML `<details>` for per-turn collapsibles in the session view, not a stack of `gr.Accordion` components.** Browsers handle `<details>` natively; rendering inside one `gr.Markdown` avoids dynamic-component plumbing for variable session lengths. Live data shows max ≈7 turns per session — pre-creating N accordions and toggling visibility would be over-engineering.
+- **`select_failures` truncates the row-preview question (`question_preview = first 80 chars + …`), keeps full text on `record.question`.** Dataframe rows stay scannable; deep search and drilldown still get the full string. The `question_search` filter matches against the full text, not the preview, so a needle deep in a long question still hits.
+- **Filter-change handlers refresh only the failure feed**, not the Health Overview panels — the two surfaces are semantically independent (filters are feed-local). The top-level `Refresh` button does refresh both, so a manual reload is coherent.
+- **No tests on the Gradio event wiring itself** — only on the pure formatters. Per `TESTING.md` `sentinel.py` partial-exemption: pure surface tested, Gradio glue verified by launching. Adding event-wiring tests would couple to `gr.SelectData` / `gr.update` shape, which `TESTING.md` explicitly steers away from.
+- **No `docs/SENTINEL.md` update.** That doc is for thresholded-metric proxy caveats and runbooks; the Failure Feed isn't a metric. If a future failure-mode addition introduces a *threshold* (e.g. an alert when refusal_rate spikes are concentrated in one branch), the metric goes through `metric_status.THRESHOLDS` + the doc, not here.
+
+### Verified
+
+- `uv run pytest -q` → **322 passed** (298 → 322; +18 in `test_failure_feed.py`, +6 in `test_sentinel.py`).
+- Live runtime: `PYTHONPATH=src uv run python -c "from sentinel import build_app; app = build_app()"` → boots cleanly.
+- Live-log smoke (85 records, 64 sessions): 15 failures correctly partition into the 4 mutually-exclusive labels; per-branch and per-question-search filters return expected counts; per-session view renders without raising for the sample failure session.
+
+### Outstanding
+
+- **Push the local commits** — Sessions 28+29+30+31 + this session's `#31` commit are local; `main` push is harness-protected.
+- **Strip `needs-triage`** from `#31` (this session) and from carry-over `#38` `#30`.
+- **Next: `#30` (Trend Explorer) ∥ `#38` (Replay-from-record)** — both unblocked. `#38` reads the per-record drilldown surface this session lays down, so it slots in naturally.
+
+---
+
 ## Session 31 (2026-05-04) — `#36` shipped: thresholds + WoW deltas + `docs/SENTINEL.md`
 
 **Status:** [`#36`](https://github.com/AlejandroFuentePinero/digital-twin/issues/36) (observability amplifier) closed locally. Suite **273 → 298** (+25 tests). New module `src/metric_status.py`. Sentinel's Health Overview now self-describes — every thresholded metric renders a colour-coded badge and (where a prior exists) a WoW arrow, and `docs/SENTINEL.md` carries the proxy-caveat / runbook reference the dashboard explicitly defers to. **Phase 4 first-glance triage surface complete.** Next on the path: `#30` (Trend Explorer with deployment markers, now unblocked since `#37`'s `git_sha` field is in the schema) ∥ `#31` (Failure Feed).

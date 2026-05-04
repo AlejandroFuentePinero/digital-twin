@@ -9,9 +9,16 @@ from pathlib import Path
 
 import pytest
 
-from interaction_log import DEFAULT_LOG_PATH
+from failure_feed import Session, group_by_session
+from interaction_log import DEFAULT_LOG_PATH, InteractionRecord
 from log_reader import LocalReader
-from sentinel import build_app, format_header, format_panel
+from sentinel import (
+    build_app,
+    format_failure_drilldown,
+    format_header,
+    format_panel,
+    format_session_view,
+)
 from dashboard_model import DashboardModel
 
 
@@ -201,3 +208,148 @@ def test_build_app_does_not_crash_against_live_interactions_log():
     """Smoke: Sentinel boots against the live data/logs/interactions.jsonl without raising."""
     app = build_app()
     assert app is not None
+
+
+# ----- Failure Feed formatters (issue #31) ------------------------------------
+
+
+def _detailed_record() -> InteractionRecord:
+    """Realistic failure record with multiple attempts, chunks, tool calls — exercises every drilldown field."""
+    return InteractionRecord.model_validate(
+        {
+            "timestamp": "2026-05-01T12:00:00+00:00",
+            "session_id": "sess-A",
+            "turn_index": 2,
+            "question": "How does the chunking work in the Expert Knowledge Worker project?",
+            "event_type": "answered",
+            "branch": "TECHNICAL",
+            "classifier_labels": ["TECHNICAL", "GENERIC"],
+            "classification_confidence": 0.83,
+            "attempts": [
+                {"answer": "vague guess", "is_acceptable": False,
+                 "guardrail_feedback": "Too vague — fetch the README first."},
+                {"answer": "Headline-summary-original_text triple", "is_acceptable": True,
+                 "guardrail_feedback": "Accurate, cites the source."},
+            ],
+            "retrieved_chunks": [
+                {"source_file": "projects_ai_flagship.md", "section_heading": "Expert Knowledge Worker"},
+                {"source_file": "INDEX.md", "section_heading": "INDEX"},
+            ],
+            "tool_calls": [
+                {"name": "fetch_project_readme", "args": {"key": "expert-knowledge-worker"},
+                 "status": "success", "attempt_index": 1},
+            ],
+            "latency_ms": {
+                "classifier": 800, "retrieval": 1200, "generation": 5400,
+                "guardrail": 3000, "total": 10400,
+            },
+            "knew_answer": True,
+        }
+    )
+
+
+def test_format_failure_drilldown_surfaces_every_attempt_field():
+    """Every attempt's answer + guardrail_feedback + is_acceptable status is visible in the drilldown.
+    The whole point of the panel: 'what did the model try, what did the guardrail say'."""
+    md = format_failure_drilldown(_detailed_record())
+    assert "vague guess" in md
+    assert "fetch the README first" in md
+    assert "Headline-summary-original_text triple" in md
+    assert "Accurate, cites the source" in md
+
+
+def test_format_failure_drilldown_surfaces_retrieved_chunks_and_tool_calls():
+    """Retrieved chunks (source_file + section_heading) and tool_calls (name + args + status)
+    must appear so the operator can see 'did retrieval pull the right thing, did the tool fire'."""
+    md = format_failure_drilldown(_detailed_record())
+    assert "projects_ai_flagship.md" in md
+    assert "Expert Knowledge Worker" in md
+    assert "fetch_project_readme" in md
+    assert "expert-knowledge-worker" in md
+    assert "success" in md
+
+
+def test_format_failure_drilldown_surfaces_routing_and_latency_breakdown():
+    """branch, classifier_labels, classification_confidence, and per-stage latency are visible."""
+    md = format_failure_drilldown(_detailed_record())
+    assert "TECHNICAL" in md
+    assert "GENERIC" in md  # secondary label
+    assert "0.83" in md
+    # Per-stage latency
+    assert "classifier" in md.lower() and "800" in md
+    assert "generation" in md.lower() and "5400" in md
+    assert "guardrail" in md.lower() and "3000" in md
+    assert "total" in md.lower() and "10400" in md
+
+
+def _record_for_session(turn_index: int, question: str = "q?", **overrides) -> InteractionRecord:
+    base = {
+        "timestamp": f"2026-05-01T12:0{turn_index}:00+00:00",
+        "session_id": "sess-Z",
+        "turn_index": turn_index,
+        "question": question,
+        "event_type": "answered",
+        "branch": "GENERIC",
+        "classification_confidence": 1.0,
+        "attempts": [{"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""}],
+        "retrieved_chunks": [],
+        "tool_calls": [],
+        "latency_ms": {"classifier": 0, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 1000},
+        "knew_answer": True,
+        "contact_offered": False,
+        "contact_provided": False,
+    }
+    base.update(overrides)
+    return InteractionRecord.model_validate(base)
+
+
+def test_format_session_view_renders_header_with_session_metadata():
+    """Header shows session_id, turn count, contact state, total session latency."""
+    records = [
+        _record_for_session(0, contact_offered=True),
+        _record_for_session(1, latency_ms={"classifier": 0, "retrieval": 0, "generation": 0,
+                                            "guardrail": 0, "total": 2500}),
+        _record_for_session(2, contact_offered=True, contact_provided=True,
+                            latency_ms={"classifier": 0, "retrieval": 0, "generation": 0,
+                                         "guardrail": 0, "total": 4000}),
+    ]
+    [session] = group_by_session(records)
+    md = format_session_view(session)
+    assert "sess-Z" in md
+    assert "3" in md  # turn count
+    # Contact state visible in some form (offered + provided shown)
+    assert "offered" in md.lower() or "provided" in md.lower()
+    # Total latency = 1000 + 2500 + 4000 = 7500 ms
+    assert "7500" in md or "7,500" in md
+
+
+def test_format_session_view_renders_one_collapsible_per_turn_with_pass_fail_badge():
+    """Each turn renders as a click-to-expand block (`<details>`) showing turn_index, branch,
+    event_type, truncated question, and a PASS/FAIL badge derived from classify_failure."""
+    records = [
+        _record_for_session(0, question="clean turn"),                   # PASS
+        _record_for_session(1, question="bad turn", knew_answer=False),  # FAIL · gap
+    ]
+    [session] = group_by_session(records)
+    md = format_session_view(session)
+
+    assert md.count("<details>") == 2  # one per turn
+    assert "Turn 0" in md and "Turn 1" in md
+    assert "clean turn" in md and "bad turn" in md
+    assert "PASS" in md
+    assert "FAIL" in md
+    assert "gap" in md  # the failure-mode label appears on the badge
+
+
+def test_format_session_view_uses_drilldown_for_each_turn_body():
+    """Each <details> body renders the same per-turn drilldown fields (attempts, latency, etc.)
+    so 'click on any turn → see the full debug surface' just works."""
+    records = [_record_for_session(0, attempts=[
+        {"answer": "first try", "is_acceptable": False, "guardrail_feedback": "fix it"},
+        {"answer": "second try", "is_acceptable": True, "guardrail_feedback": ""},
+    ])]
+    [session] = group_by_session(records)
+    md = format_session_view(session)
+    assert "first try" in md
+    assert "second try" in md
+    assert "fix it" in md
