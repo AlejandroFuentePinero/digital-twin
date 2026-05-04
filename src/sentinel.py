@@ -705,6 +705,110 @@ body, .gradio-container {
     margin: 4px 0 10px;
 }
 
+/* Health snapshot card — 4 metrics in one row */
+.canary-health-snapshot {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin: 6px 0 12px;
+}
+.canary-health-cell {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--border-strong);
+    border-radius: 4px;
+    padding: 10px 12px;
+}
+.canary-health-cell.sev-alert    { border-left-color: var(--alert);   }
+.canary-health-cell.sev-warning  { border-left-color: var(--warning); }
+.canary-health-cell.sev-healthy  { border-left-color: var(--healthy); }
+.canary-health-cell .cell-label {
+    font-size: 0.72em;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+.canary-health-cell .cell-value {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 1.05em;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+/* Drift-kind mini bar chart */
+.canary-drift-kinds {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px 14px;
+    margin: 6px 0 12px;
+}
+.canary-drift-kind-row {
+    display: grid;
+    grid-template-columns: 180px 1fr 30px;
+    gap: 10px;
+    align-items: center;
+    margin: 3px 0;
+}
+.canary-drift-kind-label {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.82em;
+    color: var(--text-secondary);
+}
+.canary-drift-kind-bar-wrap {
+    background: var(--bg-base);
+    border-radius: 2px;
+    height: 10px;
+    overflow: hidden;
+}
+.canary-drift-kind-bar {
+    background: var(--alert);
+    height: 100%;
+    transition: width 0.2s ease;
+}
+.canary-drift-kind-count {
+    text-align: right;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    color: var(--text-primary);
+}
+
+/* Stratified summary chips */
+.canary-stratified {
+    margin: 4px 0 14px;
+    font-size: 0.88em;
+    line-height: 1.8;
+}
+.canary-stratified-label {
+    color: var(--text-secondary);
+    font-size: 0.78em;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-right: 8px;
+}
+.canary-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    color: var(--text-secondary);
+    margin: 2px 1px;
+}
+.canary-chip strong {
+    color: var(--text-primary);
+    margin-left: 4px;
+}
+.canary-stratified-empty {
+    color: var(--text-muted);
+    font-size: 0.88em;
+    font-style: italic;
+    margin: 4px 0 12px;
+}
+
 /* Restraint: no shadows, no gradients, small radii everywhere */
 button { border-radius: 6px !important; }
 
@@ -1870,6 +1974,124 @@ def format_canary_drift_summary(
     )
 
 
+def format_canary_health_snapshot(
+    flags: list[CanaryDriftFlag],
+    latest_run_records: list[InteractionRecord],
+    corpus,
+) -> str:
+    """4-metric glance card. Renders even on zero drift (healthy state).
+
+    Cells: drift count (severity-coloured), branch_match_rate (canary-only
+    classifier-correctness), tool_uptake_on_warranted (clean denominator —
+    LIMITATIONS::P8 fix), first-attempt pass rate (1 − guardrail rejection
+    rate). Empty when no canary records exist."""
+    if not latest_run_records:
+        return ""
+
+    major = sum(1 for f in flags if f.severity == "major")
+    minor = sum(1 for f in flags if f.severity == "minor")
+    if major:
+        drift_class = "alert"
+    elif minor:
+        drift_class = "warning"
+    else:
+        drift_class = "healthy"
+
+    model = DashboardModel(
+        latest_run_records, include_canary=True, only_canary=True,
+    )
+    branch_match = model.branch_match_rate(corpus)
+    tool_uptake = model.tool_uptake_on_warranted(corpus)
+    pass_rate = (
+        1 - model.guardrail_rejection_rate if model.records else None
+    )
+
+    return (
+        "<div class='canary-health-snapshot'>"
+        f"<div class='canary-health-cell sev-{drift_class}'>"
+        "<div class='cell-label'>Drift</div>"
+        f"<div class='cell-value'>{major} major · {minor} minor</div>"
+        "</div>"
+        "<div class='canary-health-cell'>"
+        "<div class='cell-label'>Branch match</div>"
+        f"<div class='cell-value'>{_fmt_pct(branch_match)}</div>"
+        "</div>"
+        "<div class='canary-health-cell'>"
+        "<div class='cell-label'>Tool uptake (warranted)</div>"
+        f"<div class='cell-value'>{_fmt_pct(tool_uptake)}</div>"
+        "</div>"
+        "<div class='canary-health-cell'>"
+        "<div class='cell-label'>First-attempt pass</div>"
+        f"<div class='cell-value'>{_fmt_pct(pass_rate)}</div>"
+        "</div>"
+        "</div>"
+    )
+
+
+_DRIFT_KINDS_ORDER = (
+    "branch_changed",
+    "event_type_changed",
+    "retry_depth_changed",
+    "chunk_set_changed",
+    "latency_p95_regression",
+)
+
+
+def format_canary_drift_kinds_bar(flags: list[CanaryDriftFlag]) -> str:
+    """Horizontal mini bar chart: count of drift flags per kind. HTML divs
+    (no matplotlib wiring) so it lives inside a Markdown component without
+    refresh plumbing."""
+    from collections import Counter
+
+    counts = Counter(f.kind for f in flags)
+    max_count = max(counts.values()) if counts else 1
+    rows = []
+    for kind in _DRIFT_KINDS_ORDER:
+        n = counts.get(kind, 0)
+        width_pct = (n / max_count) * 100 if n else 2  # 2% nub for zero
+        rows.append(
+            "<div class='canary-drift-kind-row'>"
+            f"<div class='canary-drift-kind-label'>{kind}</div>"
+            "<div class='canary-drift-kind-bar-wrap'>"
+            f"<div class='canary-drift-kind-bar' style='width: {width_pct}%'></div>"
+            "</div>"
+            f"<div class='canary-drift-kind-count'>{n}</div>"
+            "</div>"
+        )
+    return f"<div class='canary-drift-kinds'>{''.join(rows)}</div>"
+
+
+def format_canary_stratified(flags: list[CanaryDriftFlag], corpus) -> str:
+    """Stratified summary chips: drift counts grouped by expected_branch +
+    by category. Lets the operator scan 'where is drift concentrated?' at
+    a glance, above the per-flag cards."""
+    if not flags:
+        return (
+            "<div class='canary-stratified-empty'>"
+            "No drift this run."
+            "</div>"
+        )
+    summary = stratified_summary(flags, corpus)
+    by_branch = summary["by_branch"]
+    by_category = summary["by_category"]
+
+    branch_chips = " · ".join(
+        f"<span class='canary-chip'>{html.escape(b)} <strong>{c}</strong></span>"
+        for b, c in sorted(by_branch.items(), key=lambda x: -x[1])
+    ) or "—"
+    category_chips = " · ".join(
+        f"<span class='canary-chip'>{html.escape(c)} <strong>{n}</strong></span>"
+        for c, n in sorted(by_category.items(), key=lambda x: -x[1])
+    ) or "—"
+
+    return (
+        "<div class='canary-stratified'>"
+        f"<div><span class='canary-stratified-label'>By branch:</span> {branch_chips}</div>"
+        f"<div><span class='canary-stratified-label'>By category:</span> {category_chips}</div>"
+        "</div>"
+    )
+
+
 def format_canary_drift_card(flag: CanaryDriftFlag) -> str:
     """One drift-flag card. Mirrors `format_flag_card` styling but reads the
     `CanaryDriftFlag.severity` to pick neon-red (major) vs amber (minor)."""
@@ -2531,6 +2753,19 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 canary_banner_md = gr.Markdown(format_canary_drift_summary(
                     initial_pointer, initial_latest_run, initial_drift_flags
                 ))
+                # Glance view: 4-metric health snapshot, drift-kind mini
+                # bar chart, stratified-by-branch + by-category chips.
+                # Sit above the per-flag cards so the operator gets
+                # "what's the shape of drift?" before they scroll the cards.
+                canary_health_md = gr.Markdown(format_canary_health_snapshot(
+                    initial_drift_flags, initial_latest_run, canary_corpus,
+                ))
+                canary_drift_kinds_md = gr.Markdown(format_canary_drift_kinds_bar(
+                    initial_drift_flags
+                ))
+                canary_stratified_md = gr.Markdown(format_canary_stratified(
+                    initial_drift_flags, canary_corpus,
+                ))
                 canary_drift_md = gr.Markdown(
                     "\n".join(format_canary_drift_card(f) for f in initial_drift_flags)
                     if initial_drift_flags
@@ -2738,6 +2973,11 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
             canary_banner_html = format_canary_drift_summary(
                 baseline_pointer, latest_run_recs, drift_flags,
             )
+            canary_health_html = format_canary_health_snapshot(
+                drift_flags, latest_run_recs, corpus,
+            )
+            canary_drift_kinds_html = format_canary_drift_kinds_bar(drift_flags)
+            canary_stratified_html = format_canary_stratified(drift_flags, corpus)
             canary_drift_html = (
                 "\n".join(format_canary_drift_card(f) for f in drift_flags)
                 if drift_flags else ""
@@ -2763,6 +3003,9 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 format_deflection_panel(read_summary("deflection", DEFAULT_SUMMARIES_DIR)),
                 format_kb_coverage_panel(_kb_coverage_entries(new_model.records)),
                 canary_banner_html,
+                canary_health_html,
+                canary_drift_kinds_html,
+                canary_stratified_html,
                 canary_drift_html,
                 canary_table_html,
                 # Trends — re-render every chart and its header. Aligned with
@@ -2793,7 +3036,12 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 *feed_drilldowns,
                 *feed_session_states,
                 cluster_md, deflection_md, kb_coverage_md,
-                canary_banner_md, canary_drift_md, canary_table_md,
+                canary_banner_md,
+                canary_health_md,
+                canary_drift_kinds_md,
+                canary_stratified_md,
+                canary_drift_md,
+                canary_table_md,
                 *[bar_headers[m] for ms in THEMATIC_BLOCKS.values() for m in ms],
                 *[bar_charts[m] for ms in THEMATIC_BLOCKS.values() for m in ms],
             ],
