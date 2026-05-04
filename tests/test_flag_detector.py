@@ -51,7 +51,11 @@ def _record(
 def test_detect_gap_rate_jump_fires_when_current_week_exceeds_prior_by_threshold():
     """Tracer bullet: a >30pp WoW gap-rate jump emits one Flag pointing at the
     Trend Explorer. Threshold is the absolute pp delta (matches the existing
-    `wow_delta` convention — fractions == pp throughout the codebase)."""
+    `wow_delta` convention — fractions == pp throughout the codebase).
+
+    Post-#42: ``DashboardModel.gap_rate`` reads the real producer-emitted
+    ``event_type=='gap'`` signal, so test records carry ``event_type`` directly
+    instead of toggling the legacy ``knew_answer`` proxy."""
     from flag_detector import detect_gap_rate_jump
 
     now = datetime.now(timezone.utc)
@@ -60,7 +64,7 @@ def test_detect_gap_rate_jump_fires_when_current_week_exceeds_prior_by_threshold
         _record(
             timestamp=(now - timedelta(days=10)).isoformat(),
             session_id=f"prior-{i}",
-            knew_answer=(i != 0),
+            event_type="gap" if i == 0 else "answered",
         )
         for i in range(10)
     ]
@@ -69,7 +73,7 @@ def test_detect_gap_rate_jump_fires_when_current_week_exceeds_prior_by_threshold
         _record(
             timestamp=(now - timedelta(days=2)).isoformat(),
             session_id=f"current-{i}",
-            knew_answer=(i >= 5),
+            event_type="gap" if i < 5 else "answered",
         )
         for i in range(10)
     ]
@@ -94,14 +98,14 @@ def test_detect_gap_rate_jump_does_not_fire_on_stable_week_over_week_rates():
         _record(
             timestamp=(now - timedelta(days=10)).isoformat(),
             session_id=f"prior-{i}",
-            knew_answer=(i != 0),
+            event_type="gap" if i == 0 else "answered",
         )
         for i in range(10)
     ] + [
         _record(
             timestamp=(now - timedelta(days=2)).isoformat(),
             session_id=f"current-{i}",
-            knew_answer=(i != 0),
+            event_type="gap" if i == 0 else "answered",
         )
         for i in range(10)
     ]

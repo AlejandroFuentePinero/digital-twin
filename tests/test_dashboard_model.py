@@ -47,13 +47,22 @@ def test_empty_record_set_returns_zero_totals_and_none_percentiles():
     assert model.latency_p95 is None
 
 
-def test_gap_rate_unions_knew_answer_false_with_event_type_gap():
-    """gap_rate counts a record if EITHER event_type=='gap' OR knew_answer=False — issue #35
-    redefinition. Live-log inventory showed event_type=='gap' is essentially never written
-    (writer bug), but knew_answer=False fires 9.4% of the time. Sentinel must use the union
-    until the pipeline writer is fixed."""
+def test_gap_rate_is_fraction_of_records_with_event_type_gap():
+    """gap_rate is the share of records whose event_type == 'gap' — direct
+    read of the producer-emitted signal post-#42 (PRD #41 slice 1). The
+    pre-#42 ``OR not knew_answer`` proxy is removed because the producer now
+    emits the real value end-to-end (event_classifier covers all four
+    EventType cases; LogReader smart-normalizes pre-v4 records carrying the
+    canonical gap phrase).
 
-    def _r(event_type: str, knew_answer: bool):
+    The discriminating case is the third record below: ``event_type=answered``
+    with ``knew_answer=False`` must NOT count as a gap. The pre-#42 proxy
+    counted it; the post-#42 definition does not. ``knew_answer`` is still
+    written to the record for v3-record consumer compat but no longer read
+    by ``gap_rate``.
+    """
+
+    def _r(event_type: str, knew_answer: bool = True):
         return InteractionRecord.model_validate(
             {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -71,13 +80,13 @@ def test_gap_rate_unions_knew_answer_false_with_event_type_gap():
         )
 
     records = [
-        _r("answered", True),    # neither — not a gap
-        _r("gap", True),         # event_type=='gap' alone — gap
-        _r("answered", False),   # knew_answer=False alone — gap (the live-data case)
-        _r("gap", False),        # both — gap (counted once, not twice)
+        _r("answered", knew_answer=True),    # answered with substance — not a gap
+        _r("gap", knew_answer=True),         # producer-emitted gap — counts
+        _r("answered", knew_answer=False),   # discriminator: pre-#42 proxy counted this; v4 definition does not
+        _r("gap", knew_answer=False),        # producer-emitted gap — counts
     ]
     model = DashboardModel(records)
-    assert model.gap_rate == 0.75
+    assert model.gap_rate == 0.5
 
 
 def test_refusal_rate_is_fraction_of_records_with_event_type_refused():

@@ -58,12 +58,11 @@ class DashboardModel:
 
     @property
     def gap_rate(self) -> float:
-        # Union of the *intended* gap signal (event_type=='gap') with the
-        # *actual* gap signal in live data (knew_answer=False). Live-log
-        # inventory found 0/85 records ever stamped event_type=='gap', but
-        # 8/85 carry knew_answer=False — pipeline writer bug, ticketed
-        # separately. Until that's fixed, both surfaces are gap evidence.
-        return self._rate_of(lambda r: r.event_type == "gap" or not r.knew_answer)
+        # Direct read of the producer-emitted signal post-#42 (PRD #41 slice 1).
+        # The pre-#42 ``or not r.knew_answer`` proxy is gone — the producer now
+        # emits all four EventType values, and LogReader smart-normalizes
+        # pre-v4 records carrying GAP_PHRASE.
+        return self._rate_of(lambda r: r.event_type == "gap")
 
     @property
     def deflection_rate(self) -> float:
