@@ -16,7 +16,7 @@ import gradio as gr
 from dashboard_model import DashboardModel
 from log_reader import HFReader, LocalReader, LogReader
 
-WINDOWS = [("Today", 1), ("7d", 7), ("30d", 30)]
+WINDOWS = [("Global", None), ("30d", 30), ("7d", 7)]
 
 
 def _default_reader() -> LogReader:
@@ -34,23 +34,74 @@ def format_header(source: str, loaded_at: datetime) -> str:
     return f"**Source:** {source}  ·  **Last loaded:** {when}"
 
 
-def _fmt_pct(rate: float) -> str:
-    return f"{rate * 100:.1f}%"
+EM_DASH = "—"
+
+
+def _fmt_pct(rate: float | None) -> str:
+    return EM_DASH if rate is None else f"{rate * 100:.1f}%"
 
 
 def _fmt_ms(ms: float | None) -> str:
-    return "—" if ms is None else f"{ms:.0f} ms"
+    return EM_DASH if ms is None else f"{ms:.0f} ms"
+
+
+def _fmt_num(n: float | None, ndigits: int = 1) -> str:
+    return EM_DASH if n is None else f"{n:.{ndigits}f}"
+
+
+def _fmt_branches(distribution: dict[str, float]) -> str:
+    if not distribution:
+        return EM_DASH
+    parts = sorted(distribution.items(), key=lambda kv: -kv[1])
+    return ", ".join(f"{branch} {fraction * 100:.0f}%" for branch, fraction in parts)
+
+
+def _fmt_dropoff(dropoff: dict[int, int]) -> str:
+    if not dropoff:
+        return EM_DASH
+    parts = sorted(dropoff.items())
+    return " · ".join(f"t{idx}:{count}" for idx, count in parts)
+
+
+def _fmt_latency_row(p: dict[int, float | None]) -> str:
+    return f"p50 {_fmt_ms(p.get(50))} / p95 {_fmt_ms(p.get(95))}"
 
 
 def format_panel(label: str, model: DashboardModel) -> str:
     return (
         f"### {label}\n\n"
+        # --- Outcome ----------------------------------------------------------
+        f"**Outcome**\n\n"
         f"- **Total interactions:** {model.total_interactions}\n"
         f"- **Gap rate:** {_fmt_pct(model.gap_rate)}\n"
         f"- **Deflection rate:** {_fmt_pct(model.deflection_rate)}\n"
+        f"- **Refusal rate:** {_fmt_pct(model.refusal_rate)}\n"
         f"- **Guardrail rejection rate:** {_fmt_pct(model.guardrail_rejection_rate)}\n"
-        f"- **Latency p50:** {_fmt_ms(model.latency_p50)}\n"
-        f"- **Latency p95:** {_fmt_ms(model.latency_p95)}\n"
+        f"- **Retry-exhaustion rate:** {_fmt_pct(model.retry_exhausted_rate)}\n\n"
+        # --- Routing ----------------------------------------------------------
+        f"**Routing**\n\n"
+        f"- **Branch distribution:** {_fmt_branches(model.branch_distribution)}\n"
+        f"- **Low-confidence rate (<0.7):** {_fmt_pct(model.low_confidence_rate())}\n"
+        f"- **Confident-failure rate (≥0.8 & failed):** {_fmt_pct(model.confident_failure_rate())}\n"
+        f"- **Multi-label rate:** {_fmt_pct(model.multi_label_rate)}\n\n"
+        # --- Engagement -------------------------------------------------------
+        f"**Engagement**\n\n"
+        f"- **Unique sessions:** {model.unique_sessions}\n"
+        f"- **Turns/session (median):** {_fmt_num(model.turns_per_session_median)}\n"
+        f"- **Drop-off by turn:** {_fmt_dropoff(model.dropoff_by_turn)}\n"
+        f"- **Contact-offer rate:** {_fmt_pct(model.contact_offer_rate)}\n"
+        f"- **Contact-conversion rate:** {_fmt_pct(model.contact_conversion_rate)}\n\n"
+        # --- Tool use ---------------------------------------------------------
+        f"**Tool use**\n\n"
+        f"- **Tool uptake (TECHNICAL):** {_fmt_pct(model.technical_tool_uptake_rate)}\n"
+        f"- **Tool-call success rate:** {_fmt_pct(model.tool_call_success_rate)}\n\n"
+        # --- Latency ----------------------------------------------------------
+        f"**Latency** (per stage)\n\n"
+        f"- **classifier:** {_fmt_latency_row(model.latency_percentiles('classifier'))}\n"
+        f"- **retrieval:** {_fmt_latency_row(model.latency_percentiles('retrieval'))}\n"
+        f"- **generation:** {_fmt_latency_row(model.latency_percentiles('generation'))}\n"
+        f"- **guardrail:** {_fmt_latency_row(model.latency_percentiles('guardrail'))}\n"
+        f"- **total:** {_fmt_latency_row(model.latency_percentiles('total'))}\n"
     )
 
 

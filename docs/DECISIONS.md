@@ -5,6 +5,56 @@
 
 ---
 
+## Session 30 (2026-05-04) — `#35` shipped: Health Overview v2 (14 metrics, 5 thematic blocks, Global window)
+
+**Status:** [`#35`](https://github.com/AlejandroFuentePinero/digital-twin/issues/35) (Panel 1 v2) closed locally. Suite **252 → 273** (+21 tests). Phase 4 progress: Sentinel's Health Overview now covers all 9 failure modes and 3 orientation signals — first-glance triage surface complete pre-thresholds. Next on the path: `#36` (thresholds + WoW deltas + `docs/SENTINEL.md` proxy caveats / runbooks).
+
+### What shipped — code
+
+| Commit | Scope |
+|---|---|
+| `<this-session>` | `#35` — `DashboardModel` extended with 14 new metrics; `gap_rate` redefined to union `knew_answer=False` with `event_type=='gap'`; `for_window(days=None)` returns self; module-level `MAX_ATTEMPTS` / `LOW_CONFIDENCE_THRESHOLD` / `HIGH_CONFIDENCE_THRESHOLD` constants. `Sentinel` reorganised into 5 thematic blocks (Outcome / Routing / Engagement / Tool use / Latency); `WINDOWS` = Global / 30d / 7d (Today dropped); None → "—" formatter discipline across all metrics. +18 tests in `test_dashboard_model.py`, +3 in `test_sentinel.py`. |
+
+### TDD slices (4 waves, 12 vertical slices)
+
+- **Wave A — Window rework (1 slice)**: `for_window(days=None) → self`.
+- **Wave B — Metrics (10 slices)**: redefined `gap_rate`; new `refusal_rate`, `retry_exhausted_rate`, `branch_counts`+`branch_distribution`, `low_confidence_rate(threshold)`, `confident_failure_rate(threshold)`, `multi_label_rate`, `unique_sessions`+`turns_per_session_median`+`dropoff_by_turn`, `contact_offer_rate`+`contact_conversion_rate`, `technical_tool_uptake_rate`+`tool_call_success_rate`, `latency_percentiles(stage, percentiles)`.
+- **Wave C — UI (1 slice)**: 5-block panel layout + Global/30d/7d window set + None→— formatters. One sentinel test asserts all 5 block headers and headline metrics from each block render; second asserts None never leaks (renders as em-dash); third locks WINDOWS contract.
+- **Wave D — Live-log smoke**: `LocalReader().read()` over the 85-record live log produces `format_panel` output matching the Session 28 inventory (gap 9.4%, branch GAP/GENERIC ~42% each, TECHNICAL tool-uptake 66.7%, multi-label 0.0%); new `confident_failure_rate=15.3%` surfaces the misroutes that `low_confidence_rate=5.9%` misses — issue's "Detection gap" headline confirmed in production data.
+
+### Design choices
+
+- **`gap_rate` redefined to union, not switched.** Live data shows `event_type=='gap'` is dead (0/85) due to the pipeline writer bug; `knew_answer=False` is the actual gap signal (8/85). The metric ORs both so it stays correct after the writer fix lands. Comment in `dashboard_model.py` ties this to LIMITATIONS.
+- **`MAX_ATTEMPTS` mirrored locally, not imported from `pipeline.py`.** Importing pipeline pulls subprocess/classifier/generator into a pure-aggregation module — heavy. The constant is one int; mirroring is cheaper than the coupling. Comment flags the requirement to keep them in sync.
+- **`multi_label_rate` denominator excludes empty `classifier_labels`.** Otherwise legacy v1 records (which lack the field per pre-#37 schema) would deflate the rate to ~0% across the whole corpus, masking whether composition routing is actually firing. Returns `None` when the population has zero populated labels — explicit "no data" beats fake-zero.
+- **`confident_failure_rate` as a top-line metric, not a sub-metric.** Per the senior-engineer audit in Session 28: low-confidence-rate catches uncertain misroutes but is blind to the *confident* failures — when the system is sure and still wrong. Live data validates: 15.3% confident-failure vs 5.9% low-confidence. Makes the dashboard load-bearing for misroute detection in a way it wasn't before.
+- **`latency_percentiles(stage, percentiles)` generalised, but `latency_p50`/`latency_p95` properties retained.** They're used by the existing tests and external consumers; deleting them would have broken the contract for no gain. The generalised form is what the new UI actually calls.
+- **`for_window(days=None) → self`, not `→ DashboardModel(self.records)`.** Frozen dataclass + immutable list → returning self is safe, avoids a copy, and makes the "Global" semantics explicit.
+- **Five thematic blocks rendered as nested markdown bullets, not a multi-column table.** Matches the existing `gr.Markdown` pattern; tables don't render reliably in narrow Gradio columns. Trade-off: verbose; mitigated by per-block bold headers.
+- **Latency block surfaces all 5 stages, not just total.** Live data shows generation p95 ≈ 10s and guardrail p95 ≈ 12s — the 13s total p50 was masking *which stage* was slow. Per-stage view turns latency from "total" to "diagnosable."
+- **Live `contact_conversion_rate` shows 0.0% despite 1 confirmed submission.** Sentinel reads `contact_provided` off `InteractionRecord` only; the lone submission likely happened on the *last* turn of its session, so no subsequent record carried the flipped state. True conversion rate requires cross-referencing `data/logs/contacts.jsonl` (joinable on `session_id`). Documented as a known under-count; not in #35's scope to fix.
+
+### Verified
+
+- `uv run pytest -q` → **273 passed** (252 → 273; +18 dashboard_model, +3 sentinel).
+- Live runtime: `PYTHONPATH=src uv run python -c "from sentinel import build_app; app = build_app()"` → boots cleanly against the 85-record live log.
+- Live-log smoke produced the full rendered panel; numbers match Session 28 inventory:
+  - Outcome: gap 9.4% / refusal 1.2% / guardrail-rejection 10.6% / retry-exhaustion 2.4%
+  - Routing: GAP 42% / GENERIC 42% / TECHNICAL 11% / LOGISTICAL 5% / low-conf 5.9% / confident-failure 15.3% / multi-label 0.0%
+  - Engagement: 64 sessions / 1.0 turn median / drop-off t0:56→t1:12→...→t7:1 / contact-offer 12.9%
+  - Tool use: TECHNICAL uptake 66.7% / tool-call success 100%
+  - Latency: classifier p50/p95 = 1047/1701 ms; generation 3482/9980; guardrail 5121/11920; total 13270/25011
+
+### Outstanding
+
+- **Push the local commits** — Session 28 (`da77567` + `f2c1231`) + Session 29 (`70ffa44`) + this session's `#35` commit are local; `main` push is harness-protected.
+- **Strip `needs-triage`** from `#35` (this session) and from `#36` `#38` `#30` `#31` (carry-over).
+- **`event_type` writer fix in `pipeline.py`** — still ticketed-pending; Sentinel's gap_rate redefinition is a workaround until that lands.
+- **`contact_conversion_rate` true measurement** — needs cross-reference with `contacts.jsonl`. New ticket if it becomes load-bearing.
+- **Next: `#36`** — per-metric thresholds + WoW deltas + `docs/SENTINEL.md` proxy-caveats and runbooks. Now unblocked since the metric set is locked.
+
+---
+
 ## Session 29 (2026-05-04) — `#37` shipped: InteractionRecord schema v1 → v2 (reproducibility fields)
 
 **Status:** [`#37`](https://github.com/AlejandroFuentePinero/digital-twin/issues/37) (InteractionRecord schema additions) closed locally — Phase 4 prerequisite cleared. Suite **245 → 252** (+7 tests). Unblocks `#30` (deployment markers in Trend Explorer) and `#38` (replay-from-record). Next on the Phase 4 path: `#35` (Panel 1 v2 — 14 metrics across 5 thematic blocks).

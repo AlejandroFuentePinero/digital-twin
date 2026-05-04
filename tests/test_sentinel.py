@@ -33,8 +33,6 @@ def _record_dict(timestamp: str | None = None, event_type: str = "answered", tot
 
 def test_format_panel_includes_window_label_and_metric_values():
     """format_panel renders the window label and surfaces every required metric."""
-    model = DashboardModel.__call__([])  # type: ignore[call-arg]
-    # Use a non-empty model so percentiles are not None.
     from interaction_log import InteractionRecord
 
     records = [InteractionRecord.model_validate(_record_dict(event_type="gap"))]
@@ -47,6 +45,63 @@ def test_format_panel_includes_window_label_and_metric_values():
     assert "Guardrail" in panel
     assert "p50" in panel.lower()
     assert "p95" in panel.lower()
+
+
+def test_format_panel_renders_all_five_thematic_blocks():
+    """Per issue #35: Outcome / Routing / Engagement / Tool use / Latency. Each block
+    has a section header and at least one headline metric."""
+    from interaction_log import InteractionRecord
+
+    records = [InteractionRecord.model_validate(_record_dict())]
+    panel = format_panel("Global", DashboardModel(records))
+
+    # Block headers
+    assert "Outcome" in panel
+    assert "Routing" in panel
+    assert "Engagement" in panel
+    assert "Tool use" in panel
+    assert "Latency" in panel
+
+    # Outcome
+    assert "Refusal" in panel
+    assert "Retry" in panel  # retry_exhausted_rate
+    # Routing
+    assert "Branch" in panel  # branch_distribution
+    assert "Low-confidence" in panel
+    assert "Confident-failure" in panel  # the misroute-detection metric
+    assert "Multi-label" in panel
+    # Engagement
+    assert "session" in panel.lower()  # unique_sessions / turns/session
+    assert "Drop-off" in panel or "Dropoff" in panel
+    assert "Contact" in panel  # offer + conversion
+    # Tool use
+    assert "Tool" in panel  # uptake + success
+    # Latency — per-stage labels
+    assert "classifier" in panel.lower()
+    assert "generation" in panel.lower()
+    assert "guardrail" in panel.lower()
+
+
+def test_format_panel_renders_none_metrics_as_em_dash():
+    """Metrics that are None (e.g. multi_label_rate on all-empty labels, contact_conversion_rate
+    on no offers, latency on no records) render as the em-dash placeholder, not as 'None' or '0%'."""
+    panel = format_panel("Global", DashboardModel([]))
+    # Empty model: contact_conversion_rate, multi_label_rate, technical_tool_uptake_rate, tool_call_success_rate, latency_percentiles all None
+    assert "None" not in panel, "None must never leak into the rendered panel"
+    assert "—" in panel, "missing data should render as the em-dash placeholder"
+
+
+def test_global_window_appears_in_window_set_and_today_does_not():
+    """Per issue #35: WINDOWS = [(Global, None), (30d, 30), (7d, 7)] — Today removed
+    (low signal in low-traffic regime), Global added (first-glance all-time picture)."""
+    from sentinel import WINDOWS
+
+    labels = [label for label, _ in WINDOWS]
+    assert "Global" in labels
+    assert "Today" not in labels
+    # Global maps to days=None (no filter)
+    global_days = dict(WINDOWS)["Global"]
+    assert global_days is None
 
 
 def test_format_header_includes_source_indicator_and_loaded_timestamp():
