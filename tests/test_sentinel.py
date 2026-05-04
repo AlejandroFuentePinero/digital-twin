@@ -573,8 +573,9 @@ def test_format_session_view_renders_header_with_session_metadata():
     assert "3" in md  # turn count
     # Contact state visible in some form (offered + provided shown)
     assert "offered" in md.lower() or "provided" in md.lower()
-    # Total latency = 1000 + 2500 + 4000 = 7500 ms
-    assert "7500" in md or "7,500" in md
+    # Total latency = 1000 + 2500 + 4000 = 7500 ms = 7.50 s (seconds-only
+    # display per the latency-in-seconds operator directive).
+    assert "7.50" in md or "7500" in md
 
 
 def test_format_session_view_renders_one_collapsible_per_turn_with_pass_fail_badge():

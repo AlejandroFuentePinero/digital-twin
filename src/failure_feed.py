@@ -51,18 +51,26 @@ FAILURE_MODE_LABELS: dict[str, str] = {
 }
 
 
-# Severity rank for sorting + visual treatment in the Failure Feed.
-# refused / retry-exhausted are the operator-actionable alerts;
-# rejected-then-recovered is a warning (the system did recover);
-# gap is informational (the system honestly said it didn't know).
+# Per-mode CSS class, drives the row stripe + summary count colour. Each
+# mode gets a distinct colour so the operator can differentiate at a glance.
+# (Older code referenced this as ``FAILURE_MODE_SEVERITY``; the rename here
+# reflects that we no longer collapse modes into a 3-bucket severity.)
 FAILURE_MODE_SEVERITY: dict[str, str] = {
-    "refused":                  "alert",
-    "retry-exhausted":          "alert",
-    "rejected-then-recovered":  "warning",
-    "gap":                      "muted",
+    "refused":                  "refused",
+    "retry-exhausted":          "retry-exhausted",
+    "rejected-then-recovered":  "rejected-then-recovered",
+    "gap":                      "gap",
 }
 
-_SEVERITY_RANK: dict[str, int] = {"alert": 0, "warning": 1, "muted": 2}
+# Sort rank: refused first (system gave up), retry-exhausted next (3
+# rejected attempts), rejected-then-recovered (system fought back to OK),
+# gap last (honest "I don't know" — informational, not a defect).
+_SEVERITY_RANK: dict[str, int] = {
+    "refused":                  0,
+    "retry-exhausted":          1,
+    "rejected-then-recovered":  2,
+    "gap":                      3,
+}
 
 
 def failure_mode_counts(records: list[InteractionRecord]) -> dict[str, int]:
@@ -88,9 +96,7 @@ def sort_feed(rows: "list[FailureRow]") -> "list[FailureRow]":
     by_recency = sorted(rows, key=lambda r: r.timestamp, reverse=True)
     return sorted(
         by_recency,
-        key=lambda r: _SEVERITY_RANK.get(
-            FAILURE_MODE_SEVERITY.get(r.failure_mode, "muted"), 99
-        ),
+        key=lambda r: _SEVERITY_RANK.get(r.failure_mode, 99),
     )
 
 

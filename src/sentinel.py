@@ -371,9 +371,15 @@ body, .gradio-container {
     margin-right: 12px;
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
-.feed-summary .feed-summary-mode.alert    { color: var(--alert); }
-.feed-summary .feed-summary-mode.warning  { color: var(--warning); }
-.feed-summary .feed-summary-mode.muted    { color: var(--text-muted); }
+/* Per-mode colour palette — distinct per failure mode, all visible against
+   the dark background. refused = bright red; retry-exhausted = orange (needed
+   recovery loop but failed); rejected-then-recovered = amber (recovered);
+   gap = info-blue (operator-friendly, distinct from the gray that disappears
+   into the background). */
+.feed-summary .feed-summary-mode.refused                  { color: #f87171; }
+.feed-summary .feed-summary-mode.retry-exhausted          { color: #fb923c; }
+.feed-summary .feed-summary-mode.rejected-then-recovered  { color: #fbbf24; }
+.feed-summary .feed-summary-mode.gap                      { color: #60a5fa; }
 
 .feed-row {
     border: 1px solid var(--border);
@@ -382,9 +388,10 @@ body, .gradio-container {
     background: var(--bg-surface);
     margin: 4px 0;
 }
-.feed-row.sev-alert    { border-left-color: var(--alert); }
-.feed-row.sev-warning  { border-left-color: var(--warning); }
-.feed-row.sev-muted    { border-left-color: var(--text-muted); }
+.feed-row.sev-refused                  { border-left-color: #f87171; }
+.feed-row.sev-retry-exhausted          { border-left-color: #fb923c; }
+.feed-row.sev-rejected-then-recovered  { border-left-color: #fbbf24; }
+.feed-row.sev-gap                      { border-left-color: #60a5fa; }
 
 .feed-row summary {
     list-style: none; cursor: pointer;
@@ -428,6 +435,42 @@ body, .gradio-container {
 .feed-empty {
     padding: 18px; text-align: center;
     color: var(--text-muted); font-style: italic;
+}
+
+/* Session drilldown header — clearly delineates "you're now viewing one
+   session" from the multi-row failure feed. */
+.session-view-header {
+    background: var(--bg-surface-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--divergence);
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin: 8px 0 16px;
+}
+.session-view-header .session-eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--divergence);
+    margin-bottom: 4px;
+}
+.session-view-header .session-question {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+}
+.session-view-header .session-meta {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.session-view-header .session-meta code {
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-right: 4px;
+    color: var(--text-muted);
 }
 
 /* ---- Gap clusters (2-column card grid) ---- */
@@ -525,11 +568,14 @@ footer { display: none !important; }
 
 /* ---- Section header (between sections; no card wrappers) ---- */
 .section-header {
-    font-size: 14px; font-weight: 500;
-    letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--text-secondary);
-    margin: 24px 0 8px;
+    font-size: 15px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-primary);
+    margin: 32px 0 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
 }
+.section-header:first-of-type { margin-top: 12px; }
 
 /* Latency stages — p50 muted, p95 primary, drives the eye to the headline. */
 .metric-row .latency-p50 { color: var(--text-secondary); }
@@ -540,10 +586,16 @@ footer { display: none !important; }
     background: var(--bg-surface-2);
     border: 1px solid var(--border);
     border-radius: 6px;
-    padding: 16px;
+    padding: 12px 12px 8px;
     margin: 4px 0;
 }
-.chart-card .chart-header { margin-bottom: 6px; }
+.chart-card .chart-header {
+    margin-bottom: 4px;
+    color: var(--text-primary);
+}
+.chart-card .gradio-plot, .chart-card img, .chart-card svg {
+    width: 100% !important; max-width: 100%;
+}
 
 /* Investigate link — no chrome; small, muted, hover lifts to primary. */
 .investigate-link button {
@@ -868,6 +920,13 @@ def _value_cell(
     divergent: bool,
     delta_html: str = "",
 ) -> str:
+    """Wrap a formatted value in its severity-coloured cell.
+
+    ``formatted`` is trusted as safe HTML — formatters in this module
+    produce strings from controlled internal data (rates, latencies, branch
+    distributions over the registry), no user input. Escaping here would
+    break the embedded ``<span>`` markup the latency formatter uses to
+    differentiate p50 / p95."""
     classes = ["metric-value"]
     status = _status_class(metric_name, raw_value) if metric_name else ""
     if status:
@@ -876,7 +935,7 @@ def _value_cell(
         classes.append("divergent")
     return (
         f"<div class='{' '.join(classes)}'>"
-        f"{html.escape(formatted)}{delta_html}"
+        f"{formatted}{delta_html}"
         f"</div>"
     )
 
@@ -1077,19 +1136,16 @@ def format_feed_summary(rows: list[FailureRow], counts: dict[str, int]) -> str:
     parts = [
         f"<span class='feed-summary-total'>{total} failures</span>"
     ]
-    # Sort the count breakdown by severity so alert modes appear first.
-    sev_rank = {"alert": 0, "warning": 1, "muted": 2}
-    sorted_modes = sorted(
-        counts.items(),
-        key=lambda kv: sev_rank.get(FAILURE_MODE_SEVERITY.get(kv[0], "muted"), 99),
-    )
+    # Sort the count breakdown by mode rank so the most-actionable modes
+    # (refused → retry-exhausted → rejected-then-recovered → gap) appear first.
+    from failure_feed import _SEVERITY_RANK as _MODE_RANK  # per-mode sort order
+    sorted_modes = sorted(counts.items(), key=lambda kv: _MODE_RANK.get(kv[0], 99))
     for mode, n in sorted_modes:
         if n == 0:
             continue
-        sev = FAILURE_MODE_SEVERITY.get(mode, "muted")
         friendly = FAILURE_MODE_LABELS.get(mode, mode).split(" (")[0]
         parts.append(
-            f"<span class='feed-summary-mode {sev}'>{n} {html.escape(friendly)}</span>"
+            f"<span class='feed-summary-mode {mode}'>{n} {html.escape(friendly)}</span>"
         )
     return "<div class='feed-summary'>" + "".join(parts) + "</div>"
 
@@ -1151,18 +1207,35 @@ def _turn_summary(record: InteractionRecord) -> str:
 
 
 def format_session_view(session: Session) -> str:
+    """Per-session view, prefixed with a prominent header so the operator
+    sees clearly that they've left the feed and entered a single-session
+    drilldown."""
     contact_bits = []
     if session.contact_offered:
         contact_bits.append("offered")
     if session.contact_provided:
         contact_bits.append("provided")
     contact_str = ", ".join(contact_bits) if contact_bits else "neither"
-    parts = [
-        f"### Session `{session.session_id}`",
-        f"**Turns:** {session.turn_count}  ·  **Contact:** {contact_str}  "
-        f"·  **Total latency:** {session.total_latency_ms} ms",
-        "",
-    ]
+
+    first_q = (
+        session.records[0].question if session.records else "(no records)"
+    )
+    first_q_truncated = first_q[:120] + ("…" if len(first_q) > 120 else "")
+
+    header = (
+        "<div class='session-view-header'>"
+        "<div class='session-eyebrow'>Session drilldown</div>"
+        f"<div class='session-question'>{html.escape(first_q_truncated)}</div>"
+        f"<div class='session-meta mono'>"
+        f"<code>{session.session_id}</code>  ·  "
+        f"{session.turn_count} turns  ·  "
+        f"contact: {contact_str}  ·  "
+        f"total latency: {session.total_latency_ms / 1000:.2f} s"
+        "</div>"
+        "</div>"
+    )
+
+    parts = [header, ""]
     for r in session.records:
         body = format_failure_drilldown(r)
         parts.append(
@@ -1447,14 +1520,14 @@ def render_trend_plot(
     chart renders this dashboard does."""
     df = chart_dataframe(model, metric, days=days, prior_model=prior_model)
 
-    # Convert px height → inches @ 100 DPI (matplotlib uses inches).
-    fig = Figure(figsize=(6.4, height / 100), dpi=100, facecolor="#0a0a0a")
+    # Wider canvas (10 inches) so the chart fills its card; the surrounding
+    # gr.Plot container scales the SVG down responsively.
+    fig = Figure(figsize=(10, height / 100), dpi=100, facecolor="#1c1c20")
     ax = fig.add_subplot(111)
-    ax.set_facecolor("#171717")
-
+    ax.set_facecolor("#1c1c20")
     if df.empty:
         ax.text(0.5, 0.5, "no data", ha="center", va="center",
-                color="#525252", transform=ax.transAxes, fontsize=10)
+                color="#5a5a64", transform=ax.transAxes, fontsize=10)
         ax.set_xticks([]); ax.set_yticks([])
     else:
         # Status of the headline value drives the colour of both series.
@@ -1481,11 +1554,11 @@ def render_trend_plot(
                     linestyle="--", zorder=1, alpha=0.7)
 
     # Style — Midnight Mono palette
-    ax.tick_params(colors="#a3a3a3", labelsize=8.5)
+    ax.tick_params(colors="#9999a3", labelsize=8.5)
     for spine in ax.spines.values():
-        spine.set_color("#262626")
-    ax.set_ylabel(_y_axis_title(metric), color="#a3a3a3", fontsize=9)
-    ax.grid(True, color="#262626", linewidth=0.5)
+        spine.set_color("#1f1f24")
+    ax.set_ylabel(_y_axis_title(metric), color="#9999a3", fontsize=9)
+    ax.grid(True, color="#1f1f24", linewidth=0.5)
 
     if not df.empty:
         # ``%-d`` drops the leading zero — "May 3" not "May 03" (operator
@@ -1494,13 +1567,55 @@ def render_trend_plot(
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %-d"))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=6))
 
-    # Caption (threshold + monitoring since), bottom-left in muted text
-    caption = _chart_caption(metric, df)
-    if caption:
-        fig.text(0.02, 0.02, caption, color="#525252", fontsize=8)
+    # Coloured caption — colour-match the labels to the threshold lines'
+    # implied colours (healthy = green, warning = amber, rest in muted).
+    threshold_caption = _threshold_caption(metric)
+    monitoring_since = _monitoring_since(df)
+    if threshold_caption:
+        # Split "healthy ≤ X · warning ≤ Y" into colored segments.
+        # Render with multiple fig.text calls so each chunk gets its own colour.
+        x = 0.015
+        y = 0.02
+        spacing = 0.006  # between segments
+        for chunk, color in _caption_chunks(threshold_caption):
+            t = fig.text(x, y, chunk, color=color, fontsize=8,
+                         family="monospace")
+            # Render then measure to advance x for the next chunk.
+            fig.canvas.draw_idle()  # ensures bbox is computed
+            try:
+                bbox = t.get_window_extent(renderer=fig.canvas.get_renderer())
+                x += bbox.width / fig.bbox.width + spacing
+            except Exception:
+                x += 0.18  # fallback
+        if monitoring_since:
+            fig.text(x, y, f"·  monitoring since {monitoring_since}",
+                     color="#5a5a64", fontsize=8, family="monospace")
+    elif monitoring_since:
+        fig.text(0.015, 0.02, f"monitoring since {monitoring_since}",
+                 color="#5a5a64", fontsize=8, family="monospace")
 
     fig.tight_layout(rect=[0, 0.08, 1, 1])
     return fig
+
+
+def _caption_chunks(caption: str) -> list[tuple[str, str]]:
+    """Split the threshold caption into ``(chunk, colour)`` pairs so each
+    segment can be rendered in matplotlib with its own colour.
+
+    Caption shape: ``healthy ≤ 10.0%  ·  warning ≤ 15.0%`` — split on the
+    ``  ·  `` separator and colour the leading word per token."""
+    chunks: list[tuple[str, str]] = []
+    parts = caption.split("  ·  ")
+    for i, part in enumerate(parts):
+        prefix_color = "#5a5a64"
+        if part.startswith("healthy"):
+            prefix_color = "#34d399"
+        elif part.startswith("warning"):
+            prefix_color = "#fbbf24"
+        if i > 0:
+            chunks.append(("·  ", "#5a5a64"))
+        chunks.append((part + "  ", prefix_color))
+    return chunks
 
 
 def _threshold_caption(metric: str) -> str:
@@ -1539,6 +1654,8 @@ def format_trend_header(
     model: DashboardModel,
     prior_model: DashboardModel | None = None,
 ) -> str:
+    """Inline header above each chart — pure HTML so it can sit inside the
+    chart-card wrapper without markdown getting passed through unparsed."""
     label = METRIC_LABELS.get(metric, metric)
     value = METRIC_GETTERS[metric](model)
     value_str = _fmt_metric_value(metric, value)
@@ -1549,7 +1666,7 @@ def format_trend_header(
     )
     prior_value = METRIC_GETTERS[metric](prior_model) if prior_model is not None else None
     delta = _delta_inline(metric, value, prior_value)
-    return f"**{label}:** {coloured}{delta}"
+    return f"<b>{label}:</b> {coloured}{delta}"
 
 
 # ---- Auto-refresh of cached cluster + summary files -------------------------
@@ -1757,54 +1874,54 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                     )
                     search_in = gr.Textbox(value="", label="Search question", scale=2)
 
-                feed_summary_md = gr.Markdown(
-                    format_feed_summary(
-                        initial_failures,
-                        failure_mode_counts(model.records),
-                    )
-                )
-                feed_empty_md = gr.Markdown(
-                    "" if initial_failures
-                    else "<div class='feed-empty'>No failures match the current filters.</div>"
-                )
-
-                # Pre-allocated accordion slots. Each slot's `label` is set to
-                # the row's summary line; body holds the full drilldown +
-                # View Session button. Slots beyond the row count are hidden.
-                # The severity stripe lives on the accordion's elem_classes so
-                # the .feed-row.sev-* CSS rules apply to the rendered container.
-                feed_accordions: list[gr.Accordion] = []
-                feed_drilldowns: list[gr.Markdown] = []
-                feed_session_btns: list[gr.Button] = []
-                feed_session_states: list[gr.State] = []
-                for i in range(MAX_FEED_ROWS):
-                    if i < len(initial_failures):
-                        row = initial_failures[i]
-                        label = _failure_accordion_label(row)
-                        body_md = format_failure_drilldown(row.record)
-                        sid = row.record.session_id
-                        visible = True
-                        sev = FAILURE_MODE_SEVERITY.get(row.failure_mode, "muted")
-                    else:
-                        label = ""
-                        body_md = ""
-                        sid = None
-                        visible = False
-                        sev = "muted"
-                    with gr.Accordion(
-                        label=label, open=False, visible=visible,
-                        elem_classes=["feed-row", f"sev-{sev}"],
-                    ) as acc:
-                        feed_drilldowns.append(gr.Markdown(body_md))
-                        feed_session_btns.append(
-                            gr.Button("View full session", size="sm", variant="secondary")
+                # Wrap feed area in a column we can hide when the session view
+                # opens — keeps the operator's focus on one thing at a time and
+                # makes "Back to feed" return them to the feed (with
+                # scroll_to_output ensuring the scroll position lands here).
+                with gr.Column(visible=True) as feed_view:
+                    feed_summary_md = gr.Markdown(
+                        format_feed_summary(
+                            initial_failures,
+                            failure_mode_counts(model.records),
                         )
-                    feed_accordions.append(acc)
-                    feed_session_states.append(gr.State(sid))
+                    )
+                    feed_empty_md = gr.Markdown(
+                        "" if initial_failures
+                        else "<div class='feed-empty'>No failures match the current filters.</div>"
+                    )
+
+                    feed_accordions: list[gr.Accordion] = []
+                    feed_drilldowns: list[gr.Markdown] = []
+                    feed_session_btns: list[gr.Button] = []
+                    feed_session_states: list[gr.State] = []
+                    for i in range(MAX_FEED_ROWS):
+                        if i < len(initial_failures):
+                            row = initial_failures[i]
+                            label = _failure_accordion_label(row)
+                            body_md = format_failure_drilldown(row.record)
+                            sid = row.record.session_id
+                            visible = True
+                            mode_class = row.failure_mode
+                        else:
+                            label = ""
+                            body_md = ""
+                            sid = None
+                            visible = False
+                            mode_class = "gap"
+                        with gr.Accordion(
+                            label=label, open=False, visible=visible,
+                            elem_classes=["feed-row", f"sev-{mode_class}"],
+                        ) as acc:
+                            feed_drilldowns.append(gr.Markdown(body_md))
+                            feed_session_btns.append(
+                                gr.Button("View full session", size="sm", variant="secondary")
+                            )
+                        feed_accordions.append(acc)
+                        feed_session_states.append(gr.State(sid))
 
                 with gr.Column(visible=False) as session_view:
                     session_md = gr.Markdown("")
-                    back_btn = gr.Button("Back to feed", variant="secondary")
+                    back_btn = gr.Button("← Back to feed", variant="secondary")
 
                 gr.Markdown("<div class='section-header'>Gap Clusters</div>")
                 cluster_md = gr.Markdown(
@@ -1927,7 +2044,9 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 ],
             )
 
-        # View full session (per-row buttons) — swap to session-view column
+        # View full session (per-row buttons) — hide the feed column, show
+        # session-view column, and use scroll_to_output so the page scrolls
+        # to the session_md (the first output) on click.
         def _make_session_click(slot_index: int):
             def _handler(session_id):
                 if not session_id:
@@ -1937,34 +2056,30 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 if match is None:
                     return gr.update(), gr.update(), gr.update()
                 return (
-                    gr.update(visible=False),  # collapse all accordions implicitly via column toggle
-                    gr.update(visible=True),
                     format_session_view(match),
+                    gr.update(visible=False),
+                    gr.update(visible=True),
                 )
             return _handler
-
-        # We need a single "feed area" column to hide on session view; wrap
-        # the feed_empty + accordions section in one column we can toggle.
-        # That column wasn't built explicitly above — to keep this minimal,
-        # toggle each accordion's visibility off when entering session view.
-        # Simpler alternative: keep feed visible, render session_md inline
-        # below it. Going with: per-button click hides session_view's parent
-        # column toggle only.
 
         for i, btn in enumerate(feed_session_btns):
             btn.click(
                 fn=_make_session_click(i),
                 inputs=[feed_session_states[i]],
-                outputs=[banner_md, session_view, session_md],  # banner_md is a no-op slot here
+                outputs=[session_md, feed_view, session_view],
+                scroll_to_output=True,
             )
-            # NB: hiding the feed accordions wholesale would require wrapping
-            # them in a column; keeping it simple — the session view appears
-            # below the feed and the operator scrolls.
 
         def _back_to_feed():
-            return gr.update(visible=False)
+            # Returning feed_view first (truthy update) so scroll_to_output
+            # lands the operator back at the top of the failure feed.
+            return gr.update(visible=True), gr.update(visible=False)
 
-        back_btn.click(fn=_back_to_feed, outputs=[session_view])
+        back_btn.click(
+            fn=_back_to_feed,
+            outputs=[feed_view, session_view],
+            scroll_to_output=True,
+        )
 
         # Trend Explorer: investigate-mode renderer
         def _build_investigate_figure(metric, window_label, show_prior):
