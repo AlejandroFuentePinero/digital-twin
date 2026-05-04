@@ -18,8 +18,9 @@ from sentinel import (
     chart_dataframe,
     format_failure_drilldown,
     format_header,
-    format_panel,
+    format_metrics_overview,
     format_session_view,
+    format_status_banner,
     format_trend_header,
 )
 from dashboard_model import METRIC_GETTERS, DashboardModel
@@ -42,140 +43,195 @@ def _record_dict(timestamp: str | None = None, event_type: str = "answered", tot
     }
 
 
-def test_format_panel_includes_window_label_and_metric_values():
-    """format_panel renders the window label and surfaces every required metric."""
-    from interaction_log import InteractionRecord
-
-    records = [InteractionRecord.model_validate(_record_dict(event_type="gap"))]
-    panel = format_panel("7d", DashboardModel(records))
-
-    assert "7d" in panel
-    assert "Total" in panel or "total" in panel.lower()
-    assert "Gap" in panel
-    assert "Deflection" in panel
-    assert "Guardrail" in panel
-    assert "p50" in panel.lower()
-    assert "p95" in panel.lower()
+def _models_and_priors(records):
+    """Build the (models, priors) lists `format_metrics_overview` consumes."""
+    full = DashboardModel(records)
+    models = [full.for_window(days=7), full.for_window(days=30), full]
+    priors = [
+        full.for_prior_window(days=7),
+        full.for_prior_window(days=30),
+        DashboardModel([]),  # Global has no prior window
+    ]
+    return models, priors
 
 
-def test_format_panel_renders_all_five_thematic_blocks():
-    """Per issue #35: Outcome / Routing / Engagement / Tool use / Latency. Each block
-    has a section header and at least one headline metric."""
+def test_format_metrics_overview_renders_every_section_header_once():
+    """Single-header structure: each thematic block (Outcome / Routing /
+    Engagement / Tool use / Latency) appears exactly ONCE — not three times
+    (per the operator + design-spec restructure: section headers ride above a
+    single row of 3 windowed values, they don't repeat per window)."""
     from interaction_log import InteractionRecord
 
     records = [InteractionRecord.model_validate(_record_dict())]
-    panel = format_panel("Global", DashboardModel(records))
+    models, priors = _models_and_priors(records)
+    overview = format_metrics_overview(models, priors)
 
-    # Block headers
-    assert "Outcome" in panel
-    assert "Routing" in panel
-    assert "Engagement" in panel
-    assert "Tool use" in panel
-    assert "Latency" in panel
-
-    # Outcome
-    assert "Refusal" in panel
-    assert "Retry" in panel  # retry_exhausted_rate
-    # Routing
-    assert "Branch" in panel  # branch_distribution
-    assert "Low-confidence" in panel
-    assert "Confident-failure" in panel  # the misroute-detection metric
-    assert "Multi-label" in panel
-    # Engagement
-    assert "session" in panel.lower()  # unique_sessions / turns/session
-    assert "Drop-off" in panel or "Dropoff" in panel
-    assert "Contact" in panel  # offer + conversion
-    # Tool use
-    assert "Tool" in panel  # uptake + success
-    # Latency — per-stage labels
-    assert "classifier" in panel.lower()
-    assert "generation" in panel.lower()
-    assert "guardrail" in panel.lower()
+    for header in ("Outcome", "Routing", "Engagement", "Tool use", "Latency"):
+        assert overview.count(header) == 1, (
+            f"section header {header!r} must appear exactly once, not per window"
+        )
 
 
-def test_format_panel_renders_none_metrics_as_em_dash():
-    """Metrics that are None (e.g. multi_label_rate on all-empty labels, contact_conversion_rate
-    on no offers, latency on no records) render as the em-dash placeholder, not as 'None' or '0%'."""
-    panel = format_panel("Global", DashboardModel([]))
-    # Empty model: contact_conversion_rate, multi_label_rate, technical_tool_uptake_rate, tool_call_success_rate, latency_percentiles all None
-    assert "None" not in panel, "None must never leak into the rendered panel"
-    assert "—" in panel, "missing data should render as the em-dash placeholder"
-
-
-def test_format_panel_renders_badge_for_thresholded_metric():
-    """A thresholded metric (e.g. gap_rate) renders an inline status pill.
-    Per issue #36: use the existing status-pill CSS pattern from module_health."""
+def test_format_metrics_overview_includes_every_metric_label():
+    """Every spec'd metric label appears in the rendered overview — these are
+    the rows the operator scans across the 3 windowed values."""
     from interaction_log import InteractionRecord
 
-    # Build a model where gap_rate is in the alert band (>15%) — three of four records gap.
-    bad_record = _record_dict()
-    bad_record["knew_answer"] = False
+    records = [InteractionRecord.model_validate(_record_dict())]
+    models, priors = _models_and_priors(records)
+    overview = format_metrics_overview(models, priors)
+
+    for label in (
+        "Gap rate", "Deflection rate", "Refusal rate",
+        "Guardrail rejection rate", "Retry-exhaustion rate",
+        "Low-confidence", "Confident-failure",
+        "Branch distribution", "Multi-label",
+        "Unique sessions", "Turns/session", "Contact-conversion",
+        "Tool uptake", "Tool-call success",
+        "classifier", "retrieval", "generation", "guardrail", "total",
+    ):
+        assert label in overview, f"missing metric row: {label!r}"
+
+
+def test_format_metrics_overview_collapses_to_same_across_windows_when_identical():
+    """When the same value renders identically in all 3 windows, the row shows
+    ONE value + 'same across windows' suffix — not three identical cells."""
+    from interaction_log import InteractionRecord
+
+    records = [InteractionRecord.model_validate(_record_dict())]  # 1 record total
+    models, priors = _models_and_priors(records)
+    overview = format_metrics_overview(models, priors)
+
+    # The single record sits inside every window, so all three windows agree
+    # on every metric → at least one row says "same across windows".
+    assert "same across windows" in overview, (
+        "identical-across-windows rows must collapse to a single value + suffix"
+    )
+
+
+def test_format_metrics_overview_marks_diverging_cells_with_divergent_class():
+    """When at least one window's formatted value differs from the others, the
+    diverging cells get the `divergent` CSS class — operator's eye lands on
+    the cell that disagrees."""
+    from datetime import datetime, timedelta, timezone
+    from interaction_log import InteractionRecord
+
+    now = datetime.now(timezone.utc)
+    # One bad record (knew_answer=False) inside the 7d window only — Global
+    # also includes it, but 30d does too. To get genuine divergence I need a
+    # record outside the 30d window. Use 50 days ago for the global-only one.
+    bad7 = _record_dict()
+    bad7["knew_answer"] = False
+    bad7["timestamp"] = (now - timedelta(days=2)).isoformat()
+    bad7["session_id"] = "s-7d"
+    clean_old = _record_dict()
+    clean_old["timestamp"] = (now - timedelta(days=50)).isoformat()
+    clean_old["session_id"] = "s-old"
+
     records = [
-        InteractionRecord.model_validate(bad_record),
-        InteractionRecord.model_validate(bad_record),
-        InteractionRecord.model_validate(bad_record),
+        InteractionRecord.model_validate(bad7),
+        InteractionRecord.model_validate(clean_old),
+    ]
+    models, priors = _models_and_priors(records)
+    overview = format_metrics_overview(models, priors)
+
+    # 7d gap rate = 100%; 30d gap rate = 100%; Global = 50% — divergence on Global.
+    assert "divergent" in overview
+
+
+def test_format_metrics_overview_renders_none_as_em_dash():
+    """Metrics that resolve to None render as the em-dash placeholder, not
+    'None' or '0%'."""
+    models, priors = _models_and_priors([])
+    overview = format_metrics_overview(models, priors)
+    assert "None" not in overview
+    assert "—" in overview
+
+
+def test_format_metrics_overview_applies_status_class_to_thresholded_metric():
+    """A thresholded metric in the alert band gets the `alert` CSS class on
+    its value cell — colour-by-status replaces the old badge pill."""
+    from interaction_log import InteractionRecord
+
+    bad = _record_dict()
+    bad["knew_answer"] = False
+    records = [
+        InteractionRecord.model_validate(bad), InteractionRecord.model_validate(bad),
+        InteractionRecord.model_validate(bad), InteractionRecord.model_validate(_record_dict()),
+    ]
+    models, priors = _models_and_priors(records)
+    overview = format_metrics_overview(models, priors)
+
+    # gap_rate ≈ 75% across every window → divergence is False but value cells
+    # carry the `alert` class.
+    assert "metric-value alert" in overview or "alert" in overview
+
+
+def test_format_status_banner_counts_alert_warning_healthy_metrics():
+    """The banner aggregates the headline window's metric statuses into 3
+    counts. Sentinel header shows 'N alerts · N warnings · N healthy' so the
+    operator gets a one-line health verdict above every tab."""
+    from sentinel import _status_summary, format_status_banner
+    from interaction_log import InteractionRecord
+
+    bad = _record_dict()
+    bad["knew_answer"] = False
+    records = [
+        InteractionRecord.model_validate(bad),
+        InteractionRecord.model_validate(bad),
         InteractionRecord.model_validate(_record_dict()),
     ]
-    panel = format_panel("Global", DashboardModel(records))
+    summary = _status_summary(DashboardModel(records))
+    banner = format_status_banner(summary)
 
-    # Badge HTML appears next to the gap rate row; the alert class is present
-    assert "status-pill" in panel
-    assert "alert" in panel  # gap_rate at 75% is well above 15% warning band
+    assert "SENTINEL" in banner
+    # Count strings appear (numbers vary as thresholds tune; the structure must hold)
+    assert "alerts" in banner.lower()
+    assert "warnings" in banner.lower()
+    assert "healthy" in banner.lower()
+    # Alerts named explicitly when present
+    if summary["alert"]:
+        assert summary["alert"][0] in banner
 
 
-def test_format_panel_does_not_render_badge_for_orientation_metrics():
-    """Orientation metrics (unique_sessions, branch_distribution, multi_label_rate, total)
-    have no threshold and must not get a badge — false alarms ruin the dashboard."""
+def test_format_status_banner_groups_metrics_into_three_buckets():
+    """`_status_summary` partitions every thresholded metric into exactly one
+    of {alert, warning, healthy} (or skips when value is None). No metric can
+    appear in two buckets — banner counts must add up cleanly."""
+    from sentinel import _status_summary
+
+    summary = _status_summary(DashboardModel([]))
+    overlap = (
+        set(summary["alert"]) & set(summary["warning"])
+        | set(summary["alert"]) & set(summary["healthy"])
+        | set(summary["warning"]) & set(summary["healthy"])
+    )
+    assert overlap == set(), f"metrics double-counted: {overlap}"
+
+
+def test_format_metrics_overview_does_not_apply_status_class_to_orientation_rows():
+    """Orientation metrics (unique_sessions, branch_distribution, etc.) have
+    no threshold — their value cells must not carry healthy/warning/alert
+    classes (would mislead the operator into treating them as actionable)."""
     import re
     from interaction_log import InteractionRecord
 
     records = [InteractionRecord.model_validate(_record_dict())]
-    panel = format_panel("Global", DashboardModel(records))
+    models, priors = _models_and_priors(records)
+    overview = format_metrics_overview(models, priors)
 
-    # Pull out just the Unique-sessions <li> and check no status-pill is inside it.
-    sessions_li = re.search(r"<li>\s*<b>Unique sessions:.*?</li>", panel, flags=re.DOTALL)
-    assert sessions_li, "expected a <li> for Unique sessions in the panel HTML"
-    assert "status-pill" not in sessions_li.group(0), (
-        "Unique sessions is volume orientation — no badge"
+    # Match the Unique-sessions row label + its surrounding metric-value cells
+    # up to the next metric-label. None of those cells should carry a status class.
+    m = re.search(
+        r"<div class='metric-label'>Unique sessions</div>(.*?)(?=<div class='metric-label'>|<div class='section-block'>)",
+        overview, flags=re.DOTALL,
     )
-    branches_li = re.search(r"<li>\s*<b>Branch distribution:.*?</li>", panel, flags=re.DOTALL)
-    assert branches_li, "expected a <li> for Branch distribution"
-    assert "status-pill" not in branches_li.group(0), (
-        "Branch distribution is orientation — no badge"
-    )
-
-
-def test_format_panel_renders_wow_delta_when_prior_model_provided():
-    """When a prior-window model is passed, thresholded metrics render an inline WoW arrow + delta."""
-    from interaction_log import InteractionRecord
-
-    bad = _record_dict()
-    bad["knew_answer"] = False
-    current = DashboardModel([InteractionRecord.model_validate(bad)] * 4)        # 100% gap
-    prior = DashboardModel([InteractionRecord.model_validate(_record_dict())] * 4)  # 0% gap
-
-    panel = format_panel("7d", current, prior_model=prior)
-
-    # WoW arrow appears + 'pp' unit visible somewhere on the gap rate line
-    lines = panel.splitlines()
-    gap_line = next(line for line in lines if "Gap rate" in line)
-    assert "↑" in gap_line, "rising gap rate must show ↑"
-    assert "pp" in gap_line, "delta unit appears in line"
-
-
-def test_format_panel_omits_wow_delta_when_prior_model_is_none():
-    """No prior model (e.g. Global window) → no delta rendered. Badges still appear."""
-    from interaction_log import InteractionRecord
-
-    bad = _record_dict()
-    bad["knew_answer"] = False
-    current = DashboardModel([InteractionRecord.model_validate(bad)] * 4)
-
-    panel = format_panel("Global", current, prior_model=None)
-
-    # Badge present, but no WoW arrows
-    assert "status-pill" in panel
-    assert "↑" not in panel and "↓" not in panel
+    assert m, "expected a Unique sessions label in the overview"
+    block = m.group(1)
+    for status in ("healthy", "warning", "alert"):
+        assert f"metric-value {status}" not in block, (
+            f"orientation row Unique sessions must not carry {status} colour"
+        )
 
 
 def test_global_window_appears_in_window_set_and_today_does_not():

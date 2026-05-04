@@ -1,14 +1,23 @@
 """Local Gradio dashboard over the canonical interaction log (Phase 4).
 
-Three-tab layout (broad → specific): Metrics → Trends → Failures. The Metrics
-tab carries the Flags panel + a 3-windowed box-in-box overview (7d / 30d /
-Global, leftmost = most recent). The Trends tab carries the Trend Explorer
-(scan + investigate). The Failures tab carries the Failure Feed plus the cached
-Gap Clusters and Deflection Summary panels.
+Three-tab layout (broad → specific): Metrics → Trends → Failures.
 
-On launch the cluster + summary batches are auto-refreshed when their cached
-file is missing or older than ``DEFAULT_FRESHNESS_DAYS``; failures surface as a
+The Metrics tab opens with a status banner (`SENTINEL · N alerts · N
+warnings · N healthy`) followed by Flags and a single-header Health Overview
+where each metric row shows three windowed values inline (7d / 30d / Global)
+with divergence highlighting when the windows disagree.
+
+The Trends tab carries the Trend Explorer (scan + investigate). The Failures
+tab carries the Failure Feed (one collapsible accordion per row, expanding
+in place) plus the cached Gap Clusters and Deflection Summary panels.
+
+On launch the cluster + summary batches auto-refresh when their cached file
+is missing or older than ``DEFAULT_FRESHNESS_DAYS``; failures surface as a
 visible warning banner rather than crashing the app.
+
+Visual language is *Midnight Mono*: near-black background, monospace for
+data, sans-serif for prose, restrained accent colours, no gradients or
+shadows.
 
 Run locally with ``uv run python src/sentinel.py``.
 """
@@ -56,18 +65,17 @@ from metric_status import THRESHOLDS, WoWDelta, metric_status, wow_delta
 # Leftmost column = most recent. Operator opens Sentinel to check "what happened
 # this week" first; broad context (Global) sits to the right as reference.
 WINDOWS = [("7d", 7), ("30d", 30), ("Global", None)]
+HEADLINE_WINDOW_DAYS = 7  # Drives the status-banner counters
 
-# Branch dropdown choices in Failure Feed; "All" prefixes the canonical branch list.
+# Branch dropdown choices in Failure Feed.
 BRANCH_CHOICES = ["All", *BRANCH_REGISTRY.keys()]
 FAILURE_MODE_CHOICES = ["All", *FAILURE_MODES]
-FEED_TABLE_HEADERS = ["date", "branch", "failure mode", "question", "attempts", "confidence"]
 
 # Auto-refresh cadence — matches the documented weekly batch cadence so any
 # launch sees data at most one cadence stale.
 DEFAULT_FRESHNESS_DAYS = 7
 
-# Smoothing window for the trend chart's rolling-average line. Chosen to keep
-# day-to-day noise readable without over-smoothing weekly seasonality.
+# Smoothing window for the trend chart's rolling-average line.
 ROLLING_AVG_DAYS = 3
 
 # Tab identifiers so flag-click handlers can switch tabs by ID.
@@ -75,87 +83,203 @@ TAB_METRICS = "tab-metrics"
 TAB_TRENDS = "tab-trends"
 TAB_FAILURES = "tab-failures"
 
-# FlagDetector targets → Sentinel tab IDs. Clicking a flag's Investigate button
-# selects the matching tab on the gr.Tabs component.
 FLAG_TARGET_TAB: dict[str, str] = {
     "failure_feed": TAB_FAILURES,
     "gap_clusters": TAB_FAILURES,
     "trend": TAB_TRENDS,
 }
 
+# Failure-feed expansion cap — number of pre-allocated gr.Accordion slots.
+# 30 covers the realistic upper bound (~17 failures in the live log today).
+MAX_FEED_ROWS = 30
+
+# Flag-button slot cap. Three detector kinds; up to 6 covers repeat_failure
+# firing on multiple distinct questions.
+MAX_FLAGS_RENDERED = 6
+
+
+# ---- Midnight Mono CSS ------------------------------------------------------
+
 
 SENTINEL_CSS = """
-.status-pill {
-    display: inline-block;
-    font-size: 0.72em; font-weight: 700; letter-spacing: 0.05em;
-    padding: 2px 7px; border-radius: 4px;
-    margin: 0 4px;
-    text-transform: uppercase;
+:root {
+    --bg-base:       #0a0a0a;
+    --bg-surface:    #171717;
+    --text-primary:  #fafafa;
+    --text-secondary:#a3a3a3;
+    --text-muted:    #525252;
+    --border:        #262626;
+    --healthy:       #4ade80;
+    --warning:       #fbbf24;
+    --alert:         #f87171;
+    --divergence:    #818cf8;
 }
-.status-pill.healthy { background: rgba(34, 197, 94, 0.18); color: #22c55e; }
-.status-pill.warning { background: rgba(251, 146, 60, 0.16); color: #fb923c; }
-.status-pill.alert   { background: rgba(248, 113, 113, 0.18); color: #f87171; }
 
-.metric-value.healthy { color: #22c55e; font-weight: 600; }
-.metric-value.warning { color: #fb923c; font-weight: 600; }
-.metric-value.alert   { color: #f87171; font-weight: 600; }
+body, .gradio-container {
+    background: var(--bg-base) !important;
+    color: var(--text-primary);
+    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    font-weight: 400;
+}
 
-.wow-delta {
-    display: inline-block;
+/* Monospace for data */
+.mono, code, .metric-value, .status-counts, .feed-meta, .threshold-caption {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-feature-settings: "tnum" on, "lnum" on;
+}
+
+/* ---- Status banner ---- */
+.status-banner {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px 16px;
+    margin: 6px 0 14px;
+}
+.status-banner .status-title {
+    font-weight: 500;
+    letter-spacing: 0.06em;
     font-size: 0.78em;
-    margin-left: 4px;
-    color: #94a3b8;
-}
-.wow-delta.improving { color: #22c55e; }
-.wow-delta.degrading { color: #f87171; }
-.wow-delta.stable    { color: #94a3b8; }
-
-.window-card {
-    border: 1px solid #334155;
-    border-radius: 8px;
-    padding: 14px 16px;
-    background: rgba(30, 41, 59, 0.35);
-}
-.window-card .window-card-title {
-    font-size: 1.05em; font-weight: 700;
-    margin-bottom: 10px;
-    border-bottom: 1px solid #334155; padding-bottom: 6px;
-}
-.metric-card {
-    border: 1px solid #1f2937;
-    border-radius: 6px;
-    padding: 8px 10px;
-    margin: 8px 0;
-    background: rgba(15, 23, 42, 0.45);
-}
-.metric-card .metric-card-title {
-    font-size: 0.78em; font-weight: 700; letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: #94a3b8;
-    margin-bottom: 4px;
+    color: var(--text-secondary);
+    margin-right: 12px;
 }
-.metric-card ul { margin: 0; padding-left: 1.1em; }
-.metric-card li { margin: 2px 0; }
+.status-banner .status-counts span {
+    margin-right: 14px;
+    font-weight: 500;
+}
+.status-counts .count-alert    { color: var(--alert); }
+.status-counts .count-warning  { color: var(--warning); }
+.status-counts .count-healthy  { color: var(--healthy); }
+.status-banner .status-list {
+    margin-top: 6px;
+    font-size: 0.92em;
+    color: var(--text-secondary);
+}
+.status-banner .status-list .label {
+    color: var(--text-muted);
+    margin-right: 6px;
+}
+.status-banner details { margin-top: 4px; }
+.status-banner details summary {
+    color: var(--text-muted); cursor: pointer; font-size: 0.85em;
+    list-style: none;
+}
+.status-banner details summary::-webkit-details-marker { display: none; }
 
+/* ---- Section block (Metrics) ---- */
+.section-block {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-surface);
+    padding: 10px 14px;
+    margin: 8px 0;
+}
+.section-title {
+    font-size: 0.78em; font-weight: 500;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 4px; margin-bottom: 8px;
+}
+.metric-grid {
+    display: grid;
+    grid-template-columns: 1.6fr repeat(3, 1fr) 1fr;
+    column-gap: 14px; row-gap: 4px;
+    align-items: baseline;
+}
+.metric-grid .col-header {
+    font-size: 0.72em; font-weight: 500;
+    color: var(--text-muted);
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding-bottom: 2px;
+    border-bottom: 1px solid var(--border);
+}
+.metric-grid .col-header.numeric { text-align: right; }
+.metric-grid .metric-label { color: var(--text-primary); }
+.metric-grid .metric-value {
+    text-align: right;
+    color: var(--text-primary);
+    padding: 1px 6px;
+    border-radius: 2px;
+}
+.metric-grid .metric-value.healthy { color: var(--healthy); }
+.metric-grid .metric-value.warning { color: var(--warning); }
+.metric-grid .metric-value.alert   { color: var(--alert); }
+.metric-grid .metric-value.divergent {
+    border: 1px solid var(--divergence);
+}
+.metric-grid .metric-suffix {
+    color: var(--text-muted);
+    font-size: 0.85em;
+}
+
+/* ---- Flags ---- */
 .flag-card {
-    border-left: 3px solid #f87171;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--alert);
+    border-radius: 3px;
+    background: var(--bg-surface);
     padding: 8px 12px;
-    margin: 6px 0;
-    background: rgba(248, 113, 113, 0.06);
-    border-radius: 3px;
+    margin: 4px 0;
 }
-.flag-card .flag-headline { font-weight: 600; color: #f87171; }
-.flag-card .flag-detail   { font-size: 0.88em; color: #cbd5e1; margin-top: 2px; }
+.flag-card .flag-headline { font-weight: 500; color: var(--alert); }
+.flag-card .flag-detail   { font-size: 0.88em; color: var(--text-secondary); margin-top: 2px; }
 
+/* ---- Refresh banner (LLM batch failure) ---- */
 .refresh-banner {
-    border-left: 3px solid #fb923c;
-    padding: 6px 10px;
-    margin: 6px 0;
-    background: rgba(251, 146, 60, 0.08);
-    color: #fb923c;
+    border: 1px solid var(--warning);
+    border-left: 3px solid var(--warning);
+    background: var(--bg-surface);
+    color: var(--warning);
     border-radius: 3px;
+    padding: 6px 10px; margin: 6px 0;
     font-size: 0.88em;
 }
+
+/* ---- Failure feed ---- */
+.feed-row {
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--bg-surface);
+    margin: 4px 0;
+}
+.feed-row summary {
+    list-style: none; cursor: pointer;
+    padding: 8px 12px;
+    display: grid;
+    grid-template-columns: 100px 110px 150px 1fr 60px 60px;
+    column-gap: 14px; align-items: baseline;
+}
+.feed-row summary::-webkit-details-marker { display: none; }
+.feed-row .feed-meta { color: var(--text-secondary); }
+.feed-row .feed-mode {
+    text-transform: uppercase; font-size: 0.8em;
+    letter-spacing: 0.04em;
+}
+.feed-row .feed-mode.refused             { color: var(--alert); }
+.feed-row .feed-mode.gap                 { color: var(--warning); }
+.feed-row .feed-mode.retry-exhausted     { color: var(--warning); }
+.feed-row .feed-mode.rejected-then-recovered { color: var(--text-secondary); }
+.feed-row .feed-q { color: var(--text-primary); }
+.feed-row .feed-num { color: var(--text-secondary); text-align: right; }
+.feed-row[open] summary { border-bottom: 1px solid var(--border); }
+.feed-row .feed-body { padding: 10px 14px; color: var(--text-primary); }
+
+.feed-empty {
+    padding: 18px; text-align: center;
+    color: var(--text-muted); font-style: italic;
+}
+
+/* ---- Charts: caption styling ---- */
+.threshold-caption {
+    color: var(--text-muted);
+    font-size: 0.82em;
+    margin-top: 2px;
+}
+
+/* Restraint: no shadows, no gradients, small radii everywhere */
+button { border-radius: 6px !important; }
 """
 
 
@@ -179,19 +303,13 @@ EM_DASH = "—"
 
 
 def _fmt_date(value) -> str:
-    """Date-only render (``YYYY-MM-DD``) for any ISO timestamp / datetime / date.
-
-    Sentinel deliberately drops time-of-day everywhere — the dashboard is a
-    daily-cadence operator surface, not a live trace. Time-of-day adds noise
-    and visual clutter without informing decisions made at this granularity.
-    """
+    """Date-only render (``YYYY-MM-DD``) for any ISO timestamp / datetime / date."""
     if value is None:
         return EM_DASH
     if isinstance(value, date) and not isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, datetime):
         return value.astimezone(timezone.utc).date().isoformat()
-    # ISO-8601 string (`2026-05-04T12:34:56+00:00`) — split off the date prefix.
     return str(value)[:10]
 
 
@@ -229,42 +347,23 @@ def _fmt_latency_row(p: dict[int, float | None]) -> str:
     return f"p50 {_fmt_ms(p.get(50))} / p95 {_fmt_ms(p.get(95))}"
 
 
-# ---- Threshold-aware value rendering ---------------------------------------
+# ---- Threshold-aware rendering helpers --------------------------------------
 
 
-def _badge(metric_name: str | None, value: float | None) -> str:
-    """Inline status pill HTML, or empty string when no threshold applies."""
+def _status_class(metric_name: str | None, value: float | None) -> str:
+    """CSS class for the metric value cell — drives the colour treatment."""
     if metric_name is None:
         return ""
-    status = metric_status(metric_name, value)
-    if status is None:
-        return ""
-    return f'<span class="status-pill {status}">{status}</span>'
+    return metric_status(metric_name, value) or ""
 
 
-def _value_span(metric_name: str | None, value: float | None, value_str: str) -> str:
-    """Wrap the value in a CSS-classed span so healthy values render green,
-    warning orange, alert red — matches the badge colour for at-a-glance
-    readability."""
-    if metric_name is None:
-        return value_str
-    status = metric_status(metric_name, value)
-    if status is None:
-        return value_str
-    return f'<span class="metric-value {status}">{value_str}</span>'
-
-
-def _delta(metric_name: str | None, current: float | None, prior: float | None) -> str:
-    """Inline WoW arrow + delta HTML, or empty string when no prior or no threshold."""
+def _delta_inline(metric_name: str | None, current, prior) -> str:
+    """Compact inline delta arrow (post-value), or empty string when no delta applies."""
     if metric_name is None or prior is None:
         return ""
     delta = wow_delta(metric_name, current, prior)
     if delta is None:
         return ""
-    return _format_delta_span(delta)
-
-
-def _format_delta_span(delta: WoWDelta) -> str:
     if delta.unit == "pp":
         magnitude = f"{abs(delta.delta) * 100:.1f}pp"
     elif delta.unit == "ms":
@@ -272,168 +371,238 @@ def _format_delta_span(delta: WoWDelta) -> str:
     else:
         magnitude = f"{abs(delta.delta):.1f}"
     if delta.direction == "stable":
-        body = f"{delta.arrow} 0{delta.unit if delta.unit else ''}"
+        body = f"{delta.arrow}"
     else:
-        body = f"{delta.arrow} {magnitude}"
-    return f'<span class="wow-delta {delta.direction}">{body}</span>'
+        body = f"{delta.arrow}{magnitude}"
+    return f"<span class='metric-suffix'> {body}</span>"
 
 
-def _row(
-    label: str,
-    value_str: str,
-    metric_name: str | None = None,
-    raw_value: float | None = None,
-    prior_value: float | None = None,
+# ---- Status banner (top of every tab) --------------------------------------
+
+
+def _status_summary(model: DashboardModel) -> dict[str, list[str]]:
+    """Aggregate the headline window's metric statuses into 3 buckets.
+
+    Returns ``{"alert": [...], "warning": [...], "healthy": [...]}`` of
+    metric labels, one per thresholded metric in ``METRIC_GETTERS``."""
+    buckets: dict[str, list[str]] = {"alert": [], "warning": [], "healthy": []}
+    for metric, getter in METRIC_GETTERS.items():
+        if metric not in THRESHOLDS:
+            continue
+        value = getter(model)
+        status = metric_status(metric, value)
+        if status is None:
+            continue
+        buckets[status].append(METRIC_LABELS.get(metric, metric))
+    return buckets
+
+
+def format_status_banner(summary: dict[str, list[str]]) -> str:
+    """Render the SENTINEL · N alerts · N warnings · N healthy banner.
+
+    Alert names are listed beneath; warnings collapse by default; healthy is
+    hidden behind a toggle. Hierarchy by severity per the design spec."""
+    alerts = summary.get("alert", [])
+    warnings = summary.get("warning", [])
+    healthy = summary.get("healthy", [])
+
+    counts = (
+        f"<span class='count-alert'>{len(alerts)} alerts</span>"
+        f"<span class='count-warning'>{len(warnings)} warnings</span>"
+        f"<span class='count-healthy'>{len(healthy)} healthy</span>"
+    )
+
+    parts = [
+        "<div class='status-banner'>",
+        "<span class='status-title'>SENTINEL</span>",
+        f"<span class='status-counts'>{counts}</span>",
+    ]
+    if alerts:
+        parts.append(
+            "<div class='status-list'>"
+            "<span class='label'>Alerts:</span>"
+            f"{', '.join(html.escape(name) for name in alerts)}"
+            "</div>"
+        )
+    if warnings:
+        parts.append(
+            "<details>"
+            f"<summary>{len(warnings)} warnings (expand)</summary>"
+            f"<div class='status-list'>{', '.join(html.escape(n) for n in warnings)}</div>"
+            "</details>"
+        )
+    if healthy:
+        parts.append(
+            "<details>"
+            f"<summary>{len(healthy)} healthy (show)</summary>"
+            f"<div class='status-list'>{', '.join(html.escape(n) for n in healthy)}</div>"
+            "</details>"
+        )
+    parts.append("</div>")
+    return "".join(parts)
+
+
+# ---- Per-section / per-metric rendering (single header, 3 inline values) ---
+
+
+# Each metric spec: (display_label, metric_name_or_None, getter, formatter)
+# When metric_name is None the row is orientation only — no badge, no
+# divergence highlight, no per-value colour.
+def _all_attempts_rejected(record_attempts) -> bool:
+    return any(not a.get("is_acceptable", True) for a in record_attempts)
+
+
+METRIC_SPECS: list[tuple[str, list[tuple]]] = [
+    ("Outcome", [
+        ("Total interactions",         None,                          lambda m: m.total_interactions, str),
+        ("Gap rate",                   "gap_rate",                    lambda m: m.gap_rate, _fmt_pct),
+        ("Deflection rate",            "deflection_rate",             lambda m: m.deflection_rate, _fmt_pct),
+        ("Refusal rate",               "refusal_rate",                lambda m: m.refusal_rate, _fmt_pct),
+        ("Guardrail rejection rate",   "guardrail_rejection_rate",    lambda m: m.guardrail_rejection_rate, _fmt_pct),
+        ("Retry-exhaustion rate",      "retry_exhausted_rate",        lambda m: m.retry_exhausted_rate, _fmt_pct),
+    ]),
+    ("Routing", [
+        ("Branch distribution",        None,                          lambda m: m.branch_distribution, _fmt_branches),
+        ("Low-confidence rate (<0.7)", "low_confidence_rate",         lambda m: m.low_confidence_rate(), _fmt_pct),
+        ("Confident-failure rate (≥0.8 & failed)", "confident_failure_rate", lambda m: m.confident_failure_rate(), _fmt_pct),
+        ("Multi-label rate",           None,                          lambda m: m.multi_label_rate, _fmt_pct),
+    ]),
+    ("Engagement", [
+        ("Unique sessions",            None,                          lambda m: m.unique_sessions, str),
+        ("Turns/session (median)",     "turns_per_session_median",    lambda m: m.turns_per_session_median, _fmt_num),
+        ("Drop-off by turn",           None,                          lambda m: m.dropoff_by_turn, _fmt_dropoff),
+        ("Contact-offer rate",         None,                          lambda m: m.contact_offer_rate, _fmt_pct),
+        ("Contact-conversion rate",    "contact_conversion_rate",     lambda m: m.contact_conversion_rate, _fmt_pct),
+    ]),
+    ("Tool use", [
+        ("Tool uptake (TECHNICAL)",    "technical_tool_uptake_rate",  lambda m: m.technical_tool_uptake_rate, _fmt_pct),
+        ("Tool-call success rate",     None,                          lambda m: m.tool_call_success_rate, _fmt_pct),
+    ]),
+    ("Latency", [
+        ("classifier",                 None,                          lambda m: m.latency_percentiles("classifier"), _fmt_latency_row),
+        ("retrieval",                  None,                          lambda m: m.latency_percentiles("retrieval"), _fmt_latency_row),
+        ("generation",                 None,                          lambda m: m.latency_percentiles("generation"), _fmt_latency_row),
+        ("guardrail",                  None,                          lambda m: m.latency_percentiles("guardrail"), _fmt_latency_row),
+        ("total (p95)",                "latency_p95_total",           lambda m: m.latency_percentiles("total").get(95), _fmt_ms),
+    ]),
+]
+
+
+def _value_cell(
+    metric_name: str | None,
+    raw_value,
+    formatted: str,
+    *,
+    divergent: bool,
+    delta_html: str = "",
 ) -> str:
-    """Render one metric row: ``- **label:** <coloured-value> badge delta``."""
-    coloured = _value_span(metric_name, raw_value, value_str)
-    badge = _badge(metric_name, raw_value)
-    delta = _delta(metric_name, raw_value, prior_value)
-    return f"<li><b>{label}:</b> {coloured}{badge}{delta}</li>"
-
-
-# ---- Per-window panel (box-in-box) ------------------------------------------
-
-
-def _block_card(title: str, rows: list[str]) -> str:
-    inner = "".join(rows)
+    classes = ["metric-value"]
+    status = _status_class(metric_name, raw_value) if metric_name else ""
+    if status:
+        classes.append(status)
+    if divergent:
+        classes.append("divergent")
     return (
-        f"<div class='metric-card'>"
-        f"<div class='metric-card-title'>{title}</div>"
-        f"<ul>{inner}</ul>"
+        f"<div class='{' '.join(classes)}'>"
+        f"{html.escape(formatted)}{delta_html}"
         f"</div>"
     )
 
 
-def format_panel(
+def _is_divergent(values: list[str]) -> bool:
+    """A row diverges when its three formatted strings aren't all the same."""
+    return len(set(values)) > 1
+
+
+def _render_metric_row(
     label: str,
-    model: DashboardModel,
-    prior_model: DashboardModel | None = None,
+    metric_name: str | None,
+    getter,
+    formatter,
+    models: list[DashboardModel],
+    priors: list[DashboardModel | None],
 ) -> str:
-    """Render one window's full health panel as a bordered card containing five
-    inner cards (Outcome / Routing / Engagement / Tool use / Latency)."""
+    """One row in the metric grid: label + three windowed value cells + suffix."""
+    raws = [getter(m) for m in models]
+    formatted = [formatter(v) if formatter is not str else str(v) for v in raws]
+    prior_raws = [getter(p) if p is not None else None for p in priors]
+    divergent = _is_divergent(formatted)
 
-    def _prior(getter):
-        return getter(prior_model) if prior_model is not None else None
-
-    outcome = [
-        _row("Total interactions", str(model.total_interactions)),
-        _row(
-            "Gap rate", _fmt_pct(model.gap_rate),
-            metric_name="gap_rate", raw_value=model.gap_rate,
-            prior_value=_prior(lambda m: m.gap_rate),
-        ),
-        _row(
-            "Deflection rate", _fmt_pct(model.deflection_rate),
-            metric_name="deflection_rate", raw_value=model.deflection_rate,
-            prior_value=_prior(lambda m: m.deflection_rate),
-        ),
-        _row(
-            "Refusal rate", _fmt_pct(model.refusal_rate),
-            metric_name="refusal_rate", raw_value=model.refusal_rate,
-            prior_value=_prior(lambda m: m.refusal_rate),
-        ),
-        _row(
-            "Guardrail rejection rate", _fmt_pct(model.guardrail_rejection_rate),
-            metric_name="guardrail_rejection_rate", raw_value=model.guardrail_rejection_rate,
-            prior_value=_prior(lambda m: m.guardrail_rejection_rate),
-        ),
-        _row(
-            "Retry-exhaustion rate", _fmt_pct(model.retry_exhausted_rate),
-            metric_name="retry_exhausted_rate", raw_value=model.retry_exhausted_rate,
-            prior_value=_prior(lambda m: m.retry_exhausted_rate),
-        ),
-    ]
-
-    routing = [
-        _row("Branch distribution", _fmt_branches(model.branch_distribution)),
-        _row(
-            "Low-confidence rate (<0.7)", _fmt_pct(model.low_confidence_rate()),
-            metric_name="low_confidence_rate", raw_value=model.low_confidence_rate(),
-            prior_value=_prior(lambda m: m.low_confidence_rate()),
-        ),
-        _row(
-            "Confident-failure rate (≥0.8 & failed)", _fmt_pct(model.confident_failure_rate()),
-            metric_name="confident_failure_rate", raw_value=model.confident_failure_rate(),
-            prior_value=_prior(lambda m: m.confident_failure_rate()),
-        ),
-        _row("Multi-label rate", _fmt_pct(model.multi_label_rate)),
-    ]
-
-    engagement = [
-        _row("Unique sessions", str(model.unique_sessions)),
-        _row(
-            "Turns/session (median)", _fmt_num(model.turns_per_session_median),
-            metric_name="turns_per_session_median", raw_value=model.turns_per_session_median,
-            prior_value=_prior(lambda m: m.turns_per_session_median),
-        ),
-        _row("Drop-off by turn", _fmt_dropoff(model.dropoff_by_turn)),
-        _row("Contact-offer rate", _fmt_pct(model.contact_offer_rate)),
-        _row(
-            "Contact-conversion rate", _fmt_pct(model.contact_conversion_rate),
-            metric_name="contact_conversion_rate", raw_value=model.contact_conversion_rate,
-            prior_value=_prior(lambda m: m.contact_conversion_rate),
-        ),
-    ]
-
-    tool = [
-        _row(
-            "Tool uptake (TECHNICAL)", _fmt_pct(model.technical_tool_uptake_rate),
-            metric_name="technical_tool_uptake_rate", raw_value=model.technical_tool_uptake_rate,
-            prior_value=_prior(lambda m: m.technical_tool_uptake_rate),
-        ),
-        _row("Tool-call success rate", _fmt_pct(model.tool_call_success_rate)),
-    ]
-
-    total_p95 = model.latency_percentiles("total").get(95)
-    total_p95_prior = _prior(lambda m: m.latency_percentiles("total").get(95))
-    latency = [
-        _row("classifier", _fmt_latency_row(model.latency_percentiles("classifier"))),
-        _row("retrieval", _fmt_latency_row(model.latency_percentiles("retrieval"))),
-        _row("generation", _fmt_latency_row(model.latency_percentiles("generation"))),
-        _row("guardrail", _fmt_latency_row(model.latency_percentiles("guardrail"))),
-        _row(
-            "total", _fmt_latency_row(model.latency_percentiles("total")),
-            metric_name="latency_p95_total", raw_value=total_p95, prior_value=total_p95_prior,
-        ),
-    ]
-
-    blocks = (
-        _block_card("Outcome", outcome)
-        + _block_card("Routing", routing)
-        + _block_card("Engagement", engagement)
-        + _block_card("Tool use", tool)
-        + _block_card("Latency (per stage)", latency)
-    )
-    return (
-        f"<div class='window-card'>"
-        f"<div class='window-card-title'>{label}</div>"
-        f"{blocks}"
-        f"</div>"
-    )
-
-
-# ---- Failure Feed -----------------------------------------------------------
-
-
-def _failure_table_rows(rows: list[FailureRow]) -> list[list]:
-    """Convert FailureRow list to gr.Dataframe-friendly 2D list (one row per failure)."""
-    return [
-        [
-            _fmt_date(row.timestamp),
-            row.branch,
-            row.failure_mode,
-            row.question,
-            row.attempt_count,
-            f"{row.classification_confidence:.2f}",
+    # When all three windows agree, render one value + "· same across windows"
+    # in the suffix column; the other two value cells render empty so the grid
+    # alignment stays.
+    if not divergent:
+        delta = _delta_inline(metric_name, raws[0], prior_raws[0])
+        suffix = "<div class='metric-suffix'>· same across windows</div>"
+        cells = [
+            _value_cell(metric_name, raws[0], formatted[0], divergent=False, delta_html=delta),
+            "<div></div>",
+            "<div></div>",
+            suffix,
         ]
-        for row in rows
-    ]
+    else:
+        cells = []
+        for i, (raw, fmt) in enumerate(zip(raws, formatted)):
+            delta = _delta_inline(metric_name, raw, prior_raws[i])
+            cells.append(_value_cell(
+                metric_name, raw, fmt, divergent=True, delta_html=delta,
+            ))
+        cells.append("<div></div>")  # empty suffix when divergent
+    return (
+        f"<div class='metric-label'>{html.escape(label)}</div>"
+        + "".join(cells)
+    )
+
+
+def format_metrics_overview(
+    models: list[DashboardModel],
+    priors: list[DashboardModel | None],
+) -> str:
+    """Full metrics overview: one section block per thematic group, each with
+    a header row (window labels) + one metric row per spec."""
+    blocks: list[str] = []
+    for section_name, specs in METRIC_SPECS:
+        rows: list[str] = []
+        # Header row: first cell = section title placeholder; then 7d / 30d / Global.
+        rows.append(
+            "<div class='col-header'></div>"
+            "<div class='col-header numeric'>7d</div>"
+            "<div class='col-header numeric'>30d</div>"
+            "<div class='col-header numeric'>Global</div>"
+            "<div class='col-header'></div>"
+        )
+        for label, metric_name, getter, formatter in specs:
+            rows.append(_render_metric_row(label, metric_name, getter, formatter, models, priors))
+        blocks.append(
+            f"<div class='section-block'>"
+            f"<div class='section-title'>{section_name}</div>"
+            f"<div class='metric-grid'>{''.join(rows)}</div>"
+            f"</div>"
+        )
+    return "".join(blocks)
+
+
+# ---- Failure Feed (inline expansion via accordions) ------------------------
+
+
+def _truncate(s: str, n: int = 90) -> str:
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
+
+
+def _failure_summary_html(row: FailureRow) -> str:
+    """Render the accordion summary line — date / branch / mode / question / counts."""
+    return (
+        f"<div class='feed-meta mono'>{_fmt_date(row.timestamp)}</div>"
+        f"<div class='feed-meta mono'>{html.escape(row.branch)}</div>"
+        f"<div class='feed-mode {row.failure_mode}'>{row.failure_mode}</div>"
+        f"<div class='feed-q'>{html.escape(_truncate(row.question))}</div>"
+        f"<div class='feed-num mono'>{row.attempt_count}×</div>"
+        f"<div class='feed-num mono'>{row.classification_confidence:.2f}</div>"
+    )
 
 
 def format_failure_drilldown(record: InteractionRecord) -> str:
-    """Markdown rendering of every per-attempt + per-chunk + tool-call + latency field
-    needed to debug 'what failed and why' for a single turn."""
+    """Markdown drilldown for one failure — every per-attempt + chunk + tool-call field."""
     labels = ", ".join(record.classifier_labels) if record.classifier_labels else EM_DASH
     parts: list[str] = [
         "**Question:** " + record.question,
@@ -479,7 +648,6 @@ def format_failure_drilldown(record: InteractionRecord) -> str:
 
 
 def _turn_summary(record: InteractionRecord) -> str:
-    """One-line summary line for the per-turn `<details><summary>` row in the session view."""
     mode = classify_failure(record)
     badge = "PASS" if mode is None else f"FAIL · {mode}"
     truncated = record.question[:80] + ("…" if len(record.question) > 80 else "")
@@ -490,7 +658,6 @@ def _turn_summary(record: InteractionRecord) -> str:
 
 
 def format_session_view(session: Session) -> str:
-    """Per-session view: header + one ``<details>`` per turn whose body is the drilldown."""
     contact_bits = []
     if session.contact_offered:
         contact_bits.append("offered")
@@ -525,7 +692,6 @@ DEFLECTION_EMPTY_PLACEHOLDER = (
 
 
 def format_cluster_panel(data: dict | None) -> str:
-    """Render the Cluster panel from a `gap_clusters.json` dict."""
     if data is None:
         return CLUSTER_EMPTY_PLACEHOLDER
     clusters = data.get("clusters", [])
@@ -547,7 +713,6 @@ def format_cluster_panel(data: dict | None) -> str:
 
 
 def format_deflection_panel(text: str | None) -> str:
-    """Render the latest deflection summary; placeholder when absent."""
     if text is None:
         return DEFLECTION_EMPTY_PLACEHOLDER
     return text
@@ -563,9 +728,9 @@ FLAGS_EMPTY_PLACEHOLDER = (
 
 
 def format_flags_summary(flags: list[Flag]) -> str:
-    """Markdown render of every flag's headline + detail (no per-flag click handlers
-    here; the Investigate buttons are separate gr.Button instances built in
-    `_render_flags`)."""
+    """HTML cards for each flag's headline + detail. The Investigate buttons
+    are separate gr.Button instances built in build_app — this string is
+    pure prose, no anchor links."""
     if not flags:
         return FLAGS_EMPTY_PLACEHOLDER
     cards: list[str] = []
@@ -582,7 +747,6 @@ def format_flags_summary(flags: list[Flag]) -> str:
 
 
 def _build_flags(model: DashboardModel) -> list[Flag]:
-    """Run all three detectors against the live data + cached cluster files."""
     return [
         *detect_gap_rate_jump(model.records),
         *detect_new_cluster(
@@ -625,22 +789,18 @@ TREND_WINDOWS: list[tuple[str, int | None]] = [
     ("7d", 7), ("30d", 30), ("90d", 90), ("All-time", None),
 ]
 
-# Explicit colour mapping so threshold lines are readable + match the rest of
-# the dashboard. Healthy = green (per operator directive); warning = amber.
+# Healthy threshold stays GREEN (operator directive overrides the
+# "muted gray for thresholds" recommendation from the design spec).
 CHART_COLOR_MAP = {
-    "actual":     "#94a3b8",  # slate-400 — low-saturation raw daily values
-    "3-day avg":  "#3b82f6",  # blue-500  — primary smoothed trend
-    "healthy":    "#22c55e",  # green-500 — healthy threshold reference line
-    "warning":    "#f59e0b",  # amber-500 — warning threshold reference line
-    "prior":      "#a855f7",  # purple-500 — prior-period overlay (investigate)
+    "actual":     "#a3a3a3",  # text-secondary — raw daily values, low saturation
+    "3-day avg":  "#fafafa",  # text-primary — primary smoothed trend
+    "healthy":    "#4ade80",  # healthy threshold reference
+    "warning":    "#fbbf24",  # warning threshold reference
+    "prior":      "#818cf8",  # divergence — prior-period overlay
 }
 
 
 def _y_axis_title(metric: str) -> str:
-    """Per-metric Y-axis title — the user-readable unit, not the column name.
-
-    Replaces the previous (misleading) ``"value"`` axis label that didn't tell
-    the operator what they were reading."""
     label = METRIC_LABELS.get(metric, metric)
     threshold = THRESHOLDS.get(metric)
     if threshold is None:
@@ -653,8 +813,6 @@ def _y_axis_title(metric: str) -> str:
 
 
 def _scale_value(metric: str, value: float | None) -> float | None:
-    """Convert raw fractions to percentages for plotting (so the Y-axis can
-    render '9.4%' instead of '0.094'). Latency and counts pass through."""
     if value is None:
         return None
     threshold = THRESHOLDS.get(metric)
@@ -664,7 +822,6 @@ def _scale_value(metric: str, value: float | None) -> float | None:
 
 
 def _fmt_metric_value(metric: str, value: float | None) -> str:
-    """Header value formatter (un-scaled — these go into markdown headers, not charts)."""
     threshold = THRESHOLDS.get(metric)
     if threshold is None:
         return _fmt_num(value)
@@ -682,22 +839,7 @@ def chart_dataframe(
     *,
     prior_model: DashboardModel | None = None,
 ) -> pd.DataFrame:
-    """Long-format DataFrame for ``gr.LinePlot``.
-
-    Columns: ``date`` (datetime), ``value`` (float), ``series`` (str).
-
-    Series:
-    - ``"actual"`` — raw daily values, low-saturation reference.
-    - ``"3-day avg"`` — centered rolling average, primary trend line.
-    - ``"healthy"`` / ``"warning"`` — horizontal threshold reference lines.
-    - ``"prior"`` (when ``prior_model`` supplied) — prior-period overlay,
-      shifted forward by ``days`` so it overlays the current window.
-
-    All rate values are scaled to percentages (×100) so the Y-axis reads in
-    units the operator expects.
-
-    Empty model → empty DataFrame (chart layer renders nothing).
-    """
+    """Long-format DataFrame for ``gr.LinePlot``: actual + 3-day-avg + thresholds."""
     series = model.time_series_by_day(metric, days=days)
     if not series:
         return pd.DataFrame(columns=["date", "value", "series"])
@@ -743,31 +885,47 @@ def chart_dataframe(
     return pd.DataFrame(rows)
 
 
+def _threshold_caption(metric: str) -> str:
+    """Inline threshold caption text below each chart — replaces the legend."""
+    t = THRESHOLDS.get(metric)
+    if t is None:
+        return ""
+    if t.unit == "pp":
+        h = f"{t.healthy * 100:.1f}%"
+        w = f"{t.warning * 100:.1f}%"
+    elif t.unit == "ms":
+        h = f"{t.healthy:.0f} ms"
+        w = f"{t.warning:.0f} ms"
+    else:
+        h = f"{t.healthy:.1f}"
+        w = f"{t.warning:.1f}"
+    direction = "≥" if t.higher_is_better else "≤"
+    return f"healthy {direction} {h}  ·  warning {direction} {w}"
+
+
 def format_trend_header(
     metric: str,
     model: DashboardModel,
     prior_model: DashboardModel | None = None,
 ) -> str:
-    """Inline markdown header above each mini chart: label · coloured value · badge · WoW arrow."""
     label = METRIC_LABELS.get(metric, metric)
     value = METRIC_GETTERS[metric](model)
     value_str = _fmt_metric_value(metric, value)
-    coloured = _value_span(metric, value, value_str)
-    badge = _badge(metric, value)
+    status = _status_class(metric, value)
+    coloured = (
+        f"<span class='metric-value mono {status}'>{value_str}</span>" if status
+        else f"<span class='mono'>{value_str}</span>"
+    )
     prior_value = METRIC_GETTERS[metric](prior_model) if prior_model is not None else None
-    delta = _delta(metric, value, prior_value)
-    return f"**{label}:** {coloured} {badge}{delta}"
+    delta = _delta_inline(metric, value, prior_value)
+    return f"**{label}:** {coloured}{delta}"
 
 
 # ---- Auto-refresh of cached cluster + summary files -------------------------
 
 
 def is_stale(path: Path, max_age_days: int = DEFAULT_FRESHNESS_DAYS) -> bool:
-    """True when ``path`` is missing or older than ``max_age_days``.
-
-    Used by the auto-refresh helpers to decide whether to invoke the LLM
-    batch. Missing → stale (forces first-run population); old → stale
-    (forces weekly refresh). Anything younger is considered fresh."""
+    """True when ``path`` is missing or older than ``max_age_days``."""
     path = Path(path)
     if not path.exists():
         return True
@@ -776,14 +934,11 @@ def is_stale(path: Path, max_age_days: int = DEFAULT_FRESHNESS_DAYS) -> bool:
 
 
 def _run_with_capture(label: str, fn) -> str | None:
-    """Run ``fn``; return ``None`` on success or a one-line error message on
-    failure. Sentinel surfaces the message in the page banner — silent stale
-    cache is exactly the kind of failure mode Sentinel exists to prevent."""
     try:
         fn()
         return None
     except Exception as exc:
-        return f"⚠ {label} batch failed: {type(exc).__name__}: {exc}"
+        return f"{label} batch failed: {type(exc).__name__}: {exc}"
 
 
 def ensure_fresh_clusters(
@@ -792,7 +947,6 @@ def ensure_fresh_clusters(
     archive_dir: Path | None = CLUSTERS_ARCHIVE_DIR,
     max_age_days: int = DEFAULT_FRESHNESS_DAYS,
 ) -> str | None:
-    """Run ``cluster_gaps.run_batch`` only when the cached file is stale."""
     if not is_stale(out_path, max_age_days):
         return None
     return _run_with_capture(
@@ -811,9 +965,6 @@ def ensure_fresh_summaries(
     out_dir: Path = DEFAULT_SUMMARIES_DIR,
     max_age_days: int = DEFAULT_FRESHNESS_DAYS,
 ) -> str | None:
-    """Run ``summarize_failures.run_batch`` only when the latest deflection
-    summary is stale (deflection is the only group surfaced in Sentinel; the
-    other two groups are written for offline reading)."""
     latest = latest_summary_path("deflection", out_dir)
     if latest is not None and not is_stale(latest, max_age_days):
         return None
@@ -828,8 +979,6 @@ def ensure_fresh_summaries(
 
 
 def _autorefresh_banner(messages: list[str | None]) -> str:
-    """Render any non-None refresh failure as a visible banner; empty when all
-    runs succeeded (or were skipped because the cache was fresh)."""
     real = [m for m in messages if m]
     if not real:
         return ""
@@ -844,11 +993,11 @@ def _load(reader: LogReader) -> tuple[DashboardModel, datetime]:
     return DashboardModel(reader.read()), datetime.now(timezone.utc)
 
 
-def _render_panels(model: DashboardModel) -> list[str]:
-    return [
-        format_panel(label, model.for_window(days=days), prior_model=model.for_prior_window(days=days))
-        for label, days in WINDOWS
-    ]
+def _all_window_models(model: DashboardModel) -> tuple[list[DashboardModel], list[DashboardModel | None]]:
+    """Return ``(models, priors)`` aligned with ``WINDOWS``."""
+    models = [model.for_window(days=days) for _, days in WINDOWS]
+    priors = [model.for_prior_window(days=days) for _, days in WINDOWS]
+    return models, priors
 
 
 def _filter_records(reader: LogReader, window_label: str) -> list[InteractionRecord]:
@@ -863,23 +1012,22 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
     reader = reader or _default_reader()
     source = _source_label(reader)
 
-    # Auto-run the cluster + summary batches when their cached files are
-    # missing or older than DEFAULT_FRESHNESS_DAYS. Failures degrade gracefully
-    # — Sentinel still boots, the panel falls back to whatever cache exists,
-    # and the banner surfaces the failure message.
     refresh_messages: list[str | None] = []
     if autorefresh:
         refresh_messages = [ensure_fresh_clusters(), ensure_fresh_summaries()]
 
     model, loaded_at = _load(reader)
+    models, priors = _all_window_models(model)
+    headline_model = model.for_window(days=HEADLINE_WINDOW_DAYS)
     initial_failures = select_failures(model.records)
 
     with gr.Blocks(title="Digital Twin · Sentinel", css=SENTINEL_CSS) as app:
         with gr.Row():
             gr.Markdown("# Digital Twin · Sentinel")
-            refresh_btn = gr.Button("↻ Refresh", variant="secondary", size="sm", scale=0)
+            refresh_btn = gr.Button("Refresh", variant="secondary", size="sm", scale=0)
         header_md = gr.Markdown(format_header(source, loaded_at))
         banner_md = gr.Markdown(_autorefresh_banner(refresh_messages))
+        status_md = gr.Markdown(format_status_banner(_status_summary(headline_model)))
 
         with gr.Tabs() as tabs:
             # ---- Metrics tab ----------------------------------------------
@@ -887,27 +1035,16 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 gr.Markdown("## Flags")
                 flags_md = gr.Markdown(format_flags_summary(_build_flags(model)))
 
-                # Per-flag Investigate buttons live in their own row below the
-                # summary so each can wire its own tab-switch handler.
-                flag_button_rows: list[gr.Row] = []
-                flag_buttons: list[tuple[gr.Button, str]] = []
-
-                # Build buttons up to a reasonable cap; rebuild on Refresh by
-                # toggling visibility / re-labelling. Three flag types max in
-                # practice — capped at 6 to allow for repeat_failure firing on
-                # multiple distinct questions.
-                MAX_FLAGS_RENDERED = 6
+                # Per-flag Investigate buttons — one row of slot buttons, each
+                # toggled visible/hidden + relabelled when the flag set changes.
+                flag_buttons: list[gr.Button] = []
                 with gr.Row():
                     for _ in range(MAX_FLAGS_RENDERED):
                         btn = gr.Button("", visible=False, size="sm", variant="secondary")
-                        flag_buttons.append((btn, ""))
+                        flag_buttons.append(btn)
 
                 gr.Markdown("## Health overview")
-                with gr.Row():
-                    panel_components: list[gr.Markdown] = []
-                    for panel_md in _render_panels(model):
-                        with gr.Column():
-                            panel_components.append(gr.Markdown(panel_md))
+                metrics_md = gr.Markdown(format_metrics_overview(models, priors))
 
             # ---- Trends tab -----------------------------------------------
             with gr.Tab("Trends", id=TAB_TRENDS):
@@ -923,7 +1060,7 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                         gr.Markdown(f"### {block_name}")
                         with gr.Row():
                             for metric in block_metrics:
-                                with gr.Column(min_width=240):
+                                with gr.Column(min_width=260):
                                     scan_headers[metric] = gr.Markdown(
                                         format_trend_header(metric, model)
                                     )
@@ -933,10 +1070,11 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                                         x_title="Date",
                                         y_title=_y_axis_title(metric),
                                         color_map=CHART_COLOR_MAP,
-                                        height=160, show_label=False,
+                                        height=200, show_label=False,
+                                        caption=_threshold_caption(metric),
                                     )
                                     scan_buttons[metric] = gr.Button(
-                                        f"Investigate {METRIC_LABELS[metric]} ↗",
+                                        f"Investigate {METRIC_LABELS[metric]}",
                                         size="sm", variant="secondary",
                                     )
 
@@ -955,9 +1093,9 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                         x="date", y="value", color="series",
                         x_title="Date", y_title="value",
                         color_map=CHART_COLOR_MAP,
-                        height=460, show_label=False,
+                        height=520, show_label=False,
                     )
-                    back_to_scan_btn = gr.Button("← Back to scan", variant="secondary")
+                    back_to_scan_btn = gr.Button("Back to scan", variant="secondary")
 
             # ---- Failures tab ---------------------------------------------
             with gr.Tab("Failures", id=TAB_FAILURES):
@@ -975,23 +1113,44 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                     )
                     search_in = gr.Textbox(value="", label="Search question", scale=2)
 
-                rows_state = gr.State(initial_failures)
-                selected_session_id = gr.State(None)
+                feed_empty_md = gr.Markdown(
+                    "" if initial_failures
+                    else "<div class='feed-empty'>No failures match the current filters.</div>"
+                )
 
-                with gr.Column(visible=True) as feed_view:
-                    failures_df = gr.Dataframe(
-                        headers=FEED_TABLE_HEADERS,
-                        value=_failure_table_rows(initial_failures),
-                        interactive=False, wrap=True,
-                    )
-                    drilldown_md = gr.Markdown(
-                        "_Select a row above to see the per-turn drilldown._"
-                    )
-                    view_session_btn = gr.Button("View full session", interactive=False)
+                # Pre-allocated accordion slots. Each slot's `label` is set to
+                # the row's summary line; body holds the full drilldown +
+                # View Session button. Slots beyond the row count are hidden.
+                feed_accordions: list[gr.Accordion] = []
+                feed_drilldowns: list[gr.Markdown] = []
+                feed_session_btns: list[gr.Button] = []
+                feed_session_states: list[gr.State] = []
+                for i in range(MAX_FEED_ROWS):
+                    if i < len(initial_failures):
+                        row = initial_failures[i]
+                        label = (
+                            f"{_fmt_date(row.timestamp)} · {row.branch} · "
+                            f"{row.failure_mode} · {_truncate(row.question, 70)}"
+                        )
+                        body_md = format_failure_drilldown(row.record)
+                        sid = row.record.session_id
+                        visible = True
+                    else:
+                        label = ""
+                        body_md = ""
+                        sid = None
+                        visible = False
+                    with gr.Accordion(label=label, open=False, visible=visible) as acc:
+                        feed_drilldowns.append(gr.Markdown(body_md))
+                        feed_session_btns.append(
+                            gr.Button("View full session", size="sm", variant="secondary")
+                        )
+                    feed_accordions.append(acc)
+                    feed_session_states.append(gr.State(sid))
 
                 with gr.Column(visible=False) as session_view:
                     session_md = gr.Markdown("")
-                    back_btn = gr.Button("← Back to feed")
+                    back_btn = gr.Button("Back to feed", variant="secondary")
 
                 gr.Markdown("---\n## Gap Clusters")
                 cluster_md = gr.Markdown(
@@ -1006,39 +1165,54 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
         # ---- Wiring ---------------------------------------------------------
 
         def _flag_button_updates(flags: list[Flag]):
-            """Build button-update tuples for the MAX_FLAGS_RENDERED slot grid."""
             updates = []
             for i in range(MAX_FLAGS_RENDERED):
                 if i < len(flags):
                     f = flags[i]
                     updates.append(gr.update(
                         visible=True,
-                        value=f"Investigate · {f.kind} ↗",
+                        value=f"Investigate · {f.kind}",
                     ))
                 else:
                     updates.append(gr.update(visible=False, value=""))
             return updates
 
-        # Initial flag-button population
         initial_flag_targets: list[str] = [
             FLAG_TARGET_TAB.get(f.target, TAB_METRICS) for f in _build_flags(model)
         ]
-        # Pad with empty string sentinels so each slot has a target lookup.
         initial_flag_targets += [""] * (MAX_FLAGS_RENDERED - len(initial_flag_targets))
         flag_targets_state = gr.State(initial_flag_targets)
+        for i in range(min(len(_build_flags(model)), MAX_FLAGS_RENDERED)):
+            flag_buttons[i].visible = True
+            flag_buttons[i].value = f"Investigate · {_build_flags(model)[i].kind}"
 
-        # Apply visibility for the initial render
-        for i, btn_pair in enumerate(flag_buttons):
-            btn = btn_pair[0]
-            if i < len(initial_flag_targets) and initial_flag_targets[i]:
-                btn.visible = True
-                btn.value = f"Investigate · flag {i + 1} ↗"
+        def _feed_accordion_updates(rows: list[FailureRow]):
+            """Build (accordion-update, drilldown-update, session-state-value) per slot."""
+            acc_updates, body_updates, state_values = [], [], []
+            for i in range(MAX_FEED_ROWS):
+                if i < len(rows):
+                    row = rows[i]
+                    label = (
+                        f"{_fmt_date(row.timestamp)} · {row.branch} · "
+                        f"{row.failure_mode} · {_truncate(row.question, 70)}"
+                    )
+                    acc_updates.append(gr.update(visible=True, label=label, open=False))
+                    body_updates.append(format_failure_drilldown(row.record))
+                    state_values.append(row.record.session_id)
+                else:
+                    acc_updates.append(gr.update(visible=False, label="", open=False))
+                    body_updates.append("")
+                    state_values.append(None)
+            return acc_updates, body_updates, state_values
 
-        # ---- Refresh: reload disk + re-render every panel + auto-refresh batches
+        # Refresh: reload disk + re-render every panel + auto-refresh batches
         def _refresh(branch, mode, window_label, search):
             cluster_msg = ensure_fresh_clusters() if autorefresh else None
             summary_msg = ensure_fresh_summaries() if autorefresh else None
             new_model, new_loaded_at = _load(reader)
+            new_models, new_priors = _all_window_models(new_model)
+            headline = new_model.for_window(days=HEADLINE_WINDOW_DAYS)
+
             records = new_model.for_window(days=dict(WINDOWS).get(window_label)).records
             failure_rows = select_failures(
                 records, branch=branch, failure_mode=mode, question_search=search
@@ -1046,39 +1220,45 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
             flags = _build_flags(new_model)
             flag_targets = [FLAG_TARGET_TAB.get(f.target, TAB_METRICS) for f in flags]
             flag_targets += [""] * (MAX_FLAGS_RENDERED - len(flag_targets))
+            acc_updates, body_updates, state_values = _feed_accordion_updates(failure_rows)
+            empty_html = (
+                "" if failure_rows
+                else "<div class='feed-empty'>No failures match the current filters.</div>"
+            )
             return [
                 format_header(source, new_loaded_at),
                 _autorefresh_banner([cluster_msg, summary_msg]),
+                format_status_banner(_status_summary(headline)),
                 format_flags_summary(flags),
                 *_flag_button_updates(flags),
                 flag_targets,
-                *_render_panels(new_model),
-                _failure_table_rows(failure_rows),
-                failure_rows,
-                "_Select a row above to see the per-turn drilldown._",
-                None,
-                gr.update(interactive=False),
+                format_metrics_overview(new_models, new_priors),
+                empty_html,
+                *acc_updates,
+                *body_updates,
+                *state_values,
                 format_cluster_panel(read_clusters(CLUSTERS_DEFAULT_PATH)),
                 format_deflection_panel(read_summary("deflection", DEFAULT_SUMMARIES_DIR)),
             ]
 
-        flag_button_components = [b for b, _ in flag_buttons]
         refresh_btn.click(
             fn=_refresh,
             inputs=[branch_dd, mode_dd, window_dd, search_in],
             outputs=[
-                header_md, banner_md,
+                header_md, banner_md, status_md,
                 flags_md,
-                *flag_button_components,
+                *flag_buttons,
                 flag_targets_state,
-                *panel_components,
-                failures_df, rows_state, drilldown_md,
-                selected_session_id, view_session_btn,
+                metrics_md,
+                feed_empty_md,
+                *feed_accordions,
+                *feed_drilldowns,
+                *feed_session_states,
                 cluster_md, deflection_md,
             ],
         )
 
-        # ---- Flag-click handlers: switch to the target tab
+        # Flag-click handlers: switch to the target tab
         def _make_flag_click(slot_index: int):
             def _handler(targets):
                 target = targets[slot_index] if slot_index < len(targets) else ""
@@ -1087,83 +1267,83 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 return gr.Tabs(selected=target)
             return _handler
 
-        for i, (btn, _) in enumerate(flag_buttons):
+        for i, btn in enumerate(flag_buttons):
             btn.click(
                 fn=_make_flag_click(i),
                 inputs=[flag_targets_state],
                 outputs=[tabs],
             )
 
-        # ---- Failure feed filter changes
+        # Failure feed filter changes → re-populate accordions
         def _refresh_feed(branch, mode, window_label, search):
             records = _filter_records(reader, window_label)
             rows = select_failures(
                 records, branch=branch, failure_mode=mode, question_search=search
             )
-            return (
-                _failure_table_rows(rows),
-                rows,
-                "_Select a row above to see the per-turn drilldown._",
-                None,
-                gr.update(interactive=False),
+            acc_updates, body_updates, state_values = _feed_accordion_updates(rows)
+            empty_html = (
+                "" if rows
+                else "<div class='feed-empty'>No failures match the current filters.</div>"
             )
+            return [
+                empty_html,
+                *acc_updates,
+                *body_updates,
+                *state_values,
+            ]
 
         for control in (branch_dd, mode_dd, window_dd, search_in):
             control.change(
                 fn=_refresh_feed,
                 inputs=[branch_dd, mode_dd, window_dd, search_in],
                 outputs=[
-                    failures_df, rows_state, drilldown_md,
-                    selected_session_id, view_session_btn,
+                    feed_empty_md,
+                    *feed_accordions,
+                    *feed_drilldowns,
+                    *feed_session_states,
                 ],
             )
 
-        # ---- Failure-feed row select → drilldown
-        def _on_row_select(rows: list[FailureRow], evt: gr.SelectData):
-            if not rows or evt.index is None:
-                return "", None, gr.update(interactive=False)
-            row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
-            if row_idx >= len(rows):
-                return "", None, gr.update(interactive=False)
-            row = rows[row_idx]
-            return (
-                format_failure_drilldown(row.record),
-                row.record.session_id,
-                gr.update(interactive=True),
+        # View full session (per-row buttons) — swap to session-view column
+        def _make_session_click(slot_index: int):
+            def _handler(session_id):
+                if not session_id:
+                    return gr.update(), gr.update(), gr.update()
+                sessions = group_by_session(reader.read())
+                match = next((s for s in sessions if s.session_id == session_id), None)
+                if match is None:
+                    return gr.update(), gr.update(), gr.update()
+                return (
+                    gr.update(visible=False),  # collapse all accordions implicitly via column toggle
+                    gr.update(visible=True),
+                    format_session_view(match),
+                )
+            return _handler
+
+        # We need a single "feed area" column to hide on session view; wrap
+        # the feed_empty + accordions section in one column we can toggle.
+        # That column wasn't built explicitly above — to keep this minimal,
+        # toggle each accordion's visibility off when entering session view.
+        # Simpler alternative: keep feed visible, render session_md inline
+        # below it. Going with: per-button click hides session_view's parent
+        # column toggle only.
+
+        for i, btn in enumerate(feed_session_btns):
+            btn.click(
+                fn=_make_session_click(i),
+                inputs=[feed_session_states[i]],
+                outputs=[banner_md, session_view, session_md],  # banner_md is a no-op slot here
             )
-
-        failures_df.select(
-            fn=_on_row_select,
-            inputs=[rows_state],
-            outputs=[drilldown_md, selected_session_id, view_session_btn],
-        )
-
-        # ---- View full session / back
-        def _show_session(session_id: str | None):
-            if not session_id:
-                return gr.update(), gr.update(), gr.update()
-            sessions = group_by_session(reader.read())
-            match = next((s for s in sessions if s.session_id == session_id), None)
-            if match is None:
-                return gr.update(), gr.update(), gr.update()
-            return (
-                gr.update(visible=False),
-                gr.update(visible=True),
-                format_session_view(match),
-            )
-
-        view_session_btn.click(
-            fn=_show_session,
-            inputs=[selected_session_id],
-            outputs=[feed_view, session_view, session_md],
-        )
+            # NB: hiding the feed accordions wholesale would require wrapping
+            # them in a column; keeping it simple — the session view appears
+            # below the feed and the operator scrolls.
 
         def _back_to_feed():
-            return gr.update(visible=True), gr.update(visible=False)
+            return gr.update(visible=False)
 
-        back_btn.click(fn=_back_to_feed, outputs=[feed_view, session_view])
+        back_btn.click(fn=_back_to_feed, outputs=[session_view])
 
-        # ---- Trend Explorer: investigate-mode renderer
+        # Trend Explorer: investigate-mode renderer
         def _build_investigate_chart(metric, window_label, show_prior):
             if not metric:
                 return gr.update(), pd.DataFrame(columns=["date", "value", "series"])
@@ -1185,7 +1365,11 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                     gr.update(visible=False),
                     gr.update(visible=True),
                     title,
-                    gr.update(value=df, y_title=_y_axis_title(metric)),
+                    gr.update(
+                        value=df,
+                        y_title=_y_axis_title(metric),
+                        caption=_threshold_caption(metric),
+                    ),
                 )
             return _handler
 
@@ -1202,7 +1386,8 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
         def _refresh_investigate(metric, window_label, show_prior):
             title, df = _build_investigate_chart(metric, window_label, show_prior)
             y_title = _y_axis_title(metric) if metric else "value"
-            return title, gr.update(value=df, y_title=y_title)
+            caption = _threshold_caption(metric) if metric else ""
+            return title, gr.update(value=df, y_title=y_title, caption=caption)
 
         for control in (window_radio, prior_chk):
             control.change(
