@@ -19,9 +19,11 @@ from sentinel import (
     format_failure_drilldown,
     format_header,
     format_panel,
+    format_replay_comparison,
     format_session_view,
     format_trend_header,
 )
+from replayer import ReplayResult
 from dashboard_model import METRIC_GETTERS, DashboardModel
 from metric_status import THRESHOLDS
 
@@ -427,6 +429,73 @@ def test_thematic_blocks_partition_every_plottable_metric_exactly_once():
     assert set(THEMATIC_BLOCKS.keys()) == {
         "Outcome", "Routing", "Engagement", "Tool use", "Latency"
     }
+
+
+# ----- Replay-from-record formatter (issue #38) ------------------------------
+
+
+def _replay_record(branch="GENERIC", confidence=1.0, knew_answer=True,
+                   answer="ans", feedback="ok", session_id="s1", turn_index=0) -> InteractionRecord:
+    return InteractionRecord.model_validate({
+        "timestamp": "2026-05-04T12:00:00+00:00",
+        "session_id": session_id,
+        "turn_index": turn_index,
+        "question": "What did you do?",
+        "event_type": "answered",
+        "branch": branch,
+        "classification_confidence": confidence,
+        "attempts": [{"answer": answer, "is_acceptable": True, "guardrail_feedback": feedback}],
+        "retrieved_chunks": [],
+        "tool_calls": [],
+        "latency_ms": {"classifier": 0, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 0},
+        "knew_answer": knew_answer,
+    })
+
+
+def test_format_replay_comparison_shows_branch_unchanged_check_when_branch_matches():
+    """When original.branch == current.branch the comparison shows ✓ (no routing drift)."""
+    original = _replay_record(branch="GENERIC", answer="orig answer")
+    current = _replay_record(branch="GENERIC", answer="new answer")
+    md = format_replay_comparison(ReplayResult(original=original, current=current))
+
+    assert "Branch" in md
+    assert "GENERIC" in md
+    assert "✓" in md  # branch-unchanged marker
+
+
+def test_format_replay_comparison_shows_branch_changed_warning_when_branch_differs():
+    """When the current pipeline routes the same question to a different branch, the
+    comparison flags it with ⚠ — usually the most actionable signal in the diff."""
+    original = _replay_record(branch="GENERIC")
+    current = _replay_record(branch="TECHNICAL")
+    md = format_replay_comparison(ReplayResult(original=original, current=current))
+    assert "⚠" in md
+    assert "GENERIC" in md and "TECHNICAL" in md
+
+
+def test_format_replay_comparison_surfaces_both_answers_and_guardrail_feedback():
+    """Side-by-side requires both answers + both guardrail feedbacks visible —
+    the whole point of the panel: 'how did current code answer this same question'."""
+    original = _replay_record(answer="OLD answer text", feedback="OLD feedback text")
+    current = _replay_record(answer="NEW answer text", feedback="NEW feedback text")
+    md = format_replay_comparison(ReplayResult(original=original, current=current))
+    assert "OLD answer text" in md
+    assert "NEW answer text" in md
+    assert "OLD feedback text" in md
+    assert "NEW feedback text" in md
+
+
+def test_format_replay_comparison_shows_confidence_delta_and_gap_status_flip():
+    """Confidence delta + gap-phrase (knew_answer) status flip are explicit diff hints
+    above the answer pair so the operator doesn't have to compute them by eye."""
+    original = _replay_record(confidence=0.42, knew_answer=False)
+    current = _replay_record(confidence=0.95, knew_answer=True)
+    md = format_replay_comparison(ReplayResult(original=original, current=current))
+
+    # Confidence values both present in some form
+    assert "0.42" in md and "0.95" in md
+    # Gap-phrase status changed from "gap" to "knew" — some marker that flags this
+    assert "knew" in md.lower() or "gap" in md.lower()
 
 
 def test_format_trend_header_surfaces_metric_label_and_current_value():

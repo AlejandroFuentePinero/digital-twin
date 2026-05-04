@@ -140,6 +140,7 @@ graph LR
     failure_feed["failure_feed.py"]:::tooling
     metric_status["metric_status.py"]:::tooling
     module_health["module_health.py"]:::tooling
+    replayer["replayer.py"]:::tooling
     sample_chunks["sample_chunks.py"]:::tooling
     sentinel["sentinel.py"]:::tooling
     system_map["system_map.py"]:::tooling
@@ -183,12 +184,15 @@ graph LR
   pipeline --> retrieval
   pipeline --> rules
   pipeline --> tools
+  replayer --> interaction_log
+  replayer --> log_reader
   sentinel --> branches
   sentinel --> dashboard_model
   sentinel --> failure_feed
   sentinel --> interaction_log
   sentinel --> log_reader
   sentinel --> metric_status
+  sentinel --> replayer
   tools --> tool_loop
   app --> ext_Gradio__UI_
   classifier --> ext_OpenAI___Anthropic_API__via_LiteLLM_
@@ -235,6 +239,7 @@ graph LR
 | `module_health.py` | Local Gradio dashboard showing pass/fail status of digital-twin tests. |
 | `pipeline.py` | Per-turn orchestrator (ADR-0003). |
 | `profile.py` | Always-on profile loader (the Frame, per ADR-0001 / ADR-0003). |
+| `replayer.py` | Replay a logged failure through the current Pipeline (issue #38). |
 | `retrieval.py` | Retrieval helpers — embedding, ChromaDB query, merge, rewrite, rerank, format. |
 | `rules.py` | Shared rule fragments composed into generator and guardrail system prompts. |
 | `sample_chunks.py` | Sample and inspect chunks from the ChromaDB knowledge base. |

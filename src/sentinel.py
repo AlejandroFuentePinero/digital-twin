@@ -28,6 +28,7 @@ from failure_feed import (
 from interaction_log import InteractionRecord
 from log_reader import HFReader, LocalReader, LogReader
 from metric_status import THRESHOLDS, WoWDelta, metric_status, wow_delta
+from replayer import ReplayResult, replay
 
 WINDOWS = [("Global", None), ("30d", 30), ("7d", 7)]
 
@@ -370,6 +371,54 @@ def format_session_view(session: Session) -> str:
     return "\n".join(parts)
 
 
+# ---- Replay-from-record (issue #38) -----------------------------------------
+
+
+def _gap_status(record: InteractionRecord) -> str:
+    """Human label for the record's gap-phrase outcome — drives the diff hint."""
+    return "knew answer" if record.knew_answer else "hit gap phrase"
+
+
+def _replay_side(label: str, record: InteractionRecord) -> str:
+    """Render one side of the side-by-side comparison."""
+    last_attempt = record.attempts[-1] if record.attempts else {"answer": "", "guardrail_feedback": ""}
+    return (
+        f"#### {label}\n"
+        f"**Branch:** `{record.branch}`  ·  **Confidence:** {record.classification_confidence:.2f}  "
+        f"·  **Status:** {_gap_status(record)}\n\n"
+        f"**Answer:**\n\n{last_attempt.get('answer', '')}\n\n"
+        f"**Guardrail feedback:**\n\n{last_attempt.get('guardrail_feedback', '')}"
+    )
+
+
+def format_replay_comparison(result: ReplayResult) -> str:
+    """Side-by-side markdown of original vs current-pipeline records with diff hints
+    (branch ✓/⚠, confidence delta, gap-phrase status delta) at the top."""
+    original, current = result.original, result.current
+    branch_marker = "✓" if original.branch == current.branch else "⚠"
+    branch_diff = (
+        f"`{original.branch}` → `{current.branch}` {branch_marker}"
+    )
+    conf_delta = current.classification_confidence - original.classification_confidence
+    sign = "+" if conf_delta >= 0 else ""
+    conf_diff = (
+        f"{original.classification_confidence:.2f} → {current.classification_confidence:.2f} "
+        f"({sign}{conf_delta:.2f})"
+    )
+    status_marker = "✓" if original.knew_answer == current.knew_answer else "⚠"
+    status_diff = f"{_gap_status(original)} → {_gap_status(current)} {status_marker}"
+
+    return (
+        "### Replay against current pipeline\n\n"
+        f"- **Branch:** {branch_diff}\n"
+        f"- **Confidence:** {conf_diff}\n"
+        f"- **Gap-phrase status:** {status_diff}\n\n"
+        f"{_replay_side('Original', original)}\n\n"
+        "---\n\n"
+        f"{_replay_side('Current pipeline', current)}\n"
+    )
+
+
 # ---- Trend Explorer (issue #30) ---------------------------------------------
 
 # Display labels for each plottable metric (mirrors format_panel's row labels). Single
@@ -534,6 +583,7 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
 
         rows_state = gr.State(initial_failures)
         selected_session_id = gr.State(None)
+        selected_record = gr.State(None)
 
         with gr.Column(visible=True) as feed_view:
             failures_df = gr.Dataframe(
@@ -543,7 +593,13 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
                 wrap=True,
             )
             drilldown_md = gr.Markdown("_Select a row above to see the per-turn drilldown._")
-            view_session_btn = gr.Button("View full session", interactive=False)
+            with gr.Row():
+                view_session_btn = gr.Button("View full session", interactive=False)
+                replay_btn = gr.Button(
+                    "▶ Replay against current pipeline",
+                    interactive=False, variant="primary",
+                )
+            replay_md = gr.Markdown("")
 
         with gr.Column(visible=False) as session_view:
             session_md = gr.Markdown("")
@@ -563,8 +619,9 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
                 _failure_table_rows(rows),
                 rows,
                 "_Select a row above to see the per-turn drilldown._",
-                None,
-                gr.update(interactive=False),
+                None, None,
+                gr.update(interactive=False), gr.update(interactive=False),
+                "",
             ]
 
         refresh_btn.click(
@@ -573,7 +630,8 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
             outputs=[
                 header_md, *panels,
                 failures_df, rows_state, drilldown_md,
-                selected_session_id, view_session_btn,
+                selected_session_id, selected_record,
+                view_session_btn, replay_btn, replay_md,
             ],
         )
 
@@ -587,8 +645,9 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
                 _failure_table_rows(rows),
                 rows,
                 "_Select a row above to see the per-turn drilldown._",
-                None,
-                gr.update(interactive=False),
+                None, None,
+                gr.update(interactive=False), gr.update(interactive=False),
+                "",
             )
 
         for control in (branch_dd, mode_dd, window_dd, search_in):
@@ -597,28 +656,42 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
                 inputs=[branch_dd, mode_dd, window_dd, search_in],
                 outputs=[
                     failures_df, rows_state, drilldown_md,
-                    selected_session_id, view_session_btn,
+                    selected_session_id, selected_record,
+                    view_session_btn, replay_btn, replay_md,
                 ],
             )
 
-        # Row click → drilldown + remember session_id for "View full session".
+        # Row click → drilldown + remember session_id and record for downstream actions.
         def _on_row_select(rows: list[FailureRow], evt: gr.SelectData):
             if not rows or evt.index is None:
-                return "", None, gr.update(interactive=False)
+                return (
+                    "", None, None,
+                    gr.update(interactive=False), gr.update(interactive=False),
+                    "",
+                )
             row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
             if row_idx >= len(rows):
-                return "", None, gr.update(interactive=False)
+                return (
+                    "", None, None,
+                    gr.update(interactive=False), gr.update(interactive=False),
+                    "",
+                )
             row = rows[row_idx]
             return (
                 format_failure_drilldown(row.record),
                 row.record.session_id,
-                gr.update(interactive=True),
+                row.record,
+                gr.update(interactive=True), gr.update(interactive=True),
+                "",
             )
 
         failures_df.select(
             fn=_on_row_select,
             inputs=[rows_state],
-            outputs=[drilldown_md, selected_session_id, view_session_btn],
+            outputs=[
+                drilldown_md, selected_session_id, selected_record,
+                view_session_btn, replay_btn, replay_md,
+            ],
         )
 
         # "View full session" → swap visible columns + render full session.
@@ -646,6 +719,35 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
             return gr.update(visible=True), gr.update(visible=False)
 
         back_btn.click(fn=_back_to_feed, outputs=[feed_view, session_view])
+
+        # Replay button — two-stage chain so the spinner state lands before the LLM call.
+        def _replay_pending():
+            return (
+                "_⏳ Replaying through current pipeline (8–25s)…_",
+                gr.update(interactive=False),
+            )
+
+        def _replay_run(record):
+            if record is None:
+                return "", gr.update(interactive=True)
+            try:
+                result = replay(record)
+                return format_replay_comparison(result), gr.update(interactive=True)
+            except Exception as exc:  # surface any failure as visible markdown
+                return (
+                    f"### Replay failed\n\n```\n{type(exc).__name__}: {exc}\n```",
+                    gr.update(interactive=True),
+                )
+
+        (
+            replay_btn.click(
+                fn=_replay_pending, outputs=[replay_md, replay_btn]
+            ).then(
+                fn=_replay_run,
+                inputs=[selected_record],
+                outputs=[replay_md, replay_btn],
+            )
+        )
 
         # ---- Trend Explorer (issue #30) ------------------------------------
         gr.Markdown("---\n## Trend Explorer · last 30 days")

@@ -5,6 +5,53 @@
 
 ---
 
+## Session 34 (2026-05-04) — `#38` shipped: Replay-from-record affordance
+
+**Status:** [`#38`](https://github.com/AlejandroFuentePinero/digital-twin/issues/38) (Phase 4 slice 4.5) closed locally. Suite **333 → 343** (+10 tests). New module `src/replayer.py` with `replay(record) -> ReplayResult`; Failure Feed drilldown gains a `▶ Replay against current pipeline` button that re-runs a logged failure's question through the current Pipeline and renders side-by-side comparison with branch / confidence / gap-phrase diff hints. **Phase 4: 5 of 7 slices complete** (#29 + #35 + #36 + #31 + #30 + #38). Remaining: gap clustering (#32), failure summarisation (#33), Flags + FlagDetector (#34).
+
+### What shipped — code
+
+| Commit | Scope |
+|---|---|
+| `<this-session>` | `#38` — new `src/replayer.py` (`ReplayResult` dataclass + `CapturingLogWriter` in-memory writer + `reconstruct_history` pure helper + `replay(record, *, reader=None, pipeline_factory=None)`); `_default_pipeline_factory` lazy-builds the full Pipeline against current code. Sentinel gains `format_replay_comparison(ReplayResult) -> str` pure formatter with branch ✓/⚠, confidence delta, gap-phrase status delta, side-by-side answer + guardrail feedback. New `▶ Replay` button in the Failure Feed drilldown (two-stage `.click().then()` chain so the spinner state lands before the LLM call); errors surface as visible markdown. New `gr.State` `selected_record` threads the chosen record through the row-select → replay-click handlers. +6 tests in new `test_replayer.py`, +4 in `test_sentinel.py`. `system_map` registers `replayer` under "Tooling"; `MAP.md` regenerated. |
+
+### TDD slices (2 waves)
+
+- **Wave A — `replayer.py` (3 slices, 6 tests)**: `reconstruct_history` for multi-turn session (alternating user/assistant, ordered by `turn_index`, ascending); turn-0 record returns `[]`; foreign-session turns excluded from history; `replay()` calls injected pipeline_factory's `run` with the reconstructed history + original question + same `session_id` / `turn_index` / contact flags; returns `ReplayResult(original, current)` with the captured fresh record; raises `RuntimeError` when the pipeline didn't write to the capturing writer (defensive — silent half-built ReplayResults would mislead the UI).
+- **Wave B — Sentinel formatter + UI (4 tests + smoke)**: `format_replay_comparison` shows ✓ when branch unchanged, ⚠ when changed; surfaces both answers + both guardrail feedbacks for side-by-side reading; explicit confidence delta + gap-phrase status flip diff hints. `build_app` smoke against synthetic + live JSONL — boots cleanly with the Replay button wired into the Failure Feed drilldown.
+
+### Live-log smoke
+
+Real target record: turn-1 GAP failure on `"Have you ever worked with kdb+/q?"`. Stub `pipeline_factory` injection avoids the real LLM round-trip; `format_replay_comparison` renders 1377 chars of markdown including all three diff hints (`GAP → TECHNICAL ⚠`, `0.90 → 0.92 (+0.02)`, `hit gap phrase → knew answer ⚠`) plus side-by-side answer/feedback panes. End-to-end pipeline (real `LocalReader`, real `reconstruct_history`, fake Pipeline, real formatter) ships clean output.
+
+### Design choices
+
+- **`CapturingLogWriter` in-memory, not persisted.** Replays would otherwise pollute the live interaction log with non-organic turns — every dashboard click writes a new row. Verification beats telemetry here; cross-session analytics ("what did this question look like a week ago vs now") can be re-derived from replay any time without persistence.
+- **Inject `pipeline_factory`, not the Pipeline itself.** The capturing writer must be created per-replay and threaded into the Pipeline's `__init__`; passing a pre-built Pipeline would force callers to handle the writer dance. The factory pattern keeps the test seam at the construction boundary, which `docs/TESTING.md`'s "mock at I/O boundaries" rule favours.
+- **Fake Pipeline in tests, not patched LLM stages.** Mocking `Classifier`, `Generator`, `Guardrail` individually would 4× the test setup and couple to internal call shape. The `pipeline_factory` injection lets tests stand up a 10-line `_FakePipeline` whose `run()` writes a synthetic record — same observable behaviour as the real Pipeline, no LLM round-trip.
+- **Lazy imports in `_default_pipeline_factory`.** The factory pulls `litellm`, `chromadb`, `tools`, `profile` — heavy. Loading them at `replayer` import would cost test startup time + force every test that touches replayer to satisfy ChromaDB / OpenAI configuration. Lazy import = test files that inject a fake factory never trigger the heavy chain.
+- **`session_id` and `turn_index` preserved on the captured record**, not relabelled. The replay is conceptually "what would the same turn look like under current code"; preserving identifiers makes the side-by-side diff exact. Because the record never persists, no analytics conflict.
+- **Two-stage `.click().then()` for the spinner.** Gradio's first handler synchronously updates the markdown to "⏳ Replaying… (8–25s)" and disables the button; the second handler runs the actual replay. Single-stage would block the UI silently for ~15s with no feedback that work is happening. The added complexity (one extra closure) is worth the perceived-responsiveness win.
+- **Errors caught and rendered, not swallowed or re-raised.** Pipeline.run can raise on classifier/generator/guardrail/network errors; surfacing the exception type + message in the markdown panel keeps the dashboard usable when the underlying pipeline is broken (the operator sees *why* it failed without leaving Sentinel for logs).
+- **No tests on the Gradio `.click().then()` wiring itself.** Per `TESTING.md` `sentinel.py` partial-exemption — pure formatter tested, two-stage chain verified by `build_app` smoke + manual launch. Mocking Gradio event objects (`gr.update` / state plumbing) would couple tests to internal Gradio shape.
+- **`view_session_btn` and `replay_btn` enable/disable in lockstep on row select.** Both depend on a selected failure row; toggling them together avoids a 4-state truth table where one is enabled and the other isn't.
+
+### Verified
+
+- `uv run pytest -q` → **343 passed** (333 → 343; +6 in `test_replayer.py`, +4 in `test_sentinel.py`).
+- Live runtime: `PYTHONPATH=src uv run python -c "from sentinel import build_app; app = build_app()"` → boots cleanly against the 85-record live log.
+- End-to-end smoke: real `LocalReader` + real `reconstruct_history` + fake Pipeline factory + real `format_replay_comparison` → 1377-char markdown with all three diff hints firing correctly on a real failure record.
+
+### Outstanding
+
+- **Push the local commits** — Sessions 28+29+30+31+32+33 + this session's `#38` commit are local; `main` push is harness-protected.
+- **Strip `needs-triage`** from `#38` (this session) and from carry-over `#32` `#33` `#34`.
+- **Replay against historic code** (checkout `git_sha`, run, compare) — out of scope per the issue, deferred. Useful once we have multiple deployed versions to attribute regressions to.
+- **Batch replay** of all failures in a window — out of scope. Powerful as a regression-suite extension but expensive in LLM calls. Defer until needed.
+- **Next: `#32` (gap clustering batch + Cluster panel) ∥ `#33` (failure summarisation + Deflection panel)**. Both unblocked.
+
+---
+
 ## Session 33 (2026-05-04) — `#30` shipped: Trend Explorer (small multiples + investigate mode)
 
 **Status:** [`#30`](https://github.com/AlejandroFuentePinero/digital-twin/issues/30) (Phase 4 slice 3/7) closed locally. Suite **322 → 333** (+11 tests). New `DashboardModel.time_series_by_day` + `METRIC_GETTERS` registry; new Sentinel section "Trend Explorer" below Failure Feed: scan mode (5-block grid of 11 mini `gr.LinePlot`s with inline value/WoW headers and Investigate buttons) + investigate mode (large chart, 7d/30d/90d/All-time radio, "Show prior period" overlay toggle, back-to-scan affordance). **Phase 4: 4 of 7 slices complete** — Health Overview (#29 + #35 + #36) + Failure Feed (#31) + Trends (#30) all online; replay (#38) and gap-clustering (#32 / #33 / #34) still ahead.
