@@ -224,7 +224,7 @@ The canary baseline is the verification surface for Phase 5 fixes. The adversari
 - [ ] Configure Space secrets: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `HF_WRITE_TOKEN`.
 - [ ] Smoke test: classifier, all 5 branches, guardrail+retry, log writes, deflection, periodic invitation, contact form.
 - [ ] Latency baseline check (p50/p95).
-- [ ] Link Space from portfolio.
+- [ ] Embed Space iframe on `alejandrofuentepinero.github.io` home page (with plain-text fallback link); verify chat works inside the iframe on desktop + mobile. Repo: `AlejandroFuentePinero/alejandrofuentepinero.github.io` (Jekyll/AcademicPages).
 
 ---
 
