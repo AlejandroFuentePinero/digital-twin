@@ -5,6 +5,64 @@
 
 ---
 
+## Session 38 (2026-05-04) — Sentinel UX redesign: 3 tabs + box-in-box + auto-refresh + chart cleanup
+
+**Status:** Sentinel restructured per operator feedback. Suite **388 → 386** (net −2 — 4 Replay tests + 6 anchor/format tests removed; 8 new tests for auto-refresh helpers + flag-target-tab + reshaped chart). New top-level layout: `gr.Tabs` with **Metrics** (default) → **Trends** → **Failures**, ordered broad → specific. Cluster + Deflection panels move under Failures (attribution surfaces over the same failure population). Cluster + summary batches now auto-run on launch when their cached file is missing or older than 7 days, with loud `⚠ Batch failed: …` banner on LLM error. **Replay (#38) removed entirely** — module + tests + UI hookup.
+
+### What shipped — code
+
+| File | Change |
+|---|---|
+| `src/sentinel.py` | Wholesale rewrite: 3-tab layout (`TAB_METRICS`/`TAB_TRENDS`/`TAB_FAILURES`); `format_panel` returns box-in-box HTML (outer `window-card` + 5 inner `metric-card` blocks); `_value_span` colours metric values green/orange/red by threshold status (matching the badge); `_fmt_date(value)` strips ISO timestamps to `YYYY-MM-DD` everywhere (header, failure table, drilldown, cluster `generated_at`); `chart_dataframe` rewritten — `actual` (raw daily) + `3-day avg` (rolling smoother, `min_periods=1`, centered) + `healthy`/`warning` reference lines + optional `prior` overlay, all with explicit `CHART_COLOR_MAP` (`healthy: #22c55e` green, `warning: #f59e0b` amber); rates scaled ×100 so the Y-axis renders 9.4 not 0.094; dates upcast to `pd.to_datetime` so Vega renders dates, not unix epoch ms; per-metric `_y_axis_title` replaces the misleading `"value"` label; `is_stale`/`ensure_fresh_clusters`/`ensure_fresh_summaries` helpers run the LLM batches on launch when stale (≥7 days), surface failures via `_autorefresh_banner`; flag click handlers switch tabs via `gr.Tabs(selected=…)` instead of HTML anchor links. |
+| `src/replayer.py` | **Deleted.** |
+| `tests/test_replayer.py` | **Deleted.** |
+| `src/cluster_gaps.py` | (unchanged this session — archive helper from Session 37 still load-bearing for `detect_new_cluster`) |
+| `src/summarize_failures.py` | Added `BATCH_DEFAULT_DAYS = 7` module constant so `ensure_fresh_summaries` can call `run_batch` with the canonical default without hard-coding. |
+| `src/system_map.py` | `replayer` removed from `MODULE_CATEGORY`; `MAP.md` regenerated. |
+| `tests/test_sentinel.py` | 4 Replay-formatter tests removed; 2 panel-placeholder tests rewritten (panels no longer reference batch script names — auto-refresh removes the operator-action surface); `format_flags_panel`→`format_flags_summary` (no anchor links, just summary cards); new `FLAG_TARGET_TAB` forcing-function test; 6 new auto-refresh tests (stale/fresh/missing detection, skip-when-fresh, run-when-missing, loud-error contract for both clusters and summaries); `test_format_panel_does_not_render_badge_for_orientation_metrics` rewritten for the new HTML structure (regex on the `<li>` block instead of line-splitting); date-format test asserts `"12:30" not in header` to lock the date-only contract; `build_app` smoke tests pass `autorefresh=False` so they don't try to call the LLM. |
+
+### Operator-driven design directives (2026-05-04 session)
+
+These came from the operator after seeing the live dashboard render. Each one is locked into the rewrite:
+
+1. **Multi-page nav: Metrics → Trends → Failures** — broad → specific. Default tab is Metrics ("at a glance is the system healthy?").
+2. **Auto-run cluster + summary on launch when stale (7-day cadence)** — operator should never run separate batch CLIs by hand. Loud `⚠` banner on failure (cache silently stale is the failure mode Sentinel exists to *prevent*).
+3. **Box-in-box layout for Metrics**: 3 outer windowed cards (7d / 30d / Global, leftmost = most recent) each containing 5 inner thematic cards (Outcome / Routing / Engagement / Tool use / Latency).
+4. **Healthy = green** for both badge AND value text — and for the `healthy` threshold reference line in trend plots (was orange-by-default in Vega, now explicitly green via `color_map`).
+5. **Dates everywhere as `YYYY-MM-DD`** — no time-of-day. Sentinel is a daily-cadence operator surface, not a live trace; time-of-day adds visual noise.
+6. **Drop Replay (#38) entirely** — module + tests + UI. Operator judgement: not a load-bearing surface for the iteration workflow.
+7. **Trend chart**: dots-for-raw + 3-day rolling-average line. Threshold reference lines kept (now correctly coloured). Y-axis label was `"value"` — now per-metric (`Gap rate (%)`, `Total latency p95 (ms)`, etc.). X-axis dates were rendering as unix epoch ms — fixed by upcasting to `pd.Timestamp` so Vega recognises the time type.
+8. **Flag click → switch tab** (since HTML anchor `href`s can't jump across `gr.Tab` boundaries) — each flag becomes a `gr.Button` that returns `gr.Tabs(selected=target_tab_id)`.
+
+### Design choices
+
+- **`gr.Tabs(selected=tab_id)` for flag-click navigation, not anchor links.** `gr.Tab` content lives in separate DOM subtrees only one of which is visible at a time; an `<a href="#anchor">` inside one tab can't scroll to an anchor in another. The `selected` API is the supported affordance.
+- **`MAX_FLAGS_RENDERED = 6` slot grid for flag buttons.** Gradio Blocks needs every component declared up-front (no dynamic add/remove inside an event handler). Pre-allocating 6 button slots covers the realistic upper bound (3 detector kinds × occasional repeat-failure on multiple distinct questions); buttons toggle visible/hidden on each Refresh based on actual flag count.
+- **Auto-refresh runs synchronously in `build_app`, not in a background thread.** Background-task plumbing in Gradio adds error-handling complexity (what if the user closes the tab mid-run? what if the panel reads from a half-written file?). Synchronous + 7-day staleness means: launches inside the same week boot in <1s (cache is fresh); the first launch of a new week pays a one-time 35s tax. Acceptable for a single-operator local tool.
+- **Loud error banner over silent cache fallback.** "Sentinel silently shipped week-old data" is the exact failure mode Sentinel exists to detect for the *pipeline*; it shouldn't have it itself. The banner text includes the exception class + message so the operator can tell `OPENAI_API_KEY missing` from `rate limited` from `network unreachable` without leaving the dashboard.
+- **`format_panel` returns HTML, not Markdown.** Box-in-box requires explicit nested borders; Markdown wraps everything in `<p>` and doesn't expose CSS hooks. HTML inside `gr.Markdown` renders cleanly and lets `SENTINEL_CSS` style the windowed/metric cards via class selectors.
+- **Rates scaled ×100 in `chart_dataframe` only — not in the metric model.** `DashboardModel.gap_rate` etc. stay as fractions (the codebase invariant); the chart layer multiplies for display because the Y-axis title says "(%)". Mixing fractions and percentages in the model would ripple through `wow_delta` / `metric_status` / threshold tables and risk silent bugs.
+- **`pd.to_datetime` on the date column to fix Vega's unix-epoch-ms axis.** With `date` objects Gradio's JSON serialiser falls back to integer timestamps that Vega-Lite reads as numeric. `Timestamp` dtype gets properly typed as time data and renders as readable dates.
+- **`color_map` over relying on Vega's default categorical palette.** Default colors ordered by series-name first-encounter, which is fragile (adding a new series shifts everyone's colour). Explicit map locks `healthy → green` etc. independent of column order.
+- **`3-day` rolling average with `min_periods=1` + `center=True`.** `min_periods=1` gives a value at every point including the edges (where a 3-day window only has 1–2 samples); `center=True` avoids the lag a trailing window introduces. Both choices favour visual continuity over rolling-mean orthodoxy at the edges.
+- **`is_stale` uses file mtime, not the cluster file's `generated_at` field.** Mtime is set by the OS on write; `generated_at` is a string the writer chose. Mtime is the authoritative "when did this file last get touched" signal. (If the operator manually `touch`es the file, that's a deliberate cache-extension act we should respect.)
+- **Replay deletion (full module) over leaving dead code.** Per the project's `karpathy-guidelines` and the codebase's no-feature-flags-no-shims convention: if the feature is not load-bearing, delete it.
+
+### Verified
+
+- `uv run pytest -q` → **386 passed** (388 → 386: −4 Replay-formatter tests, −2 superseded panel-placeholder copy tests, +6 auto-refresh tests, +2 flag-summary / flag-target-tab tests, net −2 with the new helpers fully covered).
+- Live runtime: `PYTHONPATH=src uv run python -c "from sentinel import build_app; build_app(autorefresh=False)"` → boots cleanly with the 3-tab layout against the 85-record live log. `chart_dataframe(model, 'gap_rate', days=30)` returns 11 rows with series `{'3-day avg', 'actual', 'healthy', 'warning'}`, `date` dtype is `datetime64[ns]` (no more unix-epoch-ms axis), Y-axis title is `'Gap rate (%)'`.
+- `system_map` regenerated → `MAP.md` no longer references the deleted `replayer.py`.
+
+### Outstanding
+
+- **Push the local commits** — push remains harness-protected.
+- **First in-anger launch with `OPENAI_API_KEY` set** to verify the auto-refresh actually populates `gap_clusters.json` + `summaries/deflection_*.md` end-to-end. Synthetic + unit-test coverage is in place but the live LLM round-trip hasn't been exercised inside `build_app`.
+- **Anomaly annotations on Trend Explorer** (carry-over from earlier sessions) — still a follow-up; the Flag panel surfaces them as cards now, not as chart markers.
+- Update `docs/SENTINEL.md` Flags + Trend sections to describe the new chart shape (dots + rolling avg, green threshold). Light edit — done in this session's commit.
+
+---
+
 ## Session 37 (2026-05-04) — `#34` shipped: Flags panel + FlagDetector (Phase 4 complete)
 
 **Status:** [`#34`](https://github.com/AlejandroFuentePinero/digital-twin/issues/34) closed locally. Suite **368 → 388** (+20 tests). New module `src/flag_detector.py` with `Flag` dataclass + three pure detector functions (`detect_gap_rate_jump`, `detect_new_cluster`, `detect_repeat_failure`). `cluster_gaps.py` gains a `DEFAULT_ARCHIVE_DIR` + `read_cluster_history` helper + `run_batch` writes a dated snapshot per run so `detect_new_cluster` has historical material to compare against. Sentinel gains a Flags panel above Panel 1 (`format_flags_panel`) with one `.flag-card` per flag and an anchor link to the target panel (`failure_feed` / `gap_clusters` / `trend`); the three target section headers carry `elem_id`s so browser-native scroll handles the click. Refresh re-runs all three detectors. **Phase 4: 11 of 11 issues closed.**

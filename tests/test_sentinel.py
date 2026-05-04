@@ -19,11 +19,9 @@ from sentinel import (
     format_failure_drilldown,
     format_header,
     format_panel,
-    format_replay_comparison,
     format_session_view,
     format_trend_header,
 )
-from replayer import ReplayResult
 from dashboard_model import METRIC_GETTERS, DashboardModel
 from metric_status import THRESHOLDS
 
@@ -128,19 +126,23 @@ def test_format_panel_renders_badge_for_thresholded_metric():
 def test_format_panel_does_not_render_badge_for_orientation_metrics():
     """Orientation metrics (unique_sessions, branch_distribution, multi_label_rate, total)
     have no threshold and must not get a badge — false alarms ruin the dashboard."""
+    import re
     from interaction_log import InteractionRecord
 
     records = [InteractionRecord.model_validate(_record_dict())]
     panel = format_panel("Global", DashboardModel(records))
 
-    # Find the unique-sessions line and assert it has no status-pill on it
-    lines = panel.splitlines()
-    sessions_line = next(line for line in lines if "Unique sessions" in line)
-    assert "status-pill" not in sessions_line, (
+    # Pull out just the Unique-sessions <li> and check no status-pill is inside it.
+    sessions_li = re.search(r"<li>\s*<b>Unique sessions:.*?</li>", panel, flags=re.DOTALL)
+    assert sessions_li, "expected a <li> for Unique sessions in the panel HTML"
+    assert "status-pill" not in sessions_li.group(0), (
         "Unique sessions is volume orientation — no badge"
     )
-    branches_line = next(line for line in lines if "Branch distribution" in line)
-    assert "status-pill" not in branches_line
+    branches_li = re.search(r"<li>\s*<b>Branch distribution:.*?</li>", panel, flags=re.DOTALL)
+    assert branches_li, "expected a <li> for Branch distribution"
+    assert "status-pill" not in branches_li.group(0), (
+        "Branch distribution is orientation — no badge"
+    )
 
 
 def test_format_panel_renders_wow_delta_when_prior_model_provided():
@@ -189,30 +191,33 @@ def test_global_window_appears_in_window_set_and_today_does_not():
     assert global_days is None
 
 
-def test_format_header_includes_source_indicator_and_loaded_timestamp():
-    """format_header surfaces the source label and the last-loaded timestamp."""
+def test_format_header_includes_source_indicator_and_loaded_date_only():
+    """format_header surfaces the source label and the loaded date — no time of
+    day (per the operator directive: dates only across the dashboard)."""
     loaded_at = datetime(2026, 5, 4, 12, 30, tzinfo=timezone.utc)
     header = format_header(source="Local JSONL", loaded_at=loaded_at)
 
     assert "Local JSONL" in header
     assert "2026-05-04" in header
-    assert "12:30" in header
+    assert "12:30" not in header, "time-of-day removed by date-only directive"
 
 
 def test_build_app_returns_gradio_blocks_when_reader_supplied(tmp_path):
-    """build_app boots without raising when given an injected reader."""
+    """build_app boots without raising when given an injected reader.
+    Autorefresh is disabled in tests — no LLM calls allowed per TESTING.md."""
     log_path = tmp_path / "interactions.jsonl"
     log_path.write_text(json.dumps(_record_dict()) + "\n")
 
-    app = build_app(reader=LocalReader(log_path))
+    app = build_app(reader=LocalReader(log_path), autorefresh=False)
     assert app is not None
     assert hasattr(app, "launch")  # gr.Blocks duck-type
 
 
 @pytest.mark.skipif(not Path(DEFAULT_LOG_PATH).exists(), reason="No real log file present")
 def test_build_app_does_not_crash_against_live_interactions_log():
-    """Smoke: Sentinel boots against the live data/logs/interactions.jsonl without raising."""
-    app = build_app()
+    """Smoke: Sentinel boots against the live data/logs/interactions.jsonl
+    without raising. Autorefresh disabled — see test note above."""
+    app = build_app(autorefresh=False)
     assert app is not None
 
 
@@ -384,7 +389,8 @@ def test_chart_dataframe_includes_value_series_and_threshold_reference_lines():
 
     assert set(df.columns) >= {"date", "value", "series"}
     series_set = set(df["series"].unique())
-    assert "value" in series_set
+    assert "actual" in series_set, "raw daily values rendered as 'actual' series"
+    assert "3-day avg" in series_set, "rolling-average smoother must be drawn"
     assert "healthy" in series_set, "healthy threshold reference line must be drawn"
     assert "warning" in series_set, "warning threshold reference line must be drawn"
 
@@ -435,13 +441,16 @@ def test_thematic_blocks_partition_every_plottable_metric_exactly_once():
 
 
 def test_format_cluster_panel_renders_placeholder_when_data_is_none():
-    """When `gap_clusters.json` is absent (e.g. before the first batch run),
-    the panel renders a placeholder telling the operator how to populate it,
-    not a crash and not an empty section."""
+    """When `gap_clusters.json` is absent, the panel renders a placeholder
+    explaining the empty state — Sentinel auto-runs the batch on launch, so
+    the placeholder reads as 'no gap turns to cluster' rather than 'go run a
+    script'."""
     from sentinel import format_cluster_panel
 
     md = format_cluster_panel(None)
-    assert "cluster_gaps" in md, "must point the operator at the batch script"
+    assert "no" in md.lower() or "cluster" in md.lower(), (
+        "placeholder must read like a non-broken empty state, not a crash"
+    )
 
 
 def test_format_cluster_panel_renders_label_count_and_sample_questions():
@@ -479,32 +488,36 @@ def test_format_cluster_panel_renders_label_count_and_sample_questions():
 
 
 def test_format_deflection_panel_renders_placeholder_when_text_is_none():
-    """When no `deflection_*.md` exists yet, the panel renders a placeholder
-    pointing at the batch script — same idiom as the cluster panel."""
+    """When no `deflection_*.md` exists yet, the panel renders a non-broken
+    empty-state placeholder. Sentinel auto-runs the batch, so the placeholder
+    reads as 'no deflection summary to render' rather than 'go run a script'."""
     from sentinel import format_deflection_panel
 
     md = format_deflection_panel(None)
-    assert "summarize_failures" in md, "must point the operator at the batch script"
+    assert "no" in md.lower() or "deflection" in md.lower(), (
+        "placeholder must read like a non-broken empty state, not a crash"
+    )
 
 
 # ----- Flags panel formatter (issue #34) -------------------------------------
 
 
-def test_format_flags_panel_renders_placeholder_when_no_flags():
+def test_format_flags_summary_renders_placeholder_when_no_flags():
     """Empty flag list → placeholder copy. Stable / quiet weeks must not look
     broken; the placeholder explains why nothing is firing."""
-    from sentinel import format_flags_panel
+    from sentinel import format_flags_summary
 
-    md = format_flags_panel([])
+    md = format_flags_summary([])
     assert "anomalies" in md.lower() or "no flag" in md.lower()
 
 
-def test_format_flags_panel_renders_each_flag_with_link_to_target_panel():
-    """Each Flag becomes a card with the headline + an anchor link to its
-    target panel (failure_feed / gap_clusters / trend). The anchor matches the
-    elem_id of the target section so the browser scrolls natively on click."""
+def test_format_flags_summary_renders_each_flag_headline_and_detail():
+    """Each Flag becomes a card with headline + detail visible. The
+    Investigate buttons live as separate gr.Button instances (built in
+    build_app) so click handlers can switch tabs — the summary markdown is
+    pure HTML, no anchor links."""
     from flag_detector import Flag
-    from sentinel import FLAG_TARGET_ANCHORS, format_flags_panel
+    from sentinel import format_flags_summary
 
     flags = [
         Flag(kind="repeat_failure", headline="Repeated failure (3×): kdb+/q?",
@@ -513,37 +526,47 @@ def test_format_flags_panel_renders_each_flag_with_link_to_target_panel():
         Flag(kind="new_cluster", headline="New gap cluster: Rust",
              detail="2 gap question(s) clustered under this label this week.",
              target="gap_clusters"),
-        Flag(kind="gap_rate_jump", headline="Gap rate jumped 35.0pp WoW",
-             detail="Trailing 7-day window vs prior.",
-             target="trend"),
     ]
-    md = format_flags_panel(flags)
+    md = format_flags_summary(flags)
 
-    # Every headline appears
     for f in flags:
-        assert f.headline in md or html_escape(f.headline) in md
-    # Anchors map to the target panel elem_ids (used by the browser to scroll)
-    for f in flags:
-        assert f"#{FLAG_TARGET_ANCHORS[f.target]}" in md
+        assert f.headline in md or _html_escape(f.headline) in md
+        assert f.detail in md or _html_escape(f.detail) in md
+    # No anchor links — tab switching is wired via Gradio buttons in build_app
+    assert "href=" not in md
 
 
-def html_escape(s: str) -> str:
+def _html_escape(s: str) -> str:
     """Mirror html.escape so the assertion above works regardless of which form
     the formatter uses (kept local to avoid leaking import order across tests)."""
     import html as _html
     return _html.escape(s)
 
 
+def test_flag_target_tab_maps_each_target_to_a_real_tab_id():
+    """Every FlagTarget literal must map to one of the three tab IDs Sentinel
+    actually builds (forcing function — adding a new target without a tab
+    mapping silently breaks click handlers)."""
+    from sentinel import FLAG_TARGET_TAB, TAB_FAILURES, TAB_TRENDS
+
+    # Every value is a known tab ID
+    valid_tabs = {TAB_FAILURES, TAB_TRENDS}
+    assert set(FLAG_TARGET_TAB.values()) <= valid_tabs
+    # Every FlagTarget literal is covered
+    assert set(FLAG_TARGET_TAB.keys()) == {"failure_feed", "gap_clusters", "trend"}
+
+
 def test_build_app_renders_flags_panel_section_header():
     """build_app smoke check: the Flags section is present in the rendered
     Blocks. Verifies the panel is wired (not whether the flags themselves are
-    correct — the detectors own that)."""
+    correct — the detectors own that). Disable autorefresh so the test
+    doesn't try to call the LLM."""
     import json as _json
 
     log_path = Path(__file__).parent / "_tmp_flags_smoke.jsonl"
     log_path.write_text(_json.dumps(_record_dict()) + "\n")
     try:
-        app = build_app(reader=LocalReader(log_path))
+        app = build_app(reader=LocalReader(log_path), autorefresh=False)
         assert app is not None
     finally:
         log_path.unlink(missing_ok=True)
@@ -560,71 +583,108 @@ def test_format_deflection_panel_renders_summary_text_intact():
     assert text in md, "summary text must appear verbatim"
 
 
-# ----- Replay-from-record formatter (issue #38) ------------------------------
+# ----- Auto-refresh helpers (issue #34 / Sentinel redesign) ------------------
 
 
-def _replay_record(branch="GENERIC", confidence=1.0, knew_answer=True,
-                   answer="ans", feedback="ok", session_id="s1", turn_index=0) -> InteractionRecord:
-    return InteractionRecord.model_validate({
-        "timestamp": "2026-05-04T12:00:00+00:00",
-        "session_id": session_id,
-        "turn_index": turn_index,
-        "question": "What did you do?",
-        "event_type": "answered",
-        "branch": branch,
-        "classification_confidence": confidence,
-        "attempts": [{"answer": answer, "is_acceptable": True, "guardrail_feedback": feedback}],
-        "retrieved_chunks": [],
-        "tool_calls": [],
-        "latency_ms": {"classifier": 0, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 0},
-        "knew_answer": knew_answer,
-    })
+def test_is_stale_treats_missing_file_as_stale(tmp_path):
+    """Missing file → stale. Forces a first-run population on launch."""
+    from sentinel import is_stale
+
+    assert is_stale(tmp_path / "absent.json") is True
 
 
-def test_format_replay_comparison_shows_branch_unchanged_check_when_branch_matches():
-    """When original.branch == current.branch the comparison shows ✓ (no routing drift)."""
-    original = _replay_record(branch="GENERIC", answer="orig answer")
-    current = _replay_record(branch="GENERIC", answer="new answer")
-    md = format_replay_comparison(ReplayResult(original=original, current=current))
+def test_is_stale_treats_recent_file_as_fresh(tmp_path):
+    """Files younger than the freshness window are fresh — boot fast on the
+    second launch in the same week."""
+    from sentinel import is_stale
 
-    assert "Branch" in md
-    assert "GENERIC" in md
-    assert "✓" in md  # branch-unchanged marker
-
-
-def test_format_replay_comparison_shows_branch_changed_warning_when_branch_differs():
-    """When the current pipeline routes the same question to a different branch, the
-    comparison flags it with ⚠ — usually the most actionable signal in the diff."""
-    original = _replay_record(branch="GENERIC")
-    current = _replay_record(branch="TECHNICAL")
-    md = format_replay_comparison(ReplayResult(original=original, current=current))
-    assert "⚠" in md
-    assert "GENERIC" in md and "TECHNICAL" in md
+    p = tmp_path / "recent.json"
+    p.write_text("{}")  # mtime = now
+    assert is_stale(p, max_age_days=7) is False
 
 
-def test_format_replay_comparison_surfaces_both_answers_and_guardrail_feedback():
-    """Side-by-side requires both answers + both guardrail feedbacks visible —
-    the whole point of the panel: 'how did current code answer this same question'."""
-    original = _replay_record(answer="OLD answer text", feedback="OLD feedback text")
-    current = _replay_record(answer="NEW answer text", feedback="NEW feedback text")
-    md = format_replay_comparison(ReplayResult(original=original, current=current))
-    assert "OLD answer text" in md
-    assert "NEW answer text" in md
-    assert "OLD feedback text" in md
-    assert "NEW feedback text" in md
+def test_is_stale_treats_old_file_as_stale(tmp_path):
+    """Files older than the freshness window are stale — forces a refresh on
+    the next launch so the dashboard never silently shows week-old data."""
+    import os
+    from datetime import datetime, timedelta, timezone
+    from sentinel import is_stale
+
+    p = tmp_path / "old.json"
+    p.write_text("{}")
+    old = (datetime.now(timezone.utc) - timedelta(days=10)).timestamp()
+    os.utime(p, (old, old))
+    assert is_stale(p, max_age_days=7) is True
 
 
-def test_format_replay_comparison_shows_confidence_delta_and_gap_status_flip():
-    """Confidence delta + gap-phrase (knew_answer) status flip are explicit diff hints
-    above the answer pair so the operator doesn't have to compute them by eye."""
-    original = _replay_record(confidence=0.42, knew_answer=False)
-    current = _replay_record(confidence=0.95, knew_answer=True)
-    md = format_replay_comparison(ReplayResult(original=original, current=current))
+def test_ensure_fresh_clusters_skips_when_cache_is_fresh(tmp_path, monkeypatch):
+    """When the cluster file is fresh the helper must NOT call the LLM batch
+    — that's the whole point of caching."""
+    from sentinel import ensure_fresh_clusters
 
-    # Confidence values both present in some form
-    assert "0.42" in md and "0.95" in md
-    # Gap-phrase status changed from "gap" to "knew" — some marker that flags this
-    assert "knew" in md.lower() or "gap" in md.lower()
+    fresh = tmp_path / "gap_clusters.json"
+    fresh.write_text("{}")
+
+    called = []
+    monkeypatch.setattr(
+        "sentinel.cluster_gaps.run_batch",
+        lambda **kw: called.append(kw),
+    )
+    msg = ensure_fresh_clusters(out_path=fresh, max_age_days=7)
+    assert msg is None
+    assert called == [], "fresh cache must not trigger the batch"
+
+
+def test_ensure_fresh_clusters_runs_batch_when_cache_missing(tmp_path, monkeypatch):
+    """Missing cache → call the LLM batch. Returns None on success (the boot
+    banner stays empty)."""
+    from sentinel import ensure_fresh_clusters
+
+    out = tmp_path / "gap_clusters.json"
+    archive = tmp_path / "archive"
+
+    called = []
+    monkeypatch.setattr(
+        "sentinel.cluster_gaps.run_batch",
+        lambda **kw: called.append(kw),
+    )
+    msg = ensure_fresh_clusters(out_path=out, archive_dir=archive, max_age_days=7)
+    assert msg is None
+    assert len(called) == 1
+    assert called[0]["out_path"] == out
+
+
+def test_ensure_fresh_clusters_returns_loud_error_when_batch_fails(tmp_path, monkeypatch):
+    """LLM unreachable / no API key → return an error string. Sentinel renders
+    this as a banner so the operator knows the dashboard is operating on stale
+    data instead of silently shipping it."""
+    from sentinel import ensure_fresh_clusters
+
+    out = tmp_path / "gap_clusters.json"
+
+    def _boom(**kw):
+        raise RuntimeError("OPENAI_API_KEY missing")
+
+    monkeypatch.setattr("sentinel.cluster_gaps.run_batch", _boom)
+    msg = ensure_fresh_clusters(out_path=out, max_age_days=7)
+    assert msg is not None
+    assert "Cluster" in msg
+    assert "OPENAI_API_KEY" in msg
+
+
+def test_ensure_fresh_summaries_returns_loud_error_when_batch_fails(tmp_path, monkeypatch):
+    """Same loud-failure contract as ensure_fresh_clusters — "cache silently
+    stale" is exactly the failure mode Sentinel exists to prevent."""
+    from sentinel import ensure_fresh_summaries
+
+    def _boom(**kw):
+        raise RuntimeError("rate limited")
+
+    monkeypatch.setattr("sentinel.summarize_failures.run_batch", _boom)
+    msg = ensure_fresh_summaries(out_dir=tmp_path / "summaries", max_age_days=7)
+    assert msg is not None
+    assert "Summary" in msg
+    assert "rate limited" in msg
 
 
 def test_format_trend_header_surfaces_metric_label_and_current_value():

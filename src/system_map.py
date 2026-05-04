@@ -60,7 +60,6 @@ MODULE_CATEGORY: dict[str, str] = {
     "dashboard_model": "Tooling",
     "metric_status": "Tooling",
     "failure_feed": "Tooling",
-    "replayer": "Tooling",
     "cluster_gaps": "Tooling",
     "summarize_failures": "Tooling",
     "flag_detector": "Tooling",

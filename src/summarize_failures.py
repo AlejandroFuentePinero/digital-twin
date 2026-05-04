@@ -23,6 +23,7 @@ from failure_feed import classify_failure
 from interaction_log import InteractionRecord
 
 
+BATCH_DEFAULT_DAYS = 7
 DEFAULT_SUMMARIES_DIR = (
     Path(__file__).parent.parent / "data" / "logs" / "summaries"
 )
@@ -227,8 +228,8 @@ def main() -> None:
         description="Summarise the last N days of failure records into 3 Markdown files."
     )
     parser.add_argument(
-        "--days", type=int, default=7,
-        help="Trailing window in days (default 7).",
+        "--days", type=int, default=BATCH_DEFAULT_DAYS,
+        help=f"Trailing window in days (default {BATCH_DEFAULT_DAYS}).",
     )
     parser.add_argument(
         "--out-dir", type=Path, default=DEFAULT_SUMMARIES_DIR,

@@ -142,7 +142,6 @@ graph LR
     flag_detector["flag_detector.py"]:::tooling
     metric_status["metric_status.py"]:::tooling
     module_health["module_health.py"]:::tooling
-    replayer["replayer.py"]:::tooling
     sample_chunks["sample_chunks.py"]:::tooling
     sentinel["sentinel.py"]:::tooling
     summarize_failures["summarize_failures.py"]:::tooling
@@ -191,18 +190,15 @@ graph LR
   pipeline --> retrieval
   pipeline --> rules
   pipeline --> tools
-  replayer --> interaction_log
-  replayer --> log_reader
   sentinel --> branches
   sentinel --> cluster_gaps
+  sentinel --> summarize_failures
   sentinel --> dashboard_model
   sentinel --> flag_detector
-  sentinel --> summarize_failures
   sentinel --> failure_feed
   sentinel --> interaction_log
   sentinel --> log_reader
   sentinel --> metric_status
-  sentinel --> replayer
   summarize_failures --> failure_feed
   summarize_failures --> interaction_log
   tools --> tool_loop
@@ -255,11 +251,10 @@ graph LR
 | `module_health.py` | Local Gradio dashboard showing pass/fail status of digital-twin tests. |
 | `pipeline.py` | Per-turn orchestrator (ADR-0003). |
 | `profile.py` | Always-on profile loader (the Frame, per ADR-0001 / ADR-0003). |
-| `replayer.py` | Replay a logged failure through the current Pipeline (issue #38). |
 | `retrieval.py` | Retrieval helpers — embedding, ChromaDB query, merge, rewrite, rerank, format. |
 | `rules.py` | Shared rule fragments composed into generator and guardrail system prompts. |
 | `sample_chunks.py` | Sample and inspect chunks from the ChromaDB knowledge base. |
-| `sentinel.py` | Local Gradio dashboard over the canonical interaction log (Phase 4 / issue #29). |
+| `sentinel.py` | Local Gradio dashboard over the canonical interaction log (Phase 4). |
 | `session_state.py` | Per-session state for #16's contact-flow. |
 | `summarize_failures.py` | Failure-summarisation batch (issue #33). |
 | `system_map.py` | System map generator — walks src/ and emits docs/MAP.md. |
