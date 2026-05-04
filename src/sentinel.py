@@ -16,6 +16,7 @@ import gradio as gr
 import pandas as pd
 
 from branches import REGISTRY as BRANCH_REGISTRY
+from cluster_gaps import DEFAULT_OUT_PATH as CLUSTERS_DEFAULT_PATH, read_clusters
 from dashboard_model import METRIC_GETTERS, DashboardModel
 from failure_feed import (
     FAILURE_MODES,
@@ -368,6 +369,41 @@ def format_session_view(session: Session) -> str:
         parts.append(
             f"<details>\n<summary>{_turn_summary(r)}</summary>\n\n{body}\n\n</details>\n"
         )
+    return "\n".join(parts)
+
+
+# ---- Cluster panel (issue #32) ----------------------------------------------
+
+
+CLUSTER_EMPTY_PLACEHOLDER = (
+    "_No cached gap clusters yet. Run `uv run python src/cluster_gaps.py` to "
+    "generate `data/logs/gap_clusters.json`._"
+)
+
+
+def format_cluster_panel(data: dict | None) -> str:
+    """Render the Cluster panel from a `gap_clusters.json` dict.
+
+    `None` (file absent) renders a placeholder pointing at the batch script;
+    a populated dict renders one entry per cluster with label · count · the
+    sample questions verbatim.
+    """
+    if data is None:
+        return CLUSTER_EMPTY_PLACEHOLDER
+    clusters = data.get("clusters", [])
+    if not clusters:
+        return (
+            f"_No clusters in the last {data.get('period_days', '?')} days "
+            "(no gap turns, or all groups below the minimum size)._"
+        )
+    parts = [
+        f"_Generated {data.get('generated_at', '?')} · window {data.get('period_days', '?')}d_",
+        "",
+    ]
+    for cluster in clusters:
+        parts.append(f"- **{cluster['label']}** · count {cluster['count']}")
+        for example in cluster.get("examples", []):
+            parts.append(f"    - {example}")
     return "\n".join(parts)
 
 
@@ -851,6 +887,17 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
         back_to_scan_btn.click(
             fn=_back_to_scan, outputs=[scan_view, investigate_view]
         )
+
+        # ---- Cluster panel (issue #32) -------------------------------------
+        gr.Markdown("---\n## Gap Clusters")
+        cluster_md = gr.Markdown(format_cluster_panel(read_clusters(CLUSTERS_DEFAULT_PATH)))
+
+        def _refresh_clusters():
+            return format_cluster_panel(read_clusters(CLUSTERS_DEFAULT_PATH))
+
+        # Re-read the cached cluster file when the operator hits Refresh — the
+        # batch may have been re-run between dashboard sessions.
+        refresh_btn.click(fn=_refresh_clusters, outputs=[cluster_md])
 
     return app
 

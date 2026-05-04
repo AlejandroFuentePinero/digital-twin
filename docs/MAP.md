@@ -136,6 +136,7 @@ graph LR
 
   subgraph sg_tooling["Tooling"]
     direction TB
+    cluster_gaps["cluster_gaps.py"]:::tooling
     dashboard_model["dashboard_model.py"]:::tooling
     failure_feed["failure_feed.py"]:::tooling
     metric_status["metric_status.py"]:::tooling
@@ -166,6 +167,8 @@ graph LR
   app --> rules
   app --> session_state
   app --> tools
+  cluster_gaps --> failure_feed
+  cluster_gaps --> interaction_log
   composer --> branches
   composer --> profile
   composer --> rules
@@ -187,6 +190,7 @@ graph LR
   replayer --> interaction_log
   replayer --> log_reader
   sentinel --> branches
+  sentinel --> cluster_gaps
   sentinel --> dashboard_model
   sentinel --> failure_feed
   sentinel --> interaction_log
@@ -196,6 +200,7 @@ graph LR
   tools --> tool_loop
   app --> ext_Gradio__UI_
   classifier --> ext_OpenAI___Anthropic_API__via_LiteLLM_
+  cluster_gaps --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   generator --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   guardrail --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   ingest --> ext_ChromaDB
@@ -226,6 +231,7 @@ graph LR
 | `app.py` | Gradio chat interface for the digital twin. |
 | `branches.py` | Branch registry for classify-then-route orchestration (ADR-0003). |
 | `classifier.py` | Branch classifier (ADR-0003). |
+| `cluster_gaps.py` | Gap-clustering batch (issue #32). |
 | `composer.py` | Prompt composer — assembles per-branch system prompts (ADR-0003). |
 | `contact_log.py` | Contact-form record schema + JSONL writer/reader (#16). |
 | `dashboard_model.py` | Pure aggregations over interaction records — Sentinel's deep model (issue #29). |

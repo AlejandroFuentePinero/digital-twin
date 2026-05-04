@@ -61,6 +61,7 @@ MODULE_CATEGORY: dict[str, str] = {
     "metric_status": "Tooling",
     "failure_feed": "Tooling",
     "replayer": "Tooling",
+    "cluster_gaps": "Tooling",
 }
 
 UNCATEGORIZED = "Uncategorized"

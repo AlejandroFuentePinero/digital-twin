@@ -431,6 +431,50 @@ def test_thematic_blocks_partition_every_plottable_metric_exactly_once():
     }
 
 
+# ----- Cluster panel (issue #32) ---------------------------------------------
+
+
+def test_format_cluster_panel_renders_placeholder_when_data_is_none():
+    """When `gap_clusters.json` is absent (e.g. before the first batch run),
+    the panel renders a placeholder telling the operator how to populate it,
+    not a crash and not an empty section."""
+    from sentinel import format_cluster_panel
+
+    md = format_cluster_panel(None)
+    assert "cluster_gaps" in md, "must point the operator at the batch script"
+
+
+def test_format_cluster_panel_renders_label_count_and_sample_questions():
+    """Each cluster row surfaces label, count, and the example questions —
+    the three fields the issue spec calls out as 'Sentinel reads the cached file
+    and renders the clusters with label + count + sample questions'."""
+    from sentinel import format_cluster_panel
+
+    data = {
+        "generated_at": "2026-05-04T12:00:00+00:00",
+        "period_days": 7,
+        "clusters": [
+            {"label": "AWS / cloud", "count": 3,
+             "examples": ["Have you used AWS?", "AWS Lambda?", "Deployed to AWS?"]},
+            {"label": "kdb+ / time-series", "count": 2,
+             "examples": ["kdb+?", "q?"]},
+        ],
+    }
+    md = format_cluster_panel(data)
+
+    # Both labels and counts appear
+    assert "AWS / cloud" in md
+    assert "kdb+ / time-series" in md
+    assert "3" in md and "2" in md  # counts
+    # Every example question is rendered verbatim
+    assert "Have you used AWS?" in md
+    assert "AWS Lambda?" in md
+    assert "Deployed to AWS?" in md
+    assert "kdb+?" in md and "q?" in md
+    # The window the batch covered is surfaced (operator needs it for context)
+    assert "7" in md
+
+
 # ----- Replay-from-record formatter (issue #38) ------------------------------
 
 

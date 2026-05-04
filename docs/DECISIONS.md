@@ -5,6 +5,61 @@
 
 ---
 
+## Session 35 (2026-05-04) — `#32` shipped: Gap clustering batch + Cluster panel
+
+**Status:** [`#32`](https://github.com/AlejandroFuentePinero/digital-twin/issues/32) (Phase 4 slice 5/7) closed locally. Suite **343 → 354** (+11 tests). New module `src/cluster_gaps.py` with `Cluster` dataclass + `GapClusterer` deep module + `extract_gap_questions` / `write_clusters` / `read_clusters` pure helpers + `run_batch` orchestrator + argparse CLI (`--days`, `--out`). Sentinel gains a Gap Clusters panel below Trend Explorer that reads the cached `data/logs/gap_clusters.json` (gitignored — generated locally) and renders label · count · sample questions; placeholder rendered when the file is absent. Sentinel never calls the LLM at page-load — the batch + cached-file split keeps the dashboard fast and offline-safe. **Phase 4: 6 of 7 slices complete** (#29 + #35 + #36 + #31 + #30 + #38 + #32). Remaining: failure summarisation (#33), Flags + FlagDetector (#34).
+
+### What shipped — code
+
+| Commit | Scope |
+|---|---|
+| `<this-session>` | `#32` — new `src/cluster_gaps.py` (`Cluster` frozen dataclass + `GapClusterer.cluster(questions) -> list[Cluster]` with `litellm.completion` structured-output + tenacity retry; `BATCH_DEFAULT_DAYS=7`; `CLUSTER_MIN_SIZE=2` filter applied inside the clusterer; `extract_gap_questions(records, days)` reuses `failure_feed.classify_failure(r) == "gap"` as the canonical gap signal; `write_clusters` / `read_clusters` for the on-disk `{generated_at, period_days, clusters}` JSON shape; `run_batch(*, days, out_path, log_path=None)` orchestrator + argparse `main()`). `sentinel.py` gains `format_cluster_panel(data | None)` pure formatter + `CLUSTER_EMPTY_PLACEHOLDER` and a Gap Clusters panel block in `build_app` that re-reads on Refresh. `system_map` registers `cluster_gaps` under "Tooling"; `MAP.md` regenerated. +9 tests in new `test_cluster_gaps.py`, +2 in `test_sentinel.py`. |
+
+### TDD slices (4 waves, 11 tests)
+
+- **Wave A — `extract_gap_questions` (3 slices, 3 tests)**: keep `knew_answer=False` records (live-data canonical gap signal per Session 28); drop clean + refused (refused-precedence inherited from `classify_failure`); window-filter records outside the trailing N-day window via ISO timestamp lex-cmp (matches `dashboard_model.for_window`).
+- **Wave B — `GapClusterer` (2 slices, 2 tests)**: empty input short-circuits to `[]` without an LLM call (verified via `mock.call_count == 0`); structured-output JSON parses into `list[Cluster]` with `label` / `count` / `examples` populated from a `pydantic` `_ClustererResponse` model.
+- **Wave C — output filter + JSON shape + CLI (3 slices, 4 tests)**: clusters with `count < CLUSTER_MIN_SIZE` dropped; `write_clusters` + `read_clusters` round-trip the `{generated_at, period_days, clusters}` shape; `read_clusters` returns `None` when the file is absent (panel branch driver); `run_batch` end-to-end against a tmp `interactions.jsonl` + tmp `gap_clusters.json` + a mocked `litellm.completion` — asserts the LLM saw only in-window gap questions and the on-disk payload matches the expected shape post-min-size filter.
+- **Wave D — Sentinel formatter (2 slices, 2 tests)**: `format_cluster_panel(None)` renders the `cluster_gaps.py` placeholder; `format_cluster_panel(data)` renders `generated_at` + `period_days` + one entry per cluster (label · count · sample questions verbatim).
+
+### Live-log smoke
+
+`PYTHONPATH=src uv run python -c "..."` against the 85-record live log:
+
+- `extract_gap_questions(days=None)` → 8 questions (matches Session 28's "8/85 carry knew_answer=False" inventory).
+- `extract_gap_questions(days=7)` → 8 (whole log fits in a 7-day span).
+- Distribution of the 8: 3× kdb+/q (identical), 3× "How does the Digital Twin classify questions?" (identical), 1× collaborator-disagreement (singleton), 1× CUDA kernels (singleton). A real LLM run would surface 2 surviving clusters (kdb+ and Digital Twin self-reference) and drop both singletons under `CLUSTER_MIN_SIZE=2`.
+- `Sentinel.build_app()` boots cleanly. `gap_clusters.json` doesn't exist yet (file is gitignored and operator hasn't run the batch), so the Cluster panel renders the placeholder copy.
+
+### Design choices
+
+- **`extract_gap_questions` reuses `failure_feed.classify_failure`, doesn't reimplement the gap predicate.** The precedence rule (`refused` beats `gap`) is already canonical in Failure Feed; duplicating it would risk drift between "what the dashboard counts as a gap" and "what gets clustered." One source of truth.
+- **`CLUSTER_MIN_SIZE` filter inside `GapClusterer.cluster`, not at the call site.** The clusterer's contract is "never returns singletons" — a future direct caller (e.g. the Flag panel #34) gets the same guarantee without re-implementing it. Issue spec says clusters with `count < CLUSTER_MIN_SIZE` are dropped from the output, full stop.
+- **`gpt-4.1-nano` for the clusterer model.** Mirrors `classifier.py`. This is a one-shot batch over a small (≤ ~50 typical) question list with structured output — categorisation, not generation. The lack of nuance vs `gpt-4.1` is acceptable here; cost/latency win is the right trade.
+- **`read_clusters` returns `None` on missing file (not raise, not `{}`).** Matches the panel's `if data is None` branch shape — same idiom as elsewhere in the codebase. An empty dict would force the formatter to disambiguate "no file" vs "empty clusters list" twice.
+- **Cluster file lives at `data/logs/gap_clusters.json` (gitignored).** Sentinel reads from a known path; the CLI writes there by default. Per-operator local artifact, not source of truth — not version controlled.
+- **`run_batch` accepts an optional `log_path` for testability.** Production CLI uses the canonical `LocalReader()` path; tests inject a tmp log file. Same seam pattern as `replayer.replay`'s `reader` injection.
+- **`pydantic._ClustererResponse` as private model, separate from public `Cluster` dataclass.** The pydantic model is the structured-output schema for `litellm.completion`; the dataclass is what the rest of the codebase consumes (Sentinel formatter, on-disk JSON via `asdict`). Keeping them split lets the LLM-facing schema evolve (e.g. add a `confidence` field for the LLM's own confidence) without rippling into the cluster-display surface.
+- **CLI is a thin shell over `run_batch`.** Argparse → `run_batch` → print path. Five lines. Scripts stay debuggable when the orchestration logic lives in a callable function tests can drive directly.
+- **No tests on the Gradio panel wiring itself.** Per `TESTING.md` `sentinel.py` partial-exemption — pure formatter tested, panel + Refresh-button hookup verified by `build_app` smoke + manual launch. Mocking `gr.update` would couple tests to internal Gradio shape.
+- **Refresh button re-reads the cached file.** The batch may have been re-run between dashboard sessions; tying the panel to file mtime would surprise the operator who explicitly hit Refresh expecting a re-load. Coherent with the existing Refresh semantics for the Health Overview + Failure Feed.
+
+### Verified
+
+- `uv run pytest -q` → **354 passed** (343 → 354; +9 in `test_cluster_gaps.py`, +2 in `test_sentinel.py`).
+- Live runtime: `PYTHONPATH=src uv run python -c "from sentinel import build_app; app = build_app()"` → boots cleanly against the 85-record live log; Cluster panel renders the placeholder copy (no `gap_clusters.json` yet).
+- Live-log `extract_gap_questions` smoke matches Session 28's 8-gap inventory.
+
+### Outstanding
+
+- **Push the local commits** — Sessions 28+29+30+31+32+33+34 + this session's `#32` commit are local; `main` push is harness-protected.
+- **Strip `needs-triage`** from `#32` (this session) and from carry-over `#33` `#34`.
+- **Run the batch once** to populate `data/logs/gap_clusters.json` so the panel renders real data on the next launch (out of scope for this commit — gitignored artifact, operator action).
+- **Anomaly annotations on Trend Explorer** (carry-over from Session 33) — wire in once `#34` ships.
+- **Next: `#33` (failure summarisation + Deflection panel) ∥ `#34` (Flags + FlagDetector)**. Both unblocked.
+
+---
+
 ## Session 34 (2026-05-04) — `#38` shipped: Replay-from-record affordance
 
 **Status:** [`#38`](https://github.com/AlejandroFuentePinero/digital-twin/issues/38) (Phase 4 slice 4.5) closed locally. Suite **333 → 343** (+10 tests). New module `src/replayer.py` with `replay(record) -> ReplayResult`; Failure Feed drilldown gains a `▶ Replay against current pipeline` button that re-runs a logged failure's question through the current Pipeline and renders side-by-side comparison with branch / confidence / gap-phrase diff hints. **Phase 4: 5 of 7 slices complete** (#29 + #35 + #36 + #31 + #30 + #38). Remaining: gap clustering (#32), failure summarisation (#33), Flags + FlagDetector (#34).
