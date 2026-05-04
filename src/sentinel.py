@@ -73,7 +73,8 @@ from metric_status import THRESHOLDS, WoWDelta, metric_status, wow_delta
 
 # Leftmost column = most recent. Operator opens Sentinel to check "what happened
 # this week" first; broad context (Global) sits to the right as reference.
-WINDOWS = [("7d", 7), ("30d", 30), ("Global", None)]
+# 90d sits between 30d and Global so the column scan reads short → long.
+WINDOWS = [("7d", 7), ("30d", 30), ("90d", 90), ("Global", None)]
 HEADLINE_WINDOW_DAYS = 7  # Drives the status-banner counters
 
 # Branch dropdown choices in Failure Feed.
@@ -236,7 +237,8 @@ body, .gradio-container {
 }
 .metric-row {
     display: grid;
-    grid-template-columns: 1.6fr repeat(3, 1fr) 1fr;
+    /* label + N windowed values — N = len(WINDOWS) (currently 4: 7d/30d/90d/Global). */
+    grid-template-columns: 1.6fr repeat(4, 1fr);
     column-gap: 14px;
     align-items: baseline;
     padding: 4px 8px;
@@ -281,7 +283,9 @@ body, .gradio-container {
 .delta.stable    { color: var(--text-muted); }
 .delta.muted     { color: var(--text-muted); }
 .metric-row .metric-value-inline {
-    grid-column: 2 / span 3;
+    /* Inline mode: the joined "9.4% / 9.4% / 9.4% / 9.4%" cell spans all
+       windowed value columns. */
+    grid-column: 2 / -1;
     text-align: right;
     color: var(--text-primary);
     padding: 1px 6px;
@@ -1018,8 +1022,10 @@ def _render_metric_row(
     prior_raws = [getter(p) if p is not None else None for p in priors]
     divergent = _is_divergent(formatted)
 
+    n_windows = len(models)
     if display_mode == "inline":
-        cells = [_inline_value_cell(metric_name, raws, formatted, divergent), "<div></div>"]
+        # One spanning cell that joins all N values inline.
+        cells = [_inline_value_cell(metric_name, raws, formatted, divergent)]
     elif display_mode == "stacked":
         cells = []
         for i, (raw, fmt) in enumerate(zip(raws, formatted)):
@@ -1027,17 +1033,20 @@ def _render_metric_row(
             cells.append(_value_cell(
                 metric_name, raw, fmt, divergent=divergent, delta_html=delta,
             ))
-        cells.append("<div></div>")
-    else:  # collapse-when-same (default)
+    else:  # collapse-when-same
         if not divergent:
+            # Render the value in column 1; tag the inline suffix onto its
+            # delta_html so the "· same across windows" hint sits beside the
+            # value rather than occupying its own column. The remaining
+            # window columns render empty so the grid stays aligned.
             delta = _delta_inline(metric_name, raws[0], prior_raws[0], history_days)
-            suffix = "<div class='metric-suffix'>· same across windows</div>"
+            suffix = "<span class='metric-suffix'> · same across windows</span>"
             cells = [
-                _value_cell(metric_name, raws[0], formatted[0], divergent=False, delta_html=delta),
-                "<div></div>",
-                "<div></div>",
-                suffix,
+                _value_cell(metric_name, raws[0], formatted[0], divergent=False,
+                            delta_html=delta + suffix),
             ]
+            for _ in range(n_windows - 1):
+                cells.append("<div></div>")
         else:
             cells = []
             for i, (raw, fmt) in enumerate(zip(raws, formatted)):
@@ -1045,7 +1054,6 @@ def _render_metric_row(
                 cells.append(_value_cell(
                     metric_name, raw, fmt, divergent=True, delta_html=delta,
                 ))
-            cells.append("<div></div>")
     return (
         f"<div class='metric-row row-{severity}'>"
         f"<div class='metric-label'>{html.escape(label)}</div>"
@@ -1083,13 +1091,16 @@ def format_metrics_overview(
             annotated.append((severity, spec))
         annotated.sort(key=lambda pair: _SEVERITY_RANK.get(pair[0], 99))
 
+        # One header cell per window — derived from WINDOWS so adding a window
+        # doesn't drift from the body cells below.
+        window_headers = "".join(
+            f"<div class='col-header numeric'>{label}</div>"
+            for label, _ in WINDOWS
+        )
         rows = [
             "<div class='metric-row header'>"
             "<div class='col-header'></div>"
-            "<div class='col-header numeric'>7d</div>"
-            "<div class='col-header numeric'>30d</div>"
-            "<div class='col-header numeric'>Global</div>"
-            "<div class='col-header'></div>"
+            f"{window_headers}"
             "</div>"
         ]
         for severity, (label, metric_name, getter, formatter) in annotated:
@@ -1520,9 +1531,12 @@ def render_trend_plot(
     chart renders this dashboard does."""
     df = chart_dataframe(model, metric, days=days, prior_model=prior_model)
 
-    # Wider canvas (10 inches) so the chart fills its card; the surrounding
-    # gr.Plot container scales the SVG down responsively.
-    fig = Figure(figsize=(10, height / 100), dpi=100, facecolor="#1c1c20")
+    # Wider canvas (10 inches) so the chart fills its card. ``dpi=200`` so the
+    # rasterised PNG that gr.Plot ships to the browser stays sharp when
+    # zoomed in (operator directive — chart rendering looked low-res before).
+    # Effective output: 10in × 200dpi = 2000px wide; downscales cleanly into
+    # any container width.
+    fig = Figure(figsize=(10, height / 100), dpi=200, facecolor="#1c1c20")
     ax = fig.add_subplot(111)
     ax.set_facecolor("#1c1c20")
     if df.empty:
