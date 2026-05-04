@@ -705,73 +705,76 @@ body, .gradio-container {
     margin: 4px 0 10px;
 }
 
-/* Health snapshot card — 4 metrics in one row */
-.canary-health-snapshot {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
-    margin: 6px 0 12px;
-}
-.canary-health-cell {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--border-strong);
-    border-radius: 4px;
-    padding: 10px 12px;
-}
-.canary-health-cell.sev-alert    { border-left-color: var(--alert);   }
-.canary-health-cell.sev-warning  { border-left-color: var(--warning); }
-.canary-health-cell.sev-healthy  { border-left-color: var(--healthy); }
-.canary-health-cell .cell-label {
-    font-size: 0.72em;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-secondary);
-    margin-bottom: 4px;
-}
-.canary-health-cell .cell-value {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 1.05em;
-    color: var(--text-primary);
-    font-weight: 500;
-}
-
-/* Drift-kind mini bar chart */
-.canary-drift-kinds {
+/* Three health blocks — Drift / Quality / Latency. Each is a compact
+   table with Metric | Current | Δ baseline | Trend (sparkline). */
+.canary-block {
     background: var(--bg-surface);
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: 10px 14px;
-    margin: 6px 0 12px;
+    margin: 8px 0;
 }
-.canary-drift-kind-row {
-    display: grid;
-    grid-template-columns: 180px 1fr 30px;
-    gap: 10px;
-    align-items: center;
-    margin: 3px 0;
-}
-.canary-drift-kind-label {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.82em;
+.canary-block-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: var(--text-secondary);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+    margin-bottom: 6px;
 }
-.canary-drift-kind-bar-wrap {
-    background: var(--bg-base);
-    border-radius: 2px;
-    height: 10px;
-    overflow: hidden;
+.canary-block-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9em;
 }
-.canary-drift-kind-bar {
-    background: var(--alert);
-    height: 100%;
-    transition: width 0.2s ease;
+.canary-block-table th {
+    text-align: left;
+    font-size: 0.74em;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    font-weight: 600;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
 }
-.canary-drift-kind-count {
+.canary-block-table th:nth-child(2),
+.canary-block-table th:nth-child(3) { text-align: right; }
+.canary-block-table th:nth-child(4) { text-align: center; width: 140px; }
+.canary-block-row td {
+    padding: 5px 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+}
+.canary-block-row:last-child td { border-bottom: 0; }
+.canary-block-label {
+    color: var(--text-primary);
+}
+.canary-block-label em {
+    color: var(--text-muted);
+    font-style: normal;
+    font-size: 0.85em;
+    margin-left: 4px;
+}
+.canary-block-current {
     text-align: right;
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.85em;
     color: var(--text-primary);
+    font-weight: 500;
+}
+.canary-block-delta {
+    text-align: right;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+}
+.canary-block-spark {
+    text-align: center;
+    width: 140px;
+}
+.canary-block-spark .spark { height: 22px; vertical-align: middle; }
+.canary-block-spark .spark-empty {
+    color: var(--text-muted);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 /* Stratified summary chips */
@@ -1974,120 +1977,315 @@ def format_canary_drift_summary(
     )
 
 
-def format_canary_health_snapshot(
-    flags: list[CanaryDriftFlag],
-    latest_run_records: list[InteractionRecord],
-    corpus,
+def render_sparkline_html(
+    values: list[float | None],
+    baseline: float | None,
 ) -> str:
-    """4-metric glance card. Renders even on zero drift (healthy state).
+    """Render a sparkline as a base64-encoded PNG <img> tag. Returns a `—`
+    placeholder when there's nothing to draw (≤1 valid value)."""
+    fig = render_sparkline(values, baseline)
+    if fig is None:
+        return "<span class='spark-empty'>—</span>"
+    import base64
+    from io import BytesIO
 
-    Cells: drift count (severity-coloured), branch_match_rate (canary-only
-    classifier-correctness), tool_uptake_on_warranted (clean denominator —
-    LIMITATIONS::P8 fix), first-attempt pass rate (1 − guardrail rejection
-    rate). Empty when no canary records exist."""
+    buf = BytesIO()
+    fig.savefig(
+        buf, format="png", bbox_inches="tight", pad_inches=0.05,
+        facecolor=fig.get_facecolor(),
+    )
+    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"<img class='spark' src='data:image/png;base64,{encoded}' alt='trend' />"
+
+
+def _delta_cell(current: float | None, baseline: float | None,
+                *, as_pct: bool = True, lower_is_better: bool = True) -> str:
+    """`Δ baseline` cell — colour-coded delta. `lower_is_better=True` for
+    rates / latency (delta>0 is degrading); `False` for things where higher
+    is better (pass rate, branch_match_rate)."""
+    if current is None or baseline is None:
+        return "<span class='delta'>—</span>"
+    delta = current - baseline
+    if abs(delta) < 1e-9:
+        return "<span class='delta stable'>=</span>"
+    is_degrading = (delta > 0) if lower_is_better else (delta < 0)
+    cls = "delta degrading" if is_degrading else "delta improving"
+    sign = "+" if delta > 0 else ""
+    body = f"{sign}{delta * 100:.1f}pp" if as_pct else f"{sign}{delta:.0f}"
+    return f"<span class='{cls}'>{body}</span>"
+
+
+def _block_row(
+    label: str, current_str: str, delta_html: str, sparkline_html: str,
+) -> str:
+    return (
+        "<tr class='canary-block-row'>"
+        f"<td class='canary-block-label'>{label}</td>"
+        f"<td class='canary-block-current'>{current_str}</td>"
+        f"<td class='canary-block-delta'>{delta_html}</td>"
+        f"<td class='canary-block-spark'>{sparkline_html}</td>"
+        "</tr>"
+    )
+
+
+def _block_table(title: str, rows_html: str) -> str:
+    return (
+        f"<div class='canary-block'>"
+        f"<div class='canary-block-title'>{title}</div>"
+        "<table class='canary-block-table'>"
+        "<thead><tr>"
+        "<th>Metric</th><th>Current</th><th>Δ baseline</th><th>Trend</th>"
+        "</tr></thead>"
+        f"<tbody>{rows_html}</tbody></table>"
+        "</div>"
+    )
+
+
+def _canary_history_for_metric(
+    all_records: list[InteractionRecord],
+    metric_fn,
+    *,
+    last_n: int = CANARY_SPARK_WINDOW,
+) -> list[float | None]:
+    """Per-run trail of `metric_fn(DashboardModel(records))` values. Used for
+    metrics that aren't in METRIC_GETTERS (e.g. corpus-dependent ones, or
+    derived metrics like first_attempt_pass_rate)."""
+    runs = _canary_runs_grouped(all_records)[-last_n:]
+    return [
+        metric_fn(DashboardModel(rs, include_canary=True, only_canary=True))
+        for _, rs in runs
+    ]
+
+
+def format_canary_health_blocks(
+    latest_run_records: list[InteractionRecord],
+    baseline_records: list[InteractionRecord],
+    all_records: list[InteractionRecord],
+    corpus,
+    flags: list[CanaryDriftFlag],
+) -> str:
+    """Three thematic health blocks (Drift / Quality / Latency) per the
+    issue #39 spec. Each row carries `Metric | Current | Δ baseline | Trend
+    (12-run sparkline)`. Cold-start safe — all cells degrade to `—` when
+    history is too thin to compute."""
     if not latest_run_records:
         return ""
 
-    major = sum(1 for f in flags if f.severity == "major")
-    minor = sum(1 for f in flags if f.severity == "minor")
-    if major:
-        drift_class = "alert"
-    elif minor:
-        drift_class = "warning"
-    else:
-        drift_class = "healthy"
-
-    model = DashboardModel(
+    latest_model = DashboardModel(
         latest_run_records, include_canary=True, only_canary=True,
     )
-    branch_match = model.branch_match_rate(corpus)
-    tool_uptake = model.tool_uptake_on_warranted(corpus)
-    pass_rate = (
-        1 - model.guardrail_rejection_rate if model.records else None
+    baseline_model = DashboardModel(
+        baseline_records, include_canary=True, only_canary=True,
+    ) if baseline_records else None
+
+    def _baseline(fn):
+        if baseline_model is None:
+            return None
+        return fn(baseline_model)
+
+    def _baseline_with_corpus(fn):
+        if baseline_model is None:
+            return None
+        return fn(baseline_model, corpus)
+
+    # ---- Block 1: Drift ----------------------------------------------------
+    from collections import Counter
+    kind_counts = Counter(f.kind for f in flags)
+    severity_counts = Counter(f.severity for f in flags)
+
+    drift_rows = (
+        _block_row(
+            "Total drift flags",
+            str(len(flags)),
+            "<span class='delta'>—</span>",  # no historical comparison; current run defines it
+            "<span class='spark-empty'>—</span>",
+        )
+        + _block_row(
+            "Major drift",
+            str(severity_counts.get("major", 0)),
+            "<span class='delta'>—</span>",
+            "<span class='spark-empty'>—</span>",
+        )
+        + _block_row(
+            "Minor drift",
+            str(severity_counts.get("minor", 0)),
+            "<span class='delta'>—</span>",
+            "<span class='spark-empty'>—</span>",
+        )
     )
+
+    # ---- Block 2: Quality --------------------------------------------------
+    pass_rate = (
+        1 - latest_model.guardrail_rejection_rate
+        if latest_model.records else None
+    )
+    pass_rate_baseline = (
+        1 - baseline_model.guardrail_rejection_rate
+        if baseline_model and baseline_model.records else None
+    )
+    pass_history = _canary_history_for_metric(
+        all_records,
+        lambda m: 1 - m.guardrail_rejection_rate if m.records else None,
+    )
+
+    branch_match = latest_model.branch_match_rate(corpus)
+    tool_uptake = latest_model.tool_uptake_on_warranted(corpus)
+    tool_uptake_history = _canary_history_for_metric(
+        all_records,
+        lambda m: m.tool_uptake_on_warranted(corpus),
+    )
+    branch_match_history = _canary_history_for_metric(
+        all_records,
+        lambda m: m.branch_match_rate(corpus),
+    )
+
+    quality_rows = (
+        _block_row(
+            "First-attempt pass rate",
+            _fmt_pct(pass_rate),
+            _delta_cell(pass_rate, pass_rate_baseline, lower_is_better=False),
+            render_sparkline_html(pass_history, pass_rate_baseline),
+        )
+        + _block_row(
+            "Gap rate",
+            _fmt_pct(latest_model.gap_rate),
+            _delta_cell(
+                latest_model.gap_rate, _baseline(lambda m: m.gap_rate),
+            ),
+            render_sparkline_html(
+                canary_metric_history(all_records, "gap_rate"),
+                _baseline(lambda m: m.gap_rate),
+            ),
+        )
+        + _block_row(
+            "Refusal rate",
+            _fmt_pct(latest_model.refusal_rate),
+            _delta_cell(
+                latest_model.refusal_rate, _baseline(lambda m: m.refusal_rate),
+            ),
+            render_sparkline_html(
+                canary_metric_history(all_records, "refusal_rate"),
+                _baseline(lambda m: m.refusal_rate),
+            ),
+        )
+        + _block_row(
+            "Branch match rate <em>(canary-only)</em>",
+            _fmt_pct(branch_match),
+            _delta_cell(
+                branch_match,
+                _baseline_with_corpus(lambda m, c: m.branch_match_rate(c)),
+                lower_is_better=False,
+            ),
+            render_sparkline_html(
+                branch_match_history,
+                _baseline_with_corpus(lambda m, c: m.branch_match_rate(c)),
+            ),
+        )
+        + _block_row(
+            "Mean classification confidence",
+            _fmt_num(latest_model.mean_classification_confidence, ndigits=3),
+            "<span class='delta'>—</span>",
+            "<span class='spark-empty'>—</span>",
+        )
+        + _block_row(
+            "Tool uptake on warranted <em>(clean denominator)</em>",
+            _fmt_pct(tool_uptake),
+            _delta_cell(
+                tool_uptake,
+                _baseline_with_corpus(lambda m, c: m.tool_uptake_on_warranted(c)),
+                lower_is_better=False,
+            ),
+            render_sparkline_html(
+                tool_uptake_history,
+                _baseline_with_corpus(lambda m, c: m.tool_uptake_on_warranted(c)),
+            ),
+        )
+        + _block_row(
+            "Tool call success rate",
+            _fmt_pct(latest_model.tool_call_success_rate),
+            _delta_cell(
+                latest_model.tool_call_success_rate,
+                _baseline(lambda m: m.tool_call_success_rate),
+                lower_is_better=False,
+            ),
+            "<span class='spark-empty'>—</span>",
+        )
+    )
+
+    # ---- Block 3: Latency --------------------------------------------------
+    def _stage_p95(model, stage):
+        return model.latency_percentiles(stage).get(95)
+
+    def _delta_ms(current, baseline):
+        if current is None or baseline is None:
+            return "<span class='delta'>—</span>"
+        delta = current - baseline
+        if abs(delta) < 1:
+            return "<span class='delta stable'>=</span>"
+        cls = "delta degrading" if delta > 0 else "delta improving"
+        sign = "+" if delta > 0 else ""
+        return f"<span class='{cls}'>{sign}{delta:.0f}ms</span>"
+
+    latency_rows_data = [
+        ("Total p95", "total"),
+        ("Classifier p95", "classifier"),
+        ("Retrieval p95", "retrieval"),
+        ("Generation p95", "generation"),
+        ("Guardrail p95", "guardrail"),
+    ]
+    latency_rows = ""
+    for label, stage in latency_rows_data:
+        cur = _stage_p95(latest_model, stage)
+        base = (
+            _stage_p95(baseline_model, stage)
+            if baseline_model and baseline_model.records else None
+        )
+        history = _canary_history_for_metric(
+            all_records, lambda m, s=stage: _stage_p95(m, s),
+        )
+        latency_rows += _block_row(
+            label,
+            _fmt_seconds(cur),
+            _delta_ms(cur, base),
+            render_sparkline_html(history, base),
+        )
 
     return (
-        "<div class='canary-health-snapshot'>"
-        f"<div class='canary-health-cell sev-{drift_class}'>"
-        "<div class='cell-label'>Drift</div>"
-        f"<div class='cell-value'>{major} major · {minor} minor</div>"
-        "</div>"
-        "<div class='canary-health-cell'>"
-        "<div class='cell-label'>Branch match</div>"
-        f"<div class='cell-value'>{_fmt_pct(branch_match)}</div>"
-        "</div>"
-        "<div class='canary-health-cell'>"
-        "<div class='cell-label'>Tool uptake (warranted)</div>"
-        f"<div class='cell-value'>{_fmt_pct(tool_uptake)}</div>"
-        "</div>"
-        "<div class='canary-health-cell'>"
-        "<div class='cell-label'>First-attempt pass</div>"
-        f"<div class='cell-value'>{_fmt_pct(pass_rate)}</div>"
-        "</div>"
-        "</div>"
+        _block_table("Drift", drift_rows)
+        + _block_table("Quality", quality_rows)
+        + _block_table("Latency", latency_rows)
     )
-
-
-_DRIFT_KINDS_ORDER = (
-    "branch_changed",
-    "event_type_changed",
-    "retry_depth_changed",
-    "chunk_set_changed",
-    "latency_p95_regression",
-)
-
-
-def format_canary_drift_kinds_bar(flags: list[CanaryDriftFlag]) -> str:
-    """Horizontal mini bar chart: count of drift flags per kind. HTML divs
-    (no matplotlib wiring) so it lives inside a Markdown component without
-    refresh plumbing."""
-    from collections import Counter
-
-    counts = Counter(f.kind for f in flags)
-    max_count = max(counts.values()) if counts else 1
-    rows = []
-    for kind in _DRIFT_KINDS_ORDER:
-        n = counts.get(kind, 0)
-        width_pct = (n / max_count) * 100 if n else 2  # 2% nub for zero
-        rows.append(
-            "<div class='canary-drift-kind-row'>"
-            f"<div class='canary-drift-kind-label'>{kind}</div>"
-            "<div class='canary-drift-kind-bar-wrap'>"
-            f"<div class='canary-drift-kind-bar' style='width: {width_pct}%'></div>"
-            "</div>"
-            f"<div class='canary-drift-kind-count'>{n}</div>"
-            "</div>"
-        )
-    return f"<div class='canary-drift-kinds'>{''.join(rows)}</div>"
 
 
 def format_canary_stratified(flags: list[CanaryDriftFlag], corpus) -> str:
-    """Stratified summary chips: drift counts grouped by expected_branch +
-    by category. Lets the operator scan 'where is drift concentrated?' at
-    a glance, above the per-flag cards."""
+    """Stratified summary chips: drift counts grouped three ways — by
+    expected_branch, by category, and by drift kind. Lets the operator scan
+    'where is drift concentrated?' before scrolling cards. Renders an
+    empty-state line when no drift fired."""
     if not flags:
         return (
             "<div class='canary-stratified-empty'>"
             "No drift this run."
             "</div>"
         )
+    from collections import Counter
+
     summary = stratified_summary(flags, corpus)
     by_branch = summary["by_branch"]
     by_category = summary["by_category"]
+    by_kind = Counter(f.kind for f in flags)
 
-    branch_chips = " · ".join(
-        f"<span class='canary-chip'>{html.escape(b)} <strong>{c}</strong></span>"
-        for b, c in sorted(by_branch.items(), key=lambda x: -x[1])
-    ) or "—"
-    category_chips = " · ".join(
-        f"<span class='canary-chip'>{html.escape(c)} <strong>{n}</strong></span>"
-        for c, n in sorted(by_category.items(), key=lambda x: -x[1])
-    ) or "—"
+    def _chips(items):
+        return " · ".join(
+            f"<span class='canary-chip'>{html.escape(str(k))} <strong>{v}</strong></span>"
+            for k, v in sorted(items, key=lambda x: -x[1])
+        ) or "—"
 
     return (
         "<div class='canary-stratified'>"
-        f"<div><span class='canary-stratified-label'>By branch:</span> {branch_chips}</div>"
-        f"<div><span class='canary-stratified-label'>By category:</span> {category_chips}</div>"
+        f"<div><span class='canary-stratified-label'>By branch:</span> {_chips(by_branch.items())}</div>"
+        f"<div><span class='canary-stratified-label'>By category:</span> {_chips(by_category.items())}</div>"
+        f"<div><span class='canary-stratified-label'>By kind:</span> {_chips(by_kind.items())}</div>"
         "</div>"
     )
 
@@ -2753,16 +2951,23 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 canary_banner_md = gr.Markdown(format_canary_drift_summary(
                     initial_pointer, initial_latest_run, initial_drift_flags
                 ))
-                # Glance view: 4-metric health snapshot, drift-kind mini
-                # bar chart, stratified-by-branch + by-category chips.
-                # Sit above the per-flag cards so the operator gets
-                # "what's the shape of drift?" before they scroll the cards.
-                canary_health_md = gr.Markdown(format_canary_health_snapshot(
-                    initial_drift_flags, initial_latest_run, canary_corpus,
+                # Three thematic health blocks per the issue #39 spec —
+                # Drift / Quality / Latency, each with Current | Δ baseline |
+                # Trend (12-run sparkline) columns. The glance view; sit
+                # immediately under the banner so the operator reads health
+                # before scrolling.
+                initial_baseline_records = resolve_baseline_records(
+                    [r for r in reader.read() if r.is_canary],
+                ) if initial_pointer is not None else []
+                initial_all_records = reader.read()
+                canary_blocks_md = gr.Markdown(format_canary_health_blocks(
+                    initial_latest_run, initial_baseline_records,
+                    initial_all_records, canary_corpus, initial_drift_flags,
                 ))
-                canary_drift_kinds_md = gr.Markdown(format_canary_drift_kinds_bar(
-                    initial_drift_flags
-                ))
+                # Stratified summary chips — drift counts grouped by branch,
+                # category, and kind. Different signal from the blocks (which
+                # are absolute health): chips answer "where is drift
+                # concentrated?", blocks answer "what's the metric value?"
                 canary_stratified_md = gr.Markdown(format_canary_stratified(
                     initial_drift_flags, canary_corpus,
                 ))
@@ -2973,10 +3178,14 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
             canary_banner_html = format_canary_drift_summary(
                 baseline_pointer, latest_run_recs, drift_flags,
             )
-            canary_health_html = format_canary_health_snapshot(
-                drift_flags, latest_run_recs, corpus,
+            canary_baseline_recs = (
+                resolve_baseline_records([r for r in all_records if r.is_canary])
+                if baseline_pointer is not None else []
             )
-            canary_drift_kinds_html = format_canary_drift_kinds_bar(drift_flags)
+            canary_blocks_html = format_canary_health_blocks(
+                latest_run_recs, canary_baseline_recs,
+                all_records, corpus, drift_flags,
+            )
             canary_stratified_html = format_canary_stratified(drift_flags, corpus)
             canary_drift_html = (
                 "\n".join(format_canary_drift_card(f) for f in drift_flags)
@@ -3003,8 +3212,7 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 format_deflection_panel(read_summary("deflection", DEFAULT_SUMMARIES_DIR)),
                 format_kb_coverage_panel(_kb_coverage_entries(new_model.records)),
                 canary_banner_html,
-                canary_health_html,
-                canary_drift_kinds_html,
+                canary_blocks_html,
                 canary_stratified_html,
                 canary_drift_html,
                 canary_table_html,
@@ -3037,8 +3245,7 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 *feed_session_states,
                 cluster_md, deflection_md, kb_coverage_md,
                 canary_banner_md,
-                canary_health_md,
-                canary_drift_kinds_md,
+                canary_blocks_md,
                 canary_stratified_md,
                 canary_drift_md,
                 canary_table_md,
