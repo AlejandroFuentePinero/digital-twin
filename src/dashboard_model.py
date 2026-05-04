@@ -167,6 +167,13 @@ class DashboardModel:
         return sum(1 for r in technical if r.tool_calls) / len(technical)
 
     @property
+    def tool_call_count(self) -> int:
+        """Total number of tool invocations across all records — volume signal
+        in the Tool use block. Pairs with ``technical_tool_uptake_rate``
+        (rate) and ``tool_call_success_rate`` (quality)."""
+        return sum(len(r.tool_calls) for r in self.records)
+
+    @property
     def tool_call_success_rate(self) -> float | None:
         all_calls = [c for r in self.records for c in r.tool_calls]
         if not all_calls:

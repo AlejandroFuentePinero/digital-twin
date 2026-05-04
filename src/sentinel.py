@@ -920,7 +920,10 @@ METRIC_SPECS: list[tuple[str, list[tuple]]] = [
         ("Contact-conversion rate",    "contact_conversion_rate",     lambda m: m.contact_conversion_rate, _fmt_pct),
     ]),
     ("Tool use", [
-        ("Tool uptake (TECHNICAL)",    "technical_tool_uptake_rate",  lambda m: m.technical_tool_uptake_rate, _fmt_pct),
+        ("Tool calls (count)",         None,                          lambda m: m.tool_call_count, str),
+        # Tool uptake is orientation only — see metric_status.py for the
+        # denominator caveat (not every TECHNICAL turn warrants a tool call).
+        ("Tool uptake (TECHNICAL)",    None,                          lambda m: m.technical_tool_uptake_rate, _fmt_pct),
         ("Tool-call success rate",     None,                          lambda m: m.tool_call_success_rate, _fmt_pct),
     ]),
     ("Latency", [

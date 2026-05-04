@@ -31,18 +31,18 @@ def test_lower_is_better_metric_at_healthy_boundary_is_healthy():
 
 
 def test_higher_is_better_metric_above_healthy_threshold_is_healthy():
-    """TECHNICAL tool-uptake ≥ 70% → healthy. Inversion: 'higher is better'."""
-    assert metric_status("technical_tool_uptake_rate", 0.75) == "healthy"
+    """contact_conversion_rate ≥ 10% → healthy. Inversion: 'higher is better'."""
+    assert metric_status("contact_conversion_rate", 0.15) == "healthy"
 
 
 def test_higher_is_better_metric_in_warning_band_is_warning():
-    """TECHNICAL tool-uptake between 50% and 70% → warning."""
-    assert metric_status("technical_tool_uptake_rate", 0.60) == "warning"
+    """contact_conversion_rate between 5% and 10% → warning."""
+    assert metric_status("contact_conversion_rate", 0.07) == "warning"
 
 
 def test_higher_is_better_metric_below_warning_threshold_is_alert():
-    """TECHNICAL tool-uptake < 50% → alert."""
-    assert metric_status("technical_tool_uptake_rate", 0.30) == "alert"
+    """contact_conversion_rate < 5% → alert."""
+    assert metric_status("contact_conversion_rate", 0.02) == "alert"
 
 
 def test_orientation_metric_returns_none_status():
@@ -61,7 +61,7 @@ def test_unknown_metric_name_returns_none():
 def test_none_value_returns_none_status():
     """A metric whose underlying value is None (e.g. empty dataset) gets no badge."""
     assert metric_status("gap_rate", None) is None
-    assert metric_status("technical_tool_uptake_rate", None) is None
+    assert metric_status("contact_conversion_rate", None) is None
 
 
 def test_wow_delta_for_lower_is_better_increase_is_degrading():
@@ -83,16 +83,17 @@ def test_wow_delta_for_lower_is_better_decrease_is_improving():
 
 
 def test_wow_delta_for_higher_is_better_increase_is_improving():
-    """TECHNICAL tool-uptake up week-over-week → ↑ arrow + 'improving' (more tool use is better)."""
-    delta = wow_delta("technical_tool_uptake_rate", current=0.80, prior=0.60)
+    """contact_conversion_rate up week-over-week → ↑ arrow + 'improving'
+    (more conversions is better)."""
+    delta = wow_delta("contact_conversion_rate", current=0.18, prior=0.10)
     assert delta is not None
     assert delta.arrow == "↑"
     assert delta.direction == "improving"
 
 
 def test_wow_delta_for_higher_is_better_decrease_is_degrading():
-    """TECHNICAL tool-uptake down → ↓ arrow + 'degrading'."""
-    delta = wow_delta("technical_tool_uptake_rate", current=0.40, prior=0.65)
+    """contact_conversion_rate down → ↓ arrow + 'degrading'."""
+    delta = wow_delta("contact_conversion_rate", current=0.04, prior=0.12)
     assert delta is not None
     assert delta.arrow == "↓"
     assert delta.direction == "degrading"

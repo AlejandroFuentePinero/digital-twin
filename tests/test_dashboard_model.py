@@ -632,17 +632,18 @@ def test_time_series_by_day_with_days_none_spans_earliest_record_to_today():
     assert all(v is None for v in middle_values)
 
 
-def test_metric_getters_keys_match_threshold_registry():
-    """Every thresholded metric must have a getter so the Trend Explorer can plot it,
-    and getters must not exist for metrics that have no threshold (would be unused).
-    Forcing-function: adding a metric to one registry forces an entry in the other."""
+def test_metric_getters_covers_every_thresholded_metric():
+    """Every thresholded metric must have a getter so the Trend Explorer can
+    plot it. The reverse isn't required — a metric can have a getter (for
+    trending / orientation display) without a threshold (e.g. tool uptake,
+    where the denominator caveat makes the threshold misleading)."""
     from dashboard_model import METRIC_GETTERS
     from metric_status import THRESHOLDS
 
-    assert set(METRIC_GETTERS) == set(THRESHOLDS), (
-        "METRIC_GETTERS and THRESHOLDS must enumerate the same plottable metrics. "
-        f"Missing getters: {set(THRESHOLDS) - set(METRIC_GETTERS)}; "
-        f"extra getters: {set(METRIC_GETTERS) - set(THRESHOLDS)}"
+    missing = set(THRESHOLDS) - set(METRIC_GETTERS)
+    assert not missing, (
+        f"Thresholded metrics without a getter: {missing}. "
+        "Add lambdas to METRIC_GETTERS so the Trend Explorer can plot them."
     )
 
 
