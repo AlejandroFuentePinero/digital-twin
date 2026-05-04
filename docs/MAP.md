@@ -144,6 +144,7 @@ graph LR
     replayer["replayer.py"]:::tooling
     sample_chunks["sample_chunks.py"]:::tooling
     sentinel["sentinel.py"]:::tooling
+    summarize_failures["summarize_failures.py"]:::tooling
     system_map["system_map.py"]:::tooling
   end
 
@@ -192,11 +193,14 @@ graph LR
   sentinel --> branches
   sentinel --> cluster_gaps
   sentinel --> dashboard_model
+  sentinel --> summarize_failures
   sentinel --> failure_feed
   sentinel --> interaction_log
   sentinel --> log_reader
   sentinel --> metric_status
   sentinel --> replayer
+  summarize_failures --> failure_feed
+  summarize_failures --> interaction_log
   tools --> tool_loop
   app --> ext_Gradio__UI_
   classifier --> ext_OpenAI___Anthropic_API__via_LiteLLM_
@@ -211,6 +215,7 @@ graph LR
   retrieval --> ext_OpenAI_API
   sample_chunks --> ext_ChromaDB
   sentinel --> ext_Gradio__UI_
+  summarize_failures --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   tools --> ext_OpenAI___Anthropic_API__via_LiteLLM_
 
   style sg_frame fill:#eef2ff,stroke:#a5b4fc,stroke-width:1.5px,color:#4338ca
@@ -251,6 +256,7 @@ graph LR
 | `sample_chunks.py` | Sample and inspect chunks from the ChromaDB knowledge base. |
 | `sentinel.py` | Local Gradio dashboard over the canonical interaction log (Phase 4 / issue #29). |
 | `session_state.py` | Per-session state for #16's contact-flow. |
+| `summarize_failures.py` | Failure-summarisation batch (issue #33). |
 | `system_map.py` | System map generator — walks src/ and emits docs/MAP.md. |
 | `tool_loop.py` | Generic bounded tool loop for the TECHNICAL branch (#18 / ADR-0003). |
 | `tools.py` | Tool registry for the TECHNICAL branch (ADR-0003 + #18). |

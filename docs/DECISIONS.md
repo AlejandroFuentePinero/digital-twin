@@ -5,6 +5,63 @@
 
 ---
 
+## Session 36 (2026-05-04) — `#33` shipped: Failure summarisation batch + Deflection panel
+
+**Status:** [`#33`](https://github.com/AlejandroFuentePinero/digital-twin/issues/33) closed locally. Suite **354 → 368** (+14 tests). New module `src/summarize_failures.py` with `FailureSummarizer` deep module + `select_records_for_group` / `write_summary` / `latest_summary_path` / `read_summary` pure helpers + `run_batch` orchestrator + argparse CLI (`--days`, `--out-dir`). Sentinel gains a Deflection summary panel below the Cluster panel that reads the latest cached `data/logs/summaries/deflection_*.md` and pass-throughs the LLM-written Markdown verbatim; placeholder rendered when no summary exists. **Phase 4: 10 of 11 issues closed (#28 + #29 + #37 + #35 + #36 + #30 + #31 + #38 + #32 + #33); only `#34` (Flags + FlagDetector) remains** — and it's the synthesis layer, not a new batch. Side-task: TODO Phase 4 checklist re-synced to GitHub state — checkboxes for #37 / #35 / #36 / #30 / #31 / #38 had drifted out of sync over Sessions 28–35.
+
+### What shipped — code
+
+| Commit | Scope |
+|---|---|
+| `<this-session>` | `#33` — new `src/summarize_failures.py` (`FailureSummarizer` with `litellm.completion` + tenacity retry, model `openai/gpt-4.1` per PRD; `select_records_for_group` covers three groups: unacceptable / deflection / gap with the canonical predicates — any rejected attempt / `event_type=='deflected'` / `failure_feed.classify_failure(r) == "gap"`; `_GROUP_INSTRUCTIONS` table carrying the per-group user-prompt framing; `_format_record_for_prompt` compact 4-line per-record render; `_empty_placeholder` so empty-group runs are distinguishable from never-ran runs; `write_summary` produces `{group}_{YYYY-MM-DD}.md`; `latest_summary_path` picks max() — ISO dates lex-sort; `read_summary` is the panel one-liner; `run_batch` always emits three files even when groups are empty + `main()` argparse CLI). `sentinel.py` gains `format_deflection_panel(text \| None)` pass-through formatter + `DEFLECTION_EMPTY_PLACEHOLDER` and a Deflection panel block in `build_app` that re-reads on Refresh. `system_map` registers `summarize_failures` under "Tooling"; `MAP.md` regenerated. +12 tests in new `test_summarize_failures.py`, +2 in `test_sentinel.py`. |
+
+### TDD slices (5 waves, 14 tests)
+
+- **Wave A — `select_records_for_group` (4 slices, 4 tests)**: gap reuses `failure_feed.classify_failure(r) == "gap"` so refused-precedence is honoured; unacceptable selects records with any `is_acceptable=False` attempt (covers both rejected-then-recovered and retry-exhausted); deflection is `event_type=='deflected'` (CONTEXT.md canonical); trailing N-day window via ISO timestamp lex-cmp (matches `dashboard_model.for_window`).
+- **Wave B — `FailureSummarizer` (2 slices, 2 tests)**: empty input short-circuits to `_empty_placeholder` without an LLM call; non-empty input calls `gpt-4.1` once with the per-group framing + per-record prompt body, returns the LLM's Markdown verbatim.
+- **Wave C — file I/O (3 slices, 3 tests)**: `write_summary` produces `{out_dir}/{group}_{date}.md` with the text intact; `latest_summary_path` picks the max-sorted match; `read_summary` round-trips text or returns `None` when absent.
+- **Wave D — CLI orchestration (1 slice, 2 tests)**: `run_batch` against a tmp `interactions.jsonl` with one record per group writes three date-stamped files and makes exactly 3 LLM calls; an empty-log `run_batch` writes 3 placeholder files with 0 LLM calls (always-three-files contract).
+- **Wave E — Sentinel formatter (2 slices, 2 tests)**: `format_deflection_panel(None)` renders the `summarize_failures.py` placeholder; `format_deflection_panel(text)` returns the LLM Markdown intact (pass-through).
+
+### Live-log smoke
+
+`PYTHONPATH=src uv run python -c "..."` against the 85-record live log:
+
+- `select_records_for_group(group='unacceptable')` → 9 records (matches the `guardrail_rejection_rate=10.6%` headline from Session 31's smoke — 9/85).
+- `select_records_for_group(group='deflection')` → 0 records (deflection-rule is dormant in current live data; the panel will correctly render the no-records placeholder once batch runs).
+- `select_records_for_group(group='gap')` → 8 records (matches Session 28 / Session 35 inventory).
+- `Sentinel.build_app()` boots cleanly with the new panel rendering its placeholder copy (no `data/logs/summaries/` yet — gitignored, generated locally).
+
+### Design choices
+
+- **`FailureSummarizer` returns *plain Markdown text*, not structured JSON.** The downstream consumer is a human reading `gr.Markdown` — pinning the writer's output with a JSON schema would just constrain the prose without buying anything. The clusterer is the opposite case: its output is rendered into a tabular UI element so the schema matters.
+- **`gpt-4.1` (not `nano`) per PRD: 'writing quality matters; cost is negligible at this volume'.** Three calls per weekly run is ~12/month — the cost differential vs nano is rounding error; the readability gap is real. Mirrors the generator's choice for the same reason.
+- **Always-three-files contract.** `run_batch` always writes a file per group even when the group is empty. Keeps the dashboard's "is there a recent summary?" check trivial (file exists → yes). The empty case carries `_empty_placeholder` text so a downstream reader can tell 'batch ran, found nothing' from 'batch never ran'.
+- **`{group}_{YYYY-MM-DD}.md` naming.** ISO dates lex-sort, so `latest_summary_path` is `max(matches)` — no datetime parsing. Same-day re-runs overwrite (one summary per day per group is the right granularity for a weekly batch).
+- **`select_records_for_group` reuses `failure_feed.classify_failure` for gap.** Same drift-prevention reasoning as `cluster_gaps.extract_gap_questions`: one canonical gap predicate so Failure Feed / cluster batch / summary batch can never disagree on what counts as a gap.
+- **Group-specific user-prompt framing in `_GROUP_INSTRUCTIONS` table, not hardcoded in `summarize`.** The framing is the *spec for what the operator wants out of each summary* — keeping it in a named table makes future tuning ("ask the gap summary to call out KB-coverage gaps", etc.) a one-line edit, not a logic change.
+- **`_format_record_for_prompt` compact 4 lines per record.** Question + branch+event + last-attempt answer + last-attempt guardrail feedback. Enough context for the LLM to spot patterns; doesn't include retrieved chunks (would balloon the prompt with content that's already implicit in the answer text).
+- **`format_deflection_panel` is pass-through, not re-formatted.** The summariser already produced Markdown; reformatting in the panel layer would either lose information or fight the LLM's structuring. The panel is a thin wrapper around `gr.Markdown(text)`.
+- **Deflection panel only — not a "Failures triptych" panel showing all three groups.** The issue spec is explicit: "Sentinel Panel 5 reads the latest `summaries/deflection_*.md`". The unacceptable + gap summaries are written to disk for offline / external reading; surfacing them all in Sentinel would dilute the per-panel focus. If a future need surfaces, add a dropdown to switch group rather than splitting into three panels — kept that as a YAGNI.
+- **Refresh button re-reads disk** (same idiom as Cluster panel). Tying the panel to file mtime would surprise an operator who explicitly hit Refresh expecting a re-load.
+- **No tests on the Gradio panel wiring itself.** Per `TESTING.md` `sentinel.py` partial-exemption — pure formatter tested, panel + Refresh-button hookup verified by `build_app` smoke + manual launch.
+
+### Verified
+
+- `uv run pytest -q` → **368 passed** (354 → 368; +12 in `test_summarize_failures.py`, +2 in `test_sentinel.py`).
+- Live runtime: `PYTHONPATH=src uv run python -c "from sentinel import build_app; app = build_app()"` → boots cleanly against the 85-record live log; Deflection panel renders the placeholder copy (no summaries dir yet).
+- Live-log per-group counts (9 / 0 / 8) match the existing inventory + `guardrail_rejection_rate=10.6%` headline.
+
+### Outstanding
+
+- **Push the local commits** — Sessions 28+29+30+31+32+33+34+35 + this session's `#33` commit are local; `main` push is harness-protected.
+- **Strip `needs-triage`** from `#33` (this session) and from carry-over `#34`.
+- **Run the batch once** to populate `data/logs/summaries/` so the panel renders real data on the next launch (out of scope for this commit — gitignored artifact, operator action).
+- **Anomaly annotations on Trend Explorer** (carry-over) — wire in once `#34` ships.
+- **Next: `#34` (Flags + FlagDetector)** — the only remaining Phase 4 slice. Synthesis layer over the metrics + cluster + summary surfaces; closes Phase 4.
+
+---
+
 ## Session 35 (2026-05-04) — `#32` shipped: Gap clustering batch + Cluster panel
 
 **Status:** [`#32`](https://github.com/AlejandroFuentePinero/digital-twin/issues/32) (Phase 4 slice 5/7) closed locally. Suite **343 → 354** (+11 tests). New module `src/cluster_gaps.py` with `Cluster` dataclass + `GapClusterer` deep module + `extract_gap_questions` / `write_clusters` / `read_clusters` pure helpers + `run_batch` orchestrator + argparse CLI (`--days`, `--out`). Sentinel gains a Gap Clusters panel below Trend Explorer that reads the cached `data/logs/gap_clusters.json` (gitignored — generated locally) and renders label · count · sample questions; placeholder rendered when the file is absent. Sentinel never calls the LLM at page-load — the batch + cached-file split keeps the dashboard fast and offline-safe. **Phase 4: 6 of 7 slices complete** (#29 + #35 + #36 + #31 + #30 + #38 + #32). Remaining: failure summarisation (#33), Flags + FlagDetector (#34).

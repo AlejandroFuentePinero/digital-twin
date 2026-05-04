@@ -475,6 +475,29 @@ def test_format_cluster_panel_renders_label_count_and_sample_questions():
     assert "7" in md
 
 
+# ----- Deflection panel (issue #33) ------------------------------------------
+
+
+def test_format_deflection_panel_renders_placeholder_when_text_is_none():
+    """When no `deflection_*.md` exists yet, the panel renders a placeholder
+    pointing at the batch script — same idiom as the cluster panel."""
+    from sentinel import format_deflection_panel
+
+    md = format_deflection_panel(None)
+    assert "summarize_failures" in md, "must point the operator at the batch script"
+
+
+def test_format_deflection_panel_renders_summary_text_intact():
+    """When a summary exists, the panel surfaces it verbatim — the LLM already
+    wrote Markdown, the panel doesn't reformat it. The operator sees what the
+    weekly batch produced, full stop."""
+    from sentinel import format_deflection_panel
+
+    text = "## Recurring conflict-anecdote requests\n\nThree turns probed..."
+    md = format_deflection_panel(text)
+    assert text in md, "summary text must appear verbatim"
+
+
 # ----- Replay-from-record formatter (issue #38) ------------------------------
 
 

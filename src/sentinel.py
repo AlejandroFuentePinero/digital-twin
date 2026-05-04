@@ -18,6 +18,7 @@ import pandas as pd
 from branches import REGISTRY as BRANCH_REGISTRY
 from cluster_gaps import DEFAULT_OUT_PATH as CLUSTERS_DEFAULT_PATH, read_clusters
 from dashboard_model import METRIC_GETTERS, DashboardModel
+from summarize_failures import DEFAULT_SUMMARIES_DIR, read_summary
 from failure_feed import (
     FAILURE_MODES,
     FailureRow,
@@ -370,6 +371,25 @@ def format_session_view(session: Session) -> str:
             f"<details>\n<summary>{_turn_summary(r)}</summary>\n\n{body}\n\n</details>\n"
         )
     return "\n".join(parts)
+
+
+# ---- Deflection panel (issue #33) -------------------------------------------
+
+
+DEFLECTION_EMPTY_PLACEHOLDER = (
+    "_No cached deflection summary yet. Run `uv run python "
+    "src/summarize_failures.py` to generate the weekly summaries._"
+)
+
+
+def format_deflection_panel(text: str | None) -> str:
+    """Render the latest deflection summary; placeholder when absent.
+
+    The summariser already produced Markdown — pass through untouched.
+    """
+    if text is None:
+        return DEFLECTION_EMPTY_PLACEHOLDER
+    return text
 
 
 # ---- Cluster panel (issue #32) ----------------------------------------------
@@ -898,6 +918,19 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
         # Re-read the cached cluster file when the operator hits Refresh — the
         # batch may have been re-run between dashboard sessions.
         refresh_btn.click(fn=_refresh_clusters, outputs=[cluster_md])
+
+        # ---- Deflection panel (issue #33) ----------------------------------
+        gr.Markdown("---\n## Deflection summary")
+        deflection_md = gr.Markdown(
+            format_deflection_panel(read_summary("deflection", DEFAULT_SUMMARIES_DIR))
+        )
+
+        def _refresh_deflection():
+            return format_deflection_panel(
+                read_summary("deflection", DEFAULT_SUMMARIES_DIR)
+            )
+
+        refresh_btn.click(fn=_refresh_deflection, outputs=[deflection_md])
 
     return app
 
