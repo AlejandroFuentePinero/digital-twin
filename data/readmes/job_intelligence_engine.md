@@ -64,6 +64,10 @@ The project is **scope-locked at v1**. The output is decision support, not hirin
 - **Salary fields are imperfect** — sparse and heterogeneous, parsed/imputed where possible.
 - **Decision support, not causality** — outputs are correlational signals to guide targeting and upskilling.
 
+## Scale
+
+Trained on **6,100+ real job postings** (3,892 of which were extracted into the AI-JIE Data Scientist subset published on HuggingFace).
+
 ## Stack
 
 Python · pandas · NumPy · scikit-learn · SBERT · XGBoost / LightGBM · SHAP · Streamlit · NetworkX

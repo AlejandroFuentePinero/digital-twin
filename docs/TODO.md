@@ -3,8 +3,8 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-03 (Session 25)
-**Current phase:** **Phase 2 complete.** All 5 branches wired (GENERIC + GAP + LOGISTICAL + BEHAVIOURAL + TECHNICAL); contact-form flow shipped per #16. Issues closed: `#13`, `#14`, `#15` (foundation + GAP), `#21` + `#26` (R1 + R2 smoke-tests), `#22` + `#24` + `#25` (polish), `#19` (LOGISTICAL branch), `#17` (BEHAVIOURAL branch + deflection + Story 8), `#18` (TECHNICAL branch + ToolRegistry + ToolLoop + 24 distilled docs), `#20` (LIMITATIONS.md register), `#16` (contact form + per-session `SessionState` + collapsible row at turn 3 + ContactRecord joinable to interactions on `session_id`). The routed pipeline is live with all five branches; real `gpt-4.1-nano` classifier; multi-label routing; 5-layer active-learning defense; deterministic guardrail short-circuit on the canonical refusal phrase; soft conciseness nudge cross-branch; honest deflection on behavioural off-list questions; bounded tool loop with `fetch_project_readme` over a 24-key registry on TECHNICAL turns; guardrail receives tool-fetched content via per-attempt judge-prompt recomposition (`LIMITATIONS::R1` fix); contact-form affordance with per-session latch and joinable ContactRecord. KB date-stable past 2026-05-13. Standing concerns logged in [`docs/LIMITATIONS.md`](./LIMITATIONS.md) (5 observed + 8 predicted + 1 resolved entries with explicit trip-wires). **Next: Phase 3 / `#2`** (v4 eval baseline — full deployable system now available). **R3 smoke-test** worth doing alongside or after first v4 baseline so qualitative + quantitative signals align. Test count 195/195; KB at 104 chunks. Phase 1 + Phase 2 **complete**.
+**Last updated:** 2026-05-04 (Session 27)
+**Current phase:** **Phase 3 complete.** Issue `#2` closed: `eval/run_eval.py` rewired through the routed pipeline; v4 baseline run on the existing 149 questions (`eval/results/v4_2026-05-03.json`) with classifier-in-loop note. Headline: retrieval flat-to-up vs v3 (MRR 0.866 vs 0.868; nDCG **0.864 vs 0.854 +0.010**); answer accuracy **4.56 vs 4.46 +0.10**, completeness **4.64 vs 4.51 +0.13**, gap rate **0.0% vs 0.7%**. Phase 1's numerical-completeness fix landed cleanly (3.94 → **4.39**, +0.45). New per-branch view: BEHAVIOURAL/GAP perfect (acc=5.00); TECHNICAL strong (4.73); GENERIC weakest (4.20) — the catch-all is where mediocre answers cluster. One real regression: `temporal` answer accuracy 4.53 → 3.87 — autopsied as ~30% judge variance/cutoff (judge can't verify post-2024 papers; same-content Chusquea attribution flipped between runs) and ~70% **system scope creep** (v4 generator reaches for DOIs/volumes/citations the KB can't ground, increasing hallucination surface). Logged in `LIMITATIONS::P11`. 32/32 eval tests pass; suite 222/222. **Next: Phase 4** (Sentinel) and a follow-up tuning issue for the citation-discipline rule. Test count 222/222; KB at 104 chunks. Phase 1 + Phase 2 + Phase 3 **complete**.
 
 ---
 
@@ -93,19 +93,22 @@ The current `app.py` already has: UUID `session_id`, Gradio `gr.State` for sessi
 
 ---
 
-## Phase 3 — Re-eval baseline (v4)
+## Phase 3 — Re-eval baseline (v4)  ✅ complete (Session 27)
 
 Build on the existing eval pipeline; the metric and aggregation code is reused. The interface change is real but contained.
 
-- [ ] Update `eval/run_eval.py`:
-  - [ ] `eval_retrieval` classifies each question first, then calls a branch-aware retrieval (`fetch_context_for_branch(question, branch)`). The classifier becomes a confounder in retrieval metrics — note this in `notes`.
-  - [ ] `eval_answer` calls the routed `answer` entry point (still no guardrail in eval — Session 9 decision: raw answer quality is the cleaner signal).
-  - [ ] Per-question record gains: `branch`, `classification_confidence`, optional secondary label.
-  - [ ] Result aggregation gains: `by_branch` (mirroring `by_category`) and a `category × branch` cross-tab so we can see how branches handle different question categories.
-- [ ] `eval/plot_eval.py` survives as-is. Schema additions are optional fields it'll ignore.
-- [ ] Run on the existing 149 questions only — no new categories yet.
-- [ ] Commit `v4_*.json`. Note in `notes` that v3 → v4 has comparability caveats (routing reshapes retrieval).
-- [ ] Compare: targets MRR/nDCG ≥ v3, accuracy ≥ v3, gap rate ≤ v3.
+- [x] Update `eval/run_eval.py`:
+  - [x] `eval_retrieval` classifies each question first, then calls branch-aware retrieval (uses each `BranchSpec.final_k` slice). Classifier-in-loop noted in result-file `notes`.
+  - [x] `eval_answer` calls the routed pipeline's raw answer path (no guardrail per Session 9). TECHNICAL branch goes through `tool_loop` so README-grounded answers are exercised.
+  - [x] Per-question record gains: `branch`, `classification_confidence`, `secondary_branch`.
+  - [x] Aggregation gains: `summary.by_branch`, `cross_tab` (category × branch, sparse), `summary.classifier_low_confidence_count`. Architecture snapshot now records the full branches dict + `classifier_model` + `routing_in_loop=true`.
+  - [x] One classifier call per question, shared between retrieval scoring and answer generation (avoids per-stage routing drift on borderline questions).
+- [x] `eval/plot_eval.py` survives as-is — verified against the v4-shaped result file; new fields ignored gracefully.
+- [x] Run on the existing 149 questions only — no new categories yet.
+- [x] Committed `v4_2026-05-03.json` with comparability-caveat in `notes`.
+- [x] Compare vs v3: **retrieval MRR 0.866 (≈ 0.868), nDCG 0.864 (+0.010), accuracy 4.56 (+0.10), completeness 4.64 (+0.13), gap rate 0.0% (-0.7pp).** Targets met or exceeded across the board.
+
+Follow-up surfaced from v4 (separate issue, not this PRD): citation-scope-creep failure mode in temporal questions — the v4 generator fabricates DOIs/volumes/pages when answering "when was paper X published?" Logged in `LIMITATIONS::P11`. Ticket up next.
 
 ---
 

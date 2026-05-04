@@ -1,7 +1,7 @@
-# Mountains as Natural Laboratories for Climate Change Biology
+# Mountains Magnify Mechanisms in Climate Change Biology
 
 **Source:** https://doi.org/10.1038/s41558-025-02549-x
-**Citation:** de la Fuente A., Chen IC., Briscoe N.J., et al. (2026). *Nature Climate Change* 16, 115–117. First-author.
+**Published:** 2026 in *Nature Climate Change* (first-author Perspective).
 
 ## What it is
 

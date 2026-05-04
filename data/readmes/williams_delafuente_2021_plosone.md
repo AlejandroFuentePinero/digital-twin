@@ -1,7 +1,7 @@
-# Spatiotemporal Climate Impacts on Bird Populations across the Wet Tropics
+# Long-Term Changes in Populations of Rainforest Birds in the Australia Wet Tropics Bioregion: A Climate-Driven Biodiversity Emergency
 
 **Source:** https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0254307
-**Citation:** Williams S. & de la Fuente A. (2021). *PLOS One* 16(12): e0254307. Co-authored.
+**Published:** 2021 in *PLOS One* (co-authored).
 
 ## What it is
 

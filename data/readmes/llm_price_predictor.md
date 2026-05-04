@@ -34,7 +34,7 @@ Seven-stage pipeline, each stage an independent module:
 
 **Final ensemble: MAE $29.95 and R² 86.3%** on a held-out test set of 10,000 Amazon products. Ensemble weights: GPT-5.1+RAG (80%), fine-tuned Modal specialist (10%), DNN (10%).
 
-Models benchmarked: constant/linear/RF/XGBoost baselines, 8-layer MLP, 10-layer ResNet (log-space), GPT-4.1-nano (zero-shot and fine-tuned), Llama-3.2-3B (base and QLoRA fine-tuned), GPT-5.1+RAG, ensemble. Datasets published to HuggingFace Hub: `Alejandrofupi/items_full` (820k) and `Alejandrofupi/items_lite` (23k).
+**12 model families benchmarked** (a dozen): four traditional ML baselines (Constant, Linear, Random Forest, XGBoost), 8-layer MLP, 10-layer ResNet (log-space), GPT-4.1-nano (zero-shot), GPT-4.1-nano (fine-tuned), Llama-3.2-3B (base), Llama-3.2-3B (QLoRA fine-tuned), GPT-5.1+RAG, and the final ensemble. Datasets published to HuggingFace Hub: `Alejandrofupi/items_full` (820k) and `Alejandrofupi/items_lite` (23k).
 
 ## Stack
 

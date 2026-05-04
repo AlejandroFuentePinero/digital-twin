@@ -148,23 +148,51 @@
   },
   "ncc_mountains": {
     "path": "ncc_mountains.md",
-    "title": "Nature Climate Change — Mountains as Natural Laboratories",
+    "title": "Mountains Magnify Mechanisms in Climate Change Biology (Nature Climate Change 2026)",
     "summary": "First-author Nature Climate Change Perspective. Argues that compressed climatic gradients of mountain elevations function as natural experimental contrasts, making mountains uniquely powerful systems for detecting causal mechanisms of climate-driven biological change. Theoretical-framework paper, not new empirical data.",
     "kb_cross_reference": "publications.md",
     "link": "https://doi.org/10.1038/s41558-025-02549-x"
   },
   "delafuente_2021_ecography": {
     "path": "delafuente_2021_ecography.md",
-    "title": "Ecography 2021 — SDM Suitability Predicts Local Abundance",
+    "title": "Predicting Species Abundance by Implementing the Ecological Niche Theory (Ecography 2021)",
     "summary": "First-author Ecography 2021 paper. Tests whether SDM-derived habitat suitability predicts observed abundance for 50 endemic species across 29 years of monitoring. 9-algorithm SDM ensemble, multiple link functions, spatial blocked cross-validation. Mean 55% deviance explained — first systematic large-scale test for tropical endemics.",
     "kb_cross_reference": "publications.md",
     "link": "https://onlinelibrary.wiley.com/doi/full/10.1111/ecog.05776"
   },
   "williams_delafuente_2021_plosone": {
     "path": "williams_delafuente_2021_plosone.md",
-    "title": "PLoS ONE 2021 — Spatiotemporal Bird Climate Impacts",
+    "title": "Long-Term Changes in Populations of Rainforest Birds in the Australia Wet Tropics Bioregion (PLOS One 2021)",
     "summary": "Co-authored PLoS ONE 2021 paper. 17 years of bird monitoring across 114 sites (47 species, sea level to 1500 m) documenting >40% lower-edge abundance loss for upland species, up to 190% upward expansion of lowland species, ~50% upland-endemic decline. Empirical evidence the Wet Tropics World Heritage Area's Outstanding Universal Value is degrading.",
     "kb_cross_reference": "publications.md",
     "link": "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0254307"
+  },
+  "bosque_2017_chusquea": {
+    "path": "bosque_2017_chusquea.md",
+    "title": "Biomass, Seed Production and Phenology of Chusquea montana — Puyehue National Park, Chile (Bosque 2017)",
+    "summary": "First-author Bosque 2017 field study quantifying the spring-2015 mass-flowering event of Chusquea montana bamboo. 8 plots × 25 m² for biomass, 20 seed collection boxes for productivity/viability, repeated phenological observations. Results: 33.50 Mg ha⁻¹ fresh biomass, 146.86 × 10⁶ seeds ha⁻¹ peak production, 87.5% viability — first species-level phenological description for C. montana.",
+    "kb_cross_reference": "publications.md",
+    "link": "https://www.scielo.cl/scielo.php?pid=S0717-92002017000300018&script=sci_arttext"
+  },
+  "gcb_2023_rainforest_birds_climate": {
+    "path": "gcb_2023_rainforest_birds_climate.md",
+    "title": "The Climatic Drivers of Long-Term Population Changes in Rainforest Montane Birds (Global Change Biology 2023)",
+    "summary": "First-author GCB 2023 paper decomposing climate-change effects on 47 rainforest bird species into multiple distinct stressors: long-term warming, rainfall change, extreme heatwaves, droughts, and cyclone-induced canopy damage (NDVI from Landsat 5/8). Bayesian N-mixture model in R + JAGS over 2000–2016 across 124 survey locations / 24 sites. Key finding: 72% of species show significant temperature response with strong elevational asymmetry (lowlands benefit, uplands decline). Sister paper to Williams & de la Fuente 2021 — that one shows the redistribution pattern, this one identifies the climatic mechanisms.",
+    "kb_cross_reference": "publications.md",
+    "link": "https://onlinelibrary.wiley.com/doi/full/10.1111/gcb.16608"
+  },
+  "oecologia_2024_herbivory": {
+    "path": "oecologia_2024_herbivory.md",
+    "title": "Relationships Between Abiotic Factors, Foliage Chemistry and Herbivory in a Tropical Montane Ecosystem (Oecologia 2024)",
+    "summary": "First-author Oecologia 2024 paper tracing the causal chain climate + geology → soil nutrients → foliar chemistry → insect herbivory across the Australian Wet Tropics. 25 sites covering 94% of bioregional climate variability across basalt/rhyolite/granite parent materials, 3 widespread tree species. Hierarchical Bayesian pathway model in R + JAGS recovers direct + indirect effects in one joint posterior. Key finding: once geological origin is controlled, individual soil nutrients are equivocal predictors of foliar composition; species-specific responses dominate.",
+    "kb_cross_reference": "publications.md",
+    "link": "https://link.springer.com/article/10.1007/s00442-024-05630-y"
+  },
+  "siri_2025_forest_gap_birds": {
+    "path": "siri_2025_forest_gap_birds.md",
+    "title": "The Effect of Forest Gap Dynamics on Tropical Rainforest Birds (Ecologica Montenegrina 2025)",
+    "summary": "Co-authored Ecologica Montenegrina 2025 paper (Siri et al.; de la Fuente led the analytical framework). 5-year mist-netting study (2015–2019) in a Thai lower-montane 16-ha plot, 1,148 captures of 81 species, paired forest-gap vs closed-canopy sites. GLMMs (Poisson, lme4) for species-level abundance, PCA for community structure, ANOVA for gap-size effects. Key findings: total abundance unchanged but assemblage composition shifts; Hill Blue Flycatcher gap-specialist (β=0.35, p=0.01); moderate gaps (130–1,020 m²) reduce abundance for sensitive species without being catastrophic.",
+    "kb_cross_reference": "publications.md",
+    "link": "https://doi.org/10.37828/em.2025.88.11"
   }
 }

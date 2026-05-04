@@ -29,19 +29,28 @@ from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from retrieval import FINAL_K, MODEL, RETRIEVAL_K, fetch_context
+from branches import REGISTRY
+from classifier import CLASSIFIER_CONFIDENCE_THRESHOLD, Classifier, ClassifierResult
+from classifier import MODEL as CLASSIFIER_MODEL
+from composer import PromptComposer
+from generator import Generator
+from profile import ProfileLoader
+from retrieval import FINAL_K, MODEL, RETRIEVAL_K, fetch_context, format_context
 from rules import GAP_PHRASE
+from tools import ToolRegistry, build_fetch_project_readme_tool, make_litellm_tool_callable
+import tool_loop
 
-
-def answer_question(question, history=None):
-    """Pre-redesign no-guardrail RAG entry point. The v4 eval rewrite (Phase 3 / issue #2)
-    replaces this with a routed-pipeline call that skips the guardrail per Session 9. Until
-    then, the integration eval flow is non-functional but the pure-function tests in
-    tests/test_eval.py continue to pass — they don't exercise this path."""
-    raise NotImplementedError(
-        "answer_question removed at issue #13 step 10. v4 eval rewires through pipeline "
-        "(no guardrail) — see Phase 3 / issue #2."
-    )
+# Module-level wiring of the routed pipeline's components, reused across all
+# eval questions. Tests patch these to mock the classifier and (when needed)
+# the generator at the module boundary.
+_classifier: Classifier = Classifier()
+_profile_loader: ProfileLoader = ProfileLoader()
+_composer: PromptComposer = PromptComposer(_profile_loader, REGISTRY)
+_generator: Generator = Generator()
+_tool_registry: ToolRegistry = ToolRegistry(
+    Path(__file__).parent.parent / "data" / "readmes" / "registry.json"
+)
+_tool_model_callable = make_litellm_tool_callable()
 
 load_dotenv(override=True)
 
@@ -107,19 +116,32 @@ def _ndcg(keyword: str, docs: list, k: int = 10) -> float:
     return _dcg(rels, k) / ideal if ideal > 0 else 0.0
 
 
-def eval_retrieval(test: EvalQuestion) -> RetrievalResult:
-    docs = fetch_context(test.question)
+def eval_retrieval(
+    test: EvalQuestion, classification: ClassifierResult | None = None
+) -> tuple[RetrievalResult, ClassifierResult]:
+    """Classify (or accept pre-classified), then evaluate retrieval against the
+    classifier-picked branch's `final_k`.
+
+    `classification` may be passed in by the runner so the same routing decision
+    drives both retrieval scoring and answer generation; otherwise classify here.
+    """
+    if classification is None:
+        classification = _classifier.classify(test.question, [])
+    branch_name = classification.labels[0] if classification.labels else "GENERIC"
+    branch_spec = REGISTRY.get(branch_name, REGISTRY["GENERIC"])
+    docs = fetch_context(test.question)[: branch_spec.final_k]
     rr = [_reciprocal_rank(kw, docs) for kw in test.keywords]
     ng = [_ndcg(kw, docs) for kw in test.keywords]
     found = sum(1 for s in rr if s > 0)
     n = len(test.keywords)
-    return RetrievalResult(
+    result = RetrievalResult(
         mrr=sum(rr) / n if n else 0.0,
         ndcg=sum(ng) / n if n else 0.0,
         keywords_found=found,
         total_keywords=n,
         keyword_coverage=found / n * 100 if n else 0.0,
     )
+    return result, classification
 
 
 # ---------------------------------------------------------------------------
@@ -127,24 +149,65 @@ def eval_retrieval(test: EvalQuestion) -> RetrievalResult:
 # ---------------------------------------------------------------------------
 
 
+def _generate_routed(question: str, branch_name: str) -> str:
+    """Run the classify-then-route pipeline's *raw* answer path (no guardrail).
+
+    Eval measures generated quality; guardrail rejection rates are a separate
+    signal observable in the production interaction log (Sentinel). This skips
+    the retry loop and the canned-refusal fallback intentionally.
+    """
+    branch_spec = REGISTRY.get(branch_name, REGISTRY["GENERIC"])
+    chunks = fetch_context(question)[: branch_spec.final_k]
+    context = format_context(chunks)
+    sys_prompt = _composer.compose([branch_spec.name], "generator", retrieved_context=context)
+
+    if branch_spec.tools:
+        tool_specs = [
+            build_fetch_project_readme_tool(_tool_registry)
+            for tool_name in branch_spec.tools
+            if tool_name == "fetch_project_readme"
+        ]
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": question},
+        ]
+        return tool_loop.loop(_tool_model_callable, messages, tool_specs)
+
+    return _generator.generate(sys_prompt, [], question)
+
+
+# Judge system prompt is module-level so tests can pin its contract directly.
+# The "ground truth = reference answer" anchor + the "cutoff" caveat were added in
+# Session 27 after the v4 autopsy showed gpt-4.1 (judge) marking real-but-post-2024
+# papers as fabrications because they fall outside its training data — a judge-side
+# false positive that distorted the temporal-category score.
+_JUDGE_SYSTEM_PROMPT = (
+    "You are an expert evaluator of answer quality. "
+    "Score strictly — only award 5 for a perfect answer. "
+    "If any factual claim is wrong or invented, accuracy must be 1.\n\n"
+    "The reference answer is the ground truth for this evaluation. Some content may be "
+    "more recent than your training cutoff (e.g. 2025/2026 publications, recent roles). "
+    "When the generated answer aligns with the reference, do not penalise it for content "
+    "you cannot independently verify against your training data — defer to the reference. "
+    "Only flag a factual error when the generated answer contradicts the reference, "
+    "invents details absent from both the question and the reference, or asserts a "
+    "fact you can confidently verify is wrong."
+)
+
+
 @retry(wait=wait, stop=stop)
-def eval_answer(test: EvalQuestion) -> tuple[AnswerResult, str]:
-    generated, _ = answer_question(test.question)
+def _judge(question: str, generated: str, reference: str) -> AnswerResult:
     messages = [
         {
             "role": "system",
-            "content": (
-                "You are an expert evaluator of answer quality. "
-                "Score strictly — only award 5 for a perfect answer. "
-                "If any factual claim is wrong or invented, accuracy must be 1."
-            ),
+            "content": _JUDGE_SYSTEM_PROMPT,
         },
         {
             "role": "user",
             "content": (
-                f"Question: {test.question}\n\n"
+                f"Question: {question}\n\n"
                 f"Generated answer:\n{generated}\n\n"
-                f"Reference answer:\n{test.reference_answer}\n\n"
+                f"Reference answer:\n{reference}\n\n"
                 "Score the generated answer on three dimensions (1–5):\n"
                 "- accuracy: factual correctness versus the reference answer\n"
                 "- completeness: covers all information present in the reference answer\n"
@@ -154,8 +217,25 @@ def eval_answer(test: EvalQuestion) -> tuple[AnswerResult, str]:
         },
     ]
     response = completion(model=JUDGE_MODEL, messages=messages, response_format=AnswerResult)
-    result = AnswerResult.model_validate_json(response.choices[0].message.content)
-    return result, generated
+    return AnswerResult.model_validate_json(response.choices[0].message.content)
+
+
+def eval_answer(
+    test: EvalQuestion, classification: ClassifierResult | None = None
+) -> tuple[AnswerResult, str, ClassifierResult]:
+    """Drive the routed pipeline's raw answer path and score it with the judge.
+
+    `classification` may be passed in by the runner so retrieval scoring and answer
+    generation share one routing decision per question; otherwise classify here.
+
+    Returns (judge result, generated answer, classifier result).
+    """
+    if classification is None:
+        classification = _classifier.classify(test.question, [])
+    branch_name = classification.labels[0] if classification.labels else "GENERIC"
+    generated = _generate_routed(test.question, branch_name)
+    result = _judge(test.question, generated, test.reference_answer)
+    return result, generated, classification
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +255,34 @@ def _agg_answer(records: list[dict]) -> dict:
     return {k: _mean([r[k] for r in records]) for k in ("accuracy", "completeness", "relevance")}
 
 
+def _cross_tab(per_question: list[dict], retrieval_only: bool, answer_only: bool) -> dict:
+    """Sparse {category: {branch: {retrieval, answer}}} nested aggregation.
+
+    Only (category, branch) pairs that actually appeared in the run get an
+    entry. A regression in a category may show up here as a redistribution
+    across branches rather than a true quality drop — read alongside
+    `by_category` and `by_branch`.
+    """
+    out: dict[str, dict[str, dict]] = {}
+    for r in per_question:
+        cat = r["category"]
+        branch = r.get("branch")
+        if branch is None:
+            continue
+        cell = out.setdefault(cat, {}).setdefault(branch, {})
+        if not answer_only and "retrieval" in r:
+            cell.setdefault("_retrieval_records", []).append(r["retrieval"])
+        if not retrieval_only and "answer" in r:
+            cell.setdefault("_answer_records", []).append(r["answer"])
+    for cat, by_branch in out.items():
+        for branch, cell in by_branch.items():
+            if "_retrieval_records" in cell:
+                cell["retrieval"] = _agg_retrieval(cell.pop("_retrieval_records"))
+            if "_answer_records" in cell:
+                cell["answer"] = _agg_answer(cell.pop("_answer_records"))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Architecture snapshot
 # ---------------------------------------------------------------------------
@@ -184,6 +292,14 @@ def _architecture_snapshot(notes: str) -> dict:
     chroma = PersistentClient(path=DB_PATH)
     collection = chroma.get_or_create_collection("digital_twin")
     kb_files = sorted(p.name for p in KB_DIR.glob("*.md"))
+    branches = {
+        name: {
+            "final_k": spec.final_k,
+            "tools": list(spec.tools),
+            "profile_sections": list(spec.profile_sections),
+        }
+        for name, spec in REGISTRY.items()
+    }
     return {
         "model": MODEL,
         "judge_model": JUDGE_MODEL,
@@ -194,6 +310,9 @@ def _architecture_snapshot(notes: str) -> dict:
         "kb_file_count": len(kb_files),
         "kb_files": kb_files,
         "gap_phrase": GAP_PHRASE,
+        "classifier_model": CLASSIFIER_MODEL,
+        "branches": branches,
+        "routing_in_loop": True,
         "notes": notes,
     }
 
@@ -252,15 +371,26 @@ def run_eval(notes: str = "", retrieval_only: bool = False, answer_only: bool = 
             "reference_answer": test.reference_answer,
         }
 
+        # Classify once per question. Both retrieval scoring and answer generation
+        # use the same branch — without this, a borderline question can route to
+        # different branches between stages and the per-question record's `branch`
+        # no longer matches what produced the answer.
+        classification = _classifier.classify(test.question, [])
+        record["branch"] = classification.labels[0] if classification.labels else "GENERIC"
+        record["classification_confidence"] = classification.confidence
+        record["secondary_branch"] = (
+            classification.labels[1] if len(classification.labels) > 1 else None
+        )
+
         parts = []
 
         if not answer_only:
-            ret = eval_retrieval(test)
+            ret, _ = eval_retrieval(test, classification)
             record["retrieval"] = ret.model_dump()
             parts.append(f"MRR={ret.mrr:.2f} nDCG={ret.ndcg:.2f} cov={ret.keyword_coverage:.0f}%")
 
         if not retrieval_only:
-            ans, generated = eval_answer(test)
+            ans, generated, _ = eval_answer(test, classification)
             record["answer"] = {**ans.model_dump(), "generated_answer": generated}
             knew = GAP_PHRASE not in generated
             parts.append(
@@ -273,6 +403,7 @@ def run_eval(notes: str = "", retrieval_only: bool = False, answer_only: bool = 
 
     # --- Aggregate ---
     categories = sorted({r["category"] for r in per_question})
+    branches = sorted({r["branch"] for r in per_question if "branch" in r})
 
     result: dict = {
         "run_id": run_id,
@@ -280,6 +411,10 @@ def run_eval(notes: str = "", retrieval_only: bool = False, answer_only: bool = 
         "architecture": _architecture_snapshot(notes),
         "summary": {},
         "by_category": {},
+        "by_branch": {},
+        "cross_tab": _cross_tab(
+            per_question, retrieval_only=retrieval_only, answer_only=answer_only,
+        ),
         "per_question": per_question,
     }
 
@@ -290,6 +425,17 @@ def run_eval(notes: str = "", retrieval_only: bool = False, answer_only: bool = 
             cat: _agg_retrieval([r["retrieval"] for r in per_question if r["category"] == cat])
             for cat in categories
         }
+        result["by_branch"]["retrieval"] = {
+            br: _agg_retrieval([r["retrieval"] for r in per_question if r.get("branch") == br])
+            for br in branches
+        }
+
+    # Classifier low-confidence count is independent of retrieval/answer skip flags —
+    # it's a routing-quality signal computed from per-question classification fields.
+    confidences = [r["classification_confidence"] for r in per_question if "classification_confidence" in r]
+    result["summary"]["classifier_low_confidence_count"] = sum(
+        1 for c in confidences if c < CLASSIFIER_CONFIDENCE_THRESHOLD
+    )
 
     if not retrieval_only:
         ans_all = [r["answer"] for r in per_question]
@@ -297,6 +443,10 @@ def run_eval(notes: str = "", retrieval_only: bool = False, answer_only: bool = 
         result["by_category"]["answer"] = {
             cat: _agg_answer([r["answer"] for r in per_question if r["category"] == cat])
             for cat in categories
+        }
+        result["by_branch"]["answer"] = {
+            br: _agg_answer([r["answer"] for r in per_question if r.get("branch") == br])
+            for br in branches
         }
         # Gap rate: fraction of questions where the system said "I don't know"
         gap_count = sum(1 for r in per_question if GAP_PHRASE in r["answer"]["generated_answer"])
@@ -308,8 +458,13 @@ def run_eval(notes: str = "", retrieval_only: bool = False, answer_only: bool = 
 
     # --- Print summary ---
     w = 62
+    project_root = Path(__file__).parent.parent
+    try:
+        display_path = out_path.relative_to(project_root)
+    except ValueError:
+        display_path = out_path  # tmp_path or other off-project location (tests)
     print(f"\n{'=' * w}")
-    print(f"  Saved → {out_path.relative_to(Path(__file__).parent.parent)}")
+    print(f"  Saved → {display_path}")
     print(f"{'=' * w}")
     print("  SUMMARY")
     print(f"{'=' * w}")
@@ -328,6 +483,15 @@ def run_eval(notes: str = "", retrieval_only: bool = False, answer_only: bool = 
                 f"      {cat:15s} (n={n:3d})  "
                 f"MRR={cr['mrr']:.3f}  nDCG={cr['ndcg']:.3f}  cov={cr['keyword_coverage']:.0f}%"
             )
+        if branches:
+            print(f"\n    By branch:")
+            for br in branches:
+                br_metrics = result["by_branch"]["retrieval"][br]
+                n = sum(1 for r in per_question if r.get("branch") == br)
+                print(
+                    f"      {br:15s} (n={n:3d})  "
+                    f"MRR={br_metrics['mrr']:.3f}  nDCG={br_metrics['ndcg']:.3f}  cov={br_metrics['keyword_coverage']:.0f}%"
+                )
 
     if "answer" in result["summary"]:
         a = result["summary"]["answer"]
@@ -345,6 +509,20 @@ def run_eval(notes: str = "", retrieval_only: bool = False, answer_only: bool = 
                 f"      {cat:15s} (n={n:3d})  "
                 f"acc={ca['accuracy']:.2f}  cmp={ca['completeness']:.2f}  rel={ca['relevance']:.2f}"
             )
+        if branches:
+            print(f"\n    By branch:")
+            for br in branches:
+                ba = result["by_branch"]["answer"][br]
+                n = sum(1 for r in per_question if r.get("branch") == br)
+                print(
+                    f"      {br:15s} (n={n:3d})  "
+                    f"acc={ba['accuracy']:.2f}  cmp={ba['completeness']:.2f}  rel={ba['relevance']:.2f}"
+                )
+
+    low_conf = result["summary"].get("classifier_low_confidence_count", 0)
+    print(f"\n  Routing")
+    print(f"    Low-confidence classifications: {low_conf}/{len(tests)}  "
+          f"(threshold {CLASSIFIER_CONFIDENCE_THRESHOLD})")
 
     print(f"\n{'=' * w}\n")
     return result

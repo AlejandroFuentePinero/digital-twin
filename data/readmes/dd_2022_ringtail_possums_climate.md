@@ -1,7 +1,7 @@
 # Climate Change Threatens the Future of Rainforest Ringtail Possums by 2050
 
 **Source:** https://onlinelibrary.wiley.com/doi/full/10.1111/ddi.13652
-**Citation:** de la Fuente A. & Williams S. (2022). *Diversity and Distributions* 28, 1180–1190. First-author.
+**Published:** 2022 in *Diversity and Distributions* (first-author).
 
 ## What it is
 

@@ -35,6 +35,30 @@ def test_project_links_in_universal_with_distinctive_signals():
         "rule must signal conditional surfacing, not unconditional link-attaching"
 
 
+def test_project_links_includes_citation_discipline_for_publications():
+    """project_links must guide the model toward concise publication citations
+    (author + year + link) rather than manufactured DOI/volume/issue/page metadata.
+
+    Surfaced by v4 eval (Session 27 / #2 autopsy): the temporal regression came from
+    the generator fabricating verifiable-shape citation metadata not present in the
+    retrieved chunks. The link is the verifiable handle; volume/issue/DOI strings
+    invite hallucination when the KB doesn't carry them. Friction-lock: this contract
+    must remain in the rule body or this test breaks intentionally.
+    """
+    body = RULES["project_links"].lower()
+    # Must explicitly call out the publication-citation shape
+    assert "publication" in body or "citation" in body, \
+        "rule must address publication-citation shape (the v4 fabrication failure mode)"
+    # Must explicitly forbid the fabrication-prone fields
+    assert "do not include" in body or "do not fabricate" in body, \
+        "rule must instruct against including/fabricating the fabrication-prone fields"
+    # Must name at least two of the four canonical fabrication targets
+    fabrication_fields = ("volume", "issue", "page", "doi")
+    named = sum(1 for f in fabrication_fields if f in body)
+    assert named >= 2, \
+        f"rule must name at least 2 of {fabrication_fields} as fields to omit; named only {named}"
+
+
 def test_tool_rules_registered_with_key_behavioural_anchors():
     """tool_rules governs when to call fetch_project_readme, when not to, and grounding.
 

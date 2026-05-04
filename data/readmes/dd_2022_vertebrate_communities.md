@@ -1,7 +1,7 @@
 # Predicted Alteration of Vertebrate Communities under Climate-Induced Elevational Shifts
 
 **Source:** https://onlinelibrary.wiley.com/doi/full/10.1111/ddi.13514
-**Citation:** de la Fuente A., Krockenberger A., Hirsch B., Cernusak L., Williams S. (2022). *Diversity and Distributions* 28, 1180–1190. First-author.
+**Published:** 2022 in *Diversity and Distributions* (first-author).
 
 ## What it is
 

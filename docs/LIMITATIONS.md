@@ -276,6 +276,41 @@ The `fetch_project_readme` tool fires on the model's discretion — `tool_rules`
 
 ---
 
+### P11 — Citation scope-creep in temporal/publication answers
+
+**Status:** Observed (v4 eval, Session 27 / #2).
+
+The v4 eval surfaced a regression in the `temporal` answer-quality category: accuracy dropped 4.53 → 3.87 vs v3, completeness 4.40 → 4.00. Autopsy of the four failures (`Chusquea phenology`, `Nature Climate Change "Mountains magnify"`, `GCB physiological stress`, `PLOS One rainforest birds`) decomposed roughly:
+
+- **~30% judge-side**: same-content Chusquea attribution scored acc=5 in v3 and acc=1 in v4 — judge non-determinism. The two GCB / NCC papers are post-2024 and the judge (gpt-4.1) explicitly cites *"as of June 2024, no such paper exists"* — judge knowledge-cutoff false positive on real KB content.
+- **~70% system-side (this entry)**: where v3's generator answered terse — *"The PLOS One paper on long-term changes in rainforest bird populations was published in 2021."* — v4's generator now reaches for citation-shape detail: *"Williams S. & de la Fuente A. (2021). PLOS One 16(12): e0254307. DOI: …"*. Volume/issue/article numbers and DOIs are **not in the retrieved KB chunks**, so when the model includes them they're fabricated, and the judge punishes (correctly) the fabrication risk.
+
+The Phase 2 branch composer assembles a richer system prompt (multiple `profile.md` sections + retrieved context + role framing) than v3's monolithic prompt, which appears to nudge the generator toward "let me also be helpful with the citation." For temporal/publication questions specifically, that helpfulness manifests as fabricating verifiable-shape details.
+
+**Why this is logged but not patched here:**
+
+- v4 is a measurement run per the PRD — no tuning lands in #2.
+- Sample size is 4 questions out of 15 in the temporal category; the failure is real but the right fix needs the smoke-test corroboration (whether real recruiters trigger the same shape) rather than reactive prompt edits.
+- The fix is mechanical (rule wording) — easy to ship in a follow-up issue.
+
+**Trip-wires (any one promotes priority):**
+
+1. R3 smoke-test surfaces the same fabrication shape on a recruiter probe (e.g., asking "when was your X paper published?" and getting a fabricated DOI).
+2. v5 eval (after any system change) shows the temporal regression persisting or widening.
+3. Sentinel (Phase 4) flags a high rate of `attempts > 1` failures on temporal-shape questions where the guardrail rejects fabricated citations.
+
+**Action when a trip-wire fires:**
+
+- Add a `citation_discipline` rule to `rules.py` and load it in GENERIC + TECHNICAL branches: *"For 'when was X published?' questions, give the year and journal only — do not include volume, issue, page numbers, DOI, or full citation unless the user explicitly asks. The KB does not always carry these details and inventing them counts as fabrication."*
+- TDD the rule: pin the negative case (no DOI when not asked) and a positive case (DOI surfaces when asked).
+- Re-run eval (just the temporal slice via `--retrieval-only` first, then full).
+
+**Companion observability:** Sentinel can surface this as `category=temporal AND len(retrieved_chunks_with_doi) == 0 AND answer_contains_doi(generated)` — a boolean signal for fabricated-citation suspicion. Phase 4 work.
+
+**Companion to:** the judge-cutoff caveat in the EVAL_BLINDSPOT section. Both feed into "v3 → v4 comparability" reading: a temporal accuracy drop is partly noise (judge), partly real (scope creep), and the cross-tab + per-question feedback strings are the source of truth, not the headline number.
+
+---
+
 ## Resolved
 
 ### R1 — Guardrail blindness to tool-returned content (#18 smoke-test bug)

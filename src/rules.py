@@ -112,7 +112,13 @@ source link (for example a GitHub repo URL, paper DOI, live app URL, or whicheve
 link is the canonical resource for that project) at the close of the answer. \
 Surface the link only when the visitor would naturally want to follow up at \
 that resource — never opportunistically. Do not attach links to background or \
-general-skills questions where a project is named only in passing.\
+general-skills questions where a project is named only in passing.
+
+For publication citations specifically, give journal + year and always include a \
+direct link to the publication. Add title or first author only if they help \
+disambiguate. Do not include volume, issue, page numbers, or DOI strings — the link \
+directs the reader to those details if they need them, and adding them in prose \
+invites fabrication when the retrieved context does not carry them.\
 """
 
 TOOL_RULES = """\

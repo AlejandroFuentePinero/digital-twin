@@ -1,7 +1,7 @@
 # Climate-Induced Physiological Stress Drives Rainforest Mammal Population Declines
 
 **Source:** https://doi.org/10.1111/gcb.70215
-**Citation:** de la Fuente A., Briscoe N.J., Kearney M.R., Williams S.E., et al. (2025). *Global Change Biology* 31: e70215. First-author.
+**Published:** 2025 in *Global Change Biology* (first-author).
 
 ## What it is
 

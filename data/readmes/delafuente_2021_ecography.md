@@ -1,7 +1,7 @@
-# Habitat Suitability from Species Distribution Models Predicts Local Abundance
+# Predicting Species Abundance by Implementing the Ecological Niche Theory
 
 **Source:** https://onlinelibrary.wiley.com/doi/full/10.1111/ecog.05776
-**Citation:** de la Fuente A., Hirsch B., Cernusak L., Williams S. (2021). *Ecography* 44, 1723–1730. First-author.
+**Published:** 2021 in *Ecography* (first-author).
 
 ## What it is
 
