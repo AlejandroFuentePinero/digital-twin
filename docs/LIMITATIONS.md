@@ -272,7 +272,7 @@ The `fetch_project_readme` tool fires on the model's discretion — `tool_rules`
 - For false positives: tighten "When not to call" with the offending pattern; add an explicit example of the false-positive shape.
 - For aggregate misalignment without a clear shape signal: add an LLM-as-judge pass over `(question, branch, tool_calls, answer)` to label each turn as "appropriate / under-called / over-called" and surface the breakdown in Sentinel.
 
-**What would help observe this cleanly:** a Sentinel panel showing `branch == TECHNICAL` turn count vs `len(tool_calls) > 0` count, broken down by question shape (project-named vs general). The aggregate `technical_tool_uptake_rate` exists today; the question-shape breakdown is not yet built (would be a custom Sentinel surface, not part of the #34 FlagDetector scope).
+**What would help observe this cleanly:** a Sentinel panel showing `branch == TECHNICAL` turn count vs `len(tool_calls) > 0` count, broken down by question shape (project-named vs general). The aggregate `technical_tool_uptake_rate` exists today; the question-shape breakdown is not yet built (would be a custom Sentinel surface — `#34`'s `FlagDetector` ships `gap_rate_jump` / `new_cluster` / `repeat_failure` only, not question-shape disaggregation).
 
 ---
 
@@ -294,7 +294,7 @@ The semantic shape — "give me a fact about a specific named publication / proj
 
 **Trip-wires (any one promotes priority):**
 
-1. Sentinel's FlagDetector (#34, pending) flags `category="title fetch" AND branch="GENERIC" AND attempts > 1` as a recurring pattern in production logs over a meaningful sample.
+1. A future custom detector flags `category="title fetch" AND branch="GENERIC" AND attempts > 1` as a recurring pattern in production logs over a meaningful sample. (`#34`'s shipped detectors — `gap_rate_jump` / `new_cluster` / `repeat_failure` — would catch the *repeat-failure* shape if the same paper-title question reappears 3+ times in 7 days, but not the broader `category=direct_fact` cohort signal; that needs a new detector.)
 2. R3 or future smoke-test surfaces a recruiter probe asking for a paper title and getting a generic deflection — repeated shape, not a single instance.
 3. A future eval round shows the failure shape *expanding* (e.g. 3 → 6 specific-publication failures, or sibling shapes emerging where the system fabricates rather than emits the gap phrase).
 
@@ -304,7 +304,7 @@ The semantic shape — "give me a fact about a specific named publication / proj
 - Only if KB-side investigation is clean, revisit classifier scope — but as a structural redefinition of TECHNICAL's boundary (does it cover factual-lookup-about-named-publication?), not as example stuffing.
 - If misroute defense is still wanted at that point, the right factoring per `P7` is splitting `DEFLECTION` into a portable `offer_contact` half rather than promoting the whole rule.
 
-**Companion observability:** Sentinel can surface this as `category=direct_fact AND branch=GENERIC AND classification_confidence < 0.5 AND question_mentions_paper_or_project()` — a boolean signal for misroute-to-fallback patterns. Pending #34 (FlagDetector).
+**Companion observability:** Sentinel can surface this as `category=direct_fact AND branch=GENERIC AND classification_confidence < 0.5 AND question_mentions_paper_or_project()` — a boolean signal for misroute-to-fallback patterns. `#34`'s shipped `FlagDetector` doesn't model this shape today (its three detectors are `gap_rate_jump` / `new_cluster` / `repeat_failure`); the `confident_failure_rate` metric (#35) is the closest existing surface and the right place to start.
 
 ---
 
