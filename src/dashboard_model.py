@@ -94,6 +94,42 @@ class DashboardModel:
         full row even when no data is available."""
         return {pct: self._percentile(pct, stage=stage) for pct in percentiles}
 
+    def latency_with_share(self, stage: str) -> dict[str, float | None]:
+        """Per-stage p50 + p95 + share-of-total-p95.
+
+        Share = stage_p95 / total_p95, expressed as a fraction. Surfaces which
+        stage drives the headline latency tail — typical "guardrail consumes
+        50% of total p95" pattern is the canonical drift signal here."""
+        pcts = self.latency_percentiles(stage)
+        total_p95 = self._percentile(95, stage="total")
+        share: float | None
+        if pcts.get(95) is None or total_p95 is None or total_p95 == 0:
+            share = None
+        else:
+            share = pcts[95] / total_p95
+        return {"p50": pcts.get(50), "p95": pcts.get(95), "share": share}
+
+    @property
+    def attempts_distribution(self) -> dict[str, float]:
+        """Share of turns by attempt count: ``{"1": 0.75, "2": 0.18, "3+": 0.07}``.
+
+        Surfaces what fraction of turns the guardrail had to push back on. The
+        endpoints are already covered by ``refusal_rate`` / ``retry_exhausted_rate``;
+        this fills in the middle (turns that recovered on attempt 2)."""
+        if not self.records:
+            return {}
+        total = len(self.records)
+        buckets = {"1": 0, "2": 0, "3+": 0}
+        for r in self.records:
+            n = len(r.attempts)
+            if n <= 1:
+                buckets["1"] += 1
+            elif n == 2:
+                buckets["2"] += 1
+            else:
+                buckets["3+"] += 1
+        return {k: v / total for k, v in buckets.items()}
+
     @property
     def event_counts(self) -> dict[str, int]:
         return dict(Counter(r.event_type for r in self.records))

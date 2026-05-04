@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import html
 import os
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -33,7 +34,6 @@ import gradio as gr
 import matplotlib
 
 matplotlib.use("Agg")  # non-interactive backend — no display needed
-import matplotlib.dates as mdates
 from matplotlib.figure import Figure
 import pandas as pd
 
@@ -67,6 +67,7 @@ from failure_feed import (
     select_failures,
 )
 from interaction_log import InteractionRecord
+from kb_corpus import CoverageEntry, compute_coverage, load_sections
 from log_reader import HFReader, LocalReader, LogReader
 from metric_status import THRESHOLDS, WoWDelta, metric_status, wow_delta
 
@@ -84,9 +85,6 @@ FAILURE_MODE_CHOICES = ["All", *FAILURE_MODES]
 # Auto-refresh cadence — matches the documented weekly batch cadence so any
 # launch sees data at most one cadence stale.
 DEFAULT_FRESHNESS_DAYS = 7
-
-# Smoothing window for the trend chart's rolling-average line.
-ROLLING_AVG_DAYS = 3
 
 # Minimum data span before WoW deltas carry semantic colour. With <14 days of
 # log history a 'prior week' baseline is just a slice of the same chunk of
@@ -248,10 +246,10 @@ body, .gradio-container {
 }
 .metric-row .col-header,
 .metric-row.header > div {
-    font-size: 0.72em; font-weight: 500;
-    color: var(--text-muted);
-    letter-spacing: 0.08em; text-transform: uppercase;
-    padding-bottom: 2px;
+    font-size: 0.85em; font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.1em; text-transform: uppercase;
+    padding-bottom: 4px;
     border-bottom: 1px solid var(--border);
 }
 .metric-row.header .col-header.numeric { text-align: right; }
@@ -307,31 +305,38 @@ body, .gradio-container {
     margin: 0 2px;
 }
 
-/* Severity-driven row treatment — alerts dominate visually, healthy collapses
-   in density but keeps a green ribbon so the column scans symmetrically. Font
-   sizes stay consistent across severities (operator directive — no value-size
-   bump). The left ribbon does the work of differentiating severity. */
+/* Severity-driven row treatment — every severity gets the same density
+   (8px padding, 4px margin, 3px ribbon, tinted background); only the
+   ribbon colour + bg hue differ between severities. Subtle label tweaks
+   (alert bolder, healthy muted) preserve a soft hierarchy without
+   breaking the consistent bg-style the operator asked for. */
+.metric-row.row-alert,
+.metric-row.row-warning,
+.metric-row.row-orientation,
+.metric-row.row-healthy {
+    padding-top: 8px;
+    padding-bottom: 8px;
+    margin: 4px 0;
+    border-left-width: 3px;
+}
 .metric-row.row-alert {
     background: rgba(248, 113, 113, 0.06);
     border-left-color: var(--alert);
-    padding-top: 8px; padding-bottom: 8px;
-    margin: 4px 0;
 }
 .metric-row.row-alert .metric-label {
     font-weight: 500;
 }
 .metric-row.row-warning {
+    background: rgba(251, 191, 36, 0.06);
     border-left-color: var(--warning);
-    border-left-width: 2px;
 }
 .metric-row.row-orientation {
-    /* No left border, standard density. Context rows stay legible without
-       claiming visual urgency. */
+    background: rgba(153, 153, 163, 0.05);
+    border-left-color: var(--text-muted);
 }
 .metric-row.row-healthy {
+    background: rgba(52, 211, 153, 0.06);
     border-left-color: var(--healthy);
-    border-left-width: 2px;
-    padding-top: 1px; padding-bottom: 1px;
 }
 .metric-row.row-healthy .metric-label {
     color: var(--text-secondary);
@@ -349,21 +354,88 @@ body, .gradio-container {
 .flag-card .flag-headline { font-weight: 500; color: var(--alert); }
 .flag-card .flag-detail   { font-size: 0.88em; color: var(--text-secondary); margin-top: 2px; }
 
-/* Per-flag row: card on the left, ghost destination link on the right.
-   Tight gap so the link reads as part of the card, not floating chrome. */
-.flag-row { gap: 0 !important; align-items: stretch !important; }
-.flag-link button {
-    background: transparent !important;
-    border: none !important;
-    color: var(--text-secondary) !important;
-    font-size: 12px !important;
-    padding: 0 14px !important;
-    height: 100% !important;
-    text-align: right !important;
-    white-space: nowrap;
+/* Whole flag card is clickable — single full-width gr.Button styled to
+   look like the prior card. Alert-tinted background, alert ribbon on the
+   left, headline-first-line in alert colour, detail in text-secondary.
+
+   Gradio's secondary button class chain has high specificity, so we
+   - set the theme CSS variables on the wrapper (cascades into the inner
+     button and wins because it's the same property the framework reads)
+   - prefix with `.gradio-container` and stack `:not()` selectors to clear
+     Gradio's `.lg.secondary.svelte-XXX` specificity for the layout rules
+   - override every alignment-related property on the inner span as well
+     (Gradio wraps the label text in a span that centres + collapses `\n`).
+*/
+.flag-button {
+    /* Neon-red palette — saturated tint that reads as urgent on the dark
+       dashboard. Local to flag cards; doesn't change the global --alert
+       colour used elsewhere (status banner, metric badges, ribbons). */
+    --flag-neon: #ff1f4e;
+    --flag-neon-bright: #ff3a64;
+    --flag-bg:    rgba(255, 31, 78, 0.20);
+    --flag-bg-hover: rgba(255, 31, 78, 0.32);
+    --button-secondary-background-fill: var(--flag-bg) !important;
+    --button-secondary-background-fill-hover: var(--flag-bg-hover) !important;
+    --button-secondary-text-color: var(--text-secondary) !important;
+    --button-secondary-text-color-hover: var(--text-primary) !important;
+    --button-secondary-border-color: rgba(255, 31, 78, 0.4) !important;
+    --button-secondary-border-color-hover: var(--flag-neon-bright) !important;
+    --button-secondary-shadow: none !important;
+    --button-secondary-shadow-active: none !important;
+    --button-secondary-shadow-hover: none !important;
+    --button-shadow: none !important;
+    --button-shadow-active: none !important;
+    --button-shadow-hover: none !important;
 }
-.flag-link button:hover {
+.gradio-container .flag-button button,
+.gradio-container .flag-button button:not(.tertiary):not(.icon):not(.disabled) {
+    display: block !important;
+    width: 100% !important;
+    background: var(--flag-bg) !important;
+    background-color: var(--flag-bg) !important;
+    border: 1px solid rgba(255, 31, 78, 0.4) !important;
+    border-left: 3px solid var(--flag-neon) !important;
+    border-radius: 3px !important;
+    padding: 12px 16px !important;
+    margin: 4px 0 !important;
+    color: var(--text-secondary) !important;
+    font-size: 0.92em !important;
+    font-weight: 400 !important;
+    line-height: 1.55 !important;
+    text-align: left !important;
+    white-space: pre-line !important;
+    cursor: pointer !important;
+    box-shadow: none !important;
+    transition: background 0.12s ease, border-color 0.12s ease !important;
+}
+.gradio-container .flag-button button > *,
+.gradio-container .flag-button button > span,
+.gradio-container .flag-button button > div {
+    display: block !important;
+    width: 100% !important;
+    text-align: left !important;
+    white-space: pre-line !important;
+    color: inherit !important;
+    font-size: inherit !important;
+    font-weight: inherit !important;
+    line-height: inherit !important;
+    background: transparent !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+.gradio-container .flag-button button:hover,
+.gradio-container .flag-button button:not(.tertiary):hover {
+    background: var(--flag-bg-hover) !important;
+    background-color: var(--flag-bg-hover) !important;
+    border-color: var(--flag-neon-bright) !important;
+    border-left-color: var(--flag-neon-bright) !important;
     color: var(--text-primary) !important;
+}
+.gradio-container .flag-button button::first-line,
+.gradio-container .flag-button button:not(.tertiary)::first-line {
+    font-size: 1.08em !important;
+    font-weight: 700 !important;
+    color: var(--flag-neon-bright) !important;
 }
 
 /* ---- Refresh banner (LLM batch failure) ---- */
@@ -587,20 +659,50 @@ footer { display: none !important; }
     border-color: var(--text-secondary) !important;
 }
 
-/* ---- Section header (between sections; no card wrappers) ---- */
-.section-header {
-    font-size: 15px; font-weight: 700;
-    letter-spacing: 0.06em; text-transform: uppercase;
+/* ---- Section header hierarchy ----
+   Two levels:
+   - .section-header-major — top-of-tab landmarks (Flags, Health overview,
+     Failure Feed, Gap Clusters, Deflection summary, KB Source Coverage).
+     Reads as "you've entered a new area."
+   - .section-header — sub-section inside a major area (Outcome, Routing,
+     Engagement, Tool use, Latency under Health overview; the per-block
+     groupings under Trend Explorer's scan mode).
+*/
+.section-header-major {
+    font-size: 20px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
     color: var(--text-primary);
-    margin: 32px 0 12px;
-    padding-bottom: 6px;
+    margin: 36px 0 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-strong);
+}
+.section-header-major:first-of-type { margin-top: 12px; }
+.section-header {
+    font-size: 13px; font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--text-secondary);
+    margin: 24px 0 10px;
+    padding-bottom: 5px;
     border-bottom: 1px solid var(--border);
 }
-.section-header:first-of-type { margin-top: 12px; }
+.section-header:first-of-type { margin-top: 8px; }
 
-/* Latency stages — p50 muted, p95 primary, drives the eye to the headline. */
-.metric-row .latency-p50 { color: var(--text-secondary); }
-.metric-row .latency-p95 { color: var(--text-primary); font-weight: 500; }
+/* Latency stages — p50 muted, p95 primary, share muted; pipe sep dim.
+   Labels (p50 / p95 / share) appear once in the section caption above. */
+.metric-row .latency-p50   { color: var(--text-secondary); }
+.metric-row .latency-p95   { color: var(--text-primary); font-weight: 500; }
+.metric-row .latency-share { color: var(--text-secondary); }
+.metric-row .latency-sep   { color: var(--text-muted); }
+
+/* Section caption — sits between the section header and the rows. Used by
+   Latency to label the tri-tuple (p50 | p95 | share) once at the top. */
+.section-caption {
+    color: var(--text-muted);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    margin: -8px 0 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
 
 /* ---- Chart card — wrap each scan-mode chart in a bordered surface ---- */
 .chart-card {
@@ -618,26 +720,126 @@ footer { display: none !important; }
     width: 100% !important; max-width: 100%;
 }
 
-/* Investigate link — no chrome; small, muted, hover lifts to primary. */
-.investigate-link button {
-    background: transparent !important;
-    border: none !important;
-    color: var(--text-muted) !important;
-    font-size: 11px !important;
-    padding: 2px 0 !important;
-    height: auto !important;
-    text-align: left !important;
-    text-transform: lowercase;
-    letter-spacing: 0.02em;
+/* Shared branch legend — single strip at the top of the Trends tab.
+   Five colour swatches + branch names, monospace, compact. */
+.branch-legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px 22px;
+    margin: 0 0 18px;
+    padding: 10px 14px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
 }
-.investigate-link button:hover {
-    color: var(--text-primary) !important;
+.branch-legend .legend-label {
+    font-size: 0.72em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-right: 8px;
+}
+.branch-legend .branch-swatch {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    color: var(--text-secondary);
+}
+.branch-legend .swatch-color {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    display: inline-block;
 }
 
 /* ---- Filter bar (Failures) — single 36px row ---- */
 .filter-bar { gap: 8px !important; }
 .filter-bar .gradio-dropdown,
 .filter-bar .gradio-textbox { min-height: 36px !important; }
+
+/* ---- KB coverage panel (Failures tab) ---- */
+.kb-coverage-summary {
+    padding: 8px 0 12px;
+    color: var(--text-secondary);
+    font-size: 0.92em;
+    display: flex; gap: 16px; flex-wrap: wrap;
+}
+.kb-coverage-summary .kb-cov-count {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.kb-coverage-summary .kb-cov-count.never     { color: var(--alert); }
+.kb-coverage-summary .kb-cov-count.retrieved { color: var(--text-primary); }
+.kb-coverage-summary .kb-cov-count.off-canon { color: var(--warning); }
+.kb-cov-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 8px;
+    margin-top: 4px;
+}
+.kb-cov-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid transparent;
+    border-radius: 4px;
+    padding: 8px 12px;
+}
+.kb-cov-card.never     { border-left-color: var(--alert); }
+.kb-cov-card.retrieved { border-left-color: var(--healthy); }
+.kb-cov-card.off-canon { border-left-color: var(--warning); }
+.kb-cov-header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 2px;
+}
+.kb-cov-label {
+    font-weight: 500; color: var(--text-primary); font-size: 0.92em;
+}
+.kb-cov-chip {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.78em;
+    color: var(--text-muted);
+    background: var(--bg-base);
+    padding: 1px 8px;
+    border-radius: 4px;
+}
+.kb-cov-chip.never { color: var(--alert); }
+.kb-cov-meta {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.78em;
+    color: var(--text-muted);
+}
+
+/* ---- Glossary (Metrics tab, bottom, collapsed by default) ---- */
+.glossary { padding: 4px 0 8px; }
+.glossary-section-header {
+    font-size: 12px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-secondary);
+    margin: 14px 0 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+}
+.glossary-section-header:first-child { margin-top: 4px; }
+.glossary-row {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    column-gap: 14px;
+    padding: 4px 2px;
+    align-items: baseline;
+}
+.glossary-row .glossary-name {
+    color: var(--text-primary);
+    font-size: 0.92em;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.glossary-row .glossary-desc {
+    color: var(--text-secondary);
+    font-size: 0.92em;
+    line-height: 1.45;
+}
 """
 
 
@@ -722,16 +924,30 @@ def _fmt_dropoff(dropoff: dict[int, int]) -> str:
     return f"after t{most_common} ({drops[most_common]} sessions)"
 
 
-def _fmt_latency_row(p: dict[int, float | None]) -> str:
-    """Two-tier latency display — p50 in muted secondary, p95 in primary so
-    the operator's eye lands on the headline tail value."""
-    p50 = _fmt_seconds(p.get(50))
-    p95 = _fmt_seconds(p.get(95))
+def _fmt_latency_row(p: dict) -> str:
+    """Three-column latency cell — values only; the per-column labels (p50 |
+    p95 | share) appear once in the section caption above the rows.
+
+    p50 muted, p95 primary, share muted. The label-once design keeps each
+    cell short enough to fit the 4-window grid without truncation."""
+    p50 = _fmt_seconds(p.get("p50"))
+    p95 = _fmt_seconds(p.get("p95"))
+    share_v = p.get("share")
+    share = EM_DASH if share_v is None else f"{share_v * 100:.0f}%"
+    sep = "<span class='latency-sep'> | </span>"
     return (
-        f"<span class='latency-p50'>p50 {p50}</span>"
-        f" / "
-        f"<span class='latency-p95'>p95 {p95}</span>"
+        f"<span class='latency-p50'>{p50}</span>{sep}"
+        f"<span class='latency-p95'>{p95}</span>{sep}"
+        f"<span class='latency-share'>{share}</span>"
     )
+
+
+def _fmt_attempts_distribution(d: dict[str, float]) -> str:
+    """Inline distribution: ``1: 75% · 2: 18% · 3+: 7%`` — same compact
+    pattern as branch_distribution."""
+    if not d:
+        return EM_DASH
+    return " · ".join(f"{k}: {v * 100:.0f}%" for k, v in d.items())
 
 
 # ---- Threshold-aware rendering helpers --------------------------------------
@@ -904,6 +1120,7 @@ METRIC_SPECS: list[tuple[str, list[tuple]]] = [
         ("Refusal rate",               "refusal_rate",                lambda m: m.refusal_rate, _fmt_pct),
         ("Guardrail rejection rate",   "guardrail_rejection_rate",    lambda m: m.guardrail_rejection_rate, _fmt_pct),
         ("Retry-exhaustion rate",      "retry_exhausted_rate",        lambda m: m.retry_exhausted_rate, _fmt_pct),
+        ("Attempts distribution",      None,                          lambda m: m.attempts_distribution, _fmt_attempts_distribution),
     ]),
     ("Routing", [
         ("Classifier branch distribution",         None,                          lambda m: m.branch_distribution, _fmt_branches),
@@ -927,13 +1144,82 @@ METRIC_SPECS: list[tuple[str, list[tuple]]] = [
         ("Tool-call success rate",     None,                          lambda m: m.tool_call_success_rate, _fmt_pct),
     ]),
     ("Latency", [
-        ("classifier",                 None,                          lambda m: m.latency_percentiles("classifier"), _fmt_latency_row),
-        ("retrieval",                  None,                          lambda m: m.latency_percentiles("retrieval"), _fmt_latency_row),
-        ("generation",                 None,                          lambda m: m.latency_percentiles("generation"), _fmt_latency_row),
-        ("guardrail",                  None,                          lambda m: m.latency_percentiles("guardrail"), _fmt_latency_row),
+        ("classifier",                 None,                          lambda m: m.latency_with_share("classifier"), _fmt_latency_row),
+        ("retrieval",                  None,                          lambda m: m.latency_with_share("retrieval"), _fmt_latency_row),
+        ("generation",                 None,                          lambda m: m.latency_with_share("generation"), _fmt_latency_row),
+        ("guardrail",                  None,                          lambda m: m.latency_with_share("guardrail"), _fmt_latency_row),
         ("total (p95)",                "latency_p95_total",           lambda m: m.latency_percentiles("total").get(95), _fmt_ms),
     ]),
 ]
+
+
+# Per-section caption rendered between the section header and the rows.
+# Used today only by Latency to label the per-cell tri-tuple (p50 | p95 |
+# share) once at the top of the section, so each row's cell can render the
+# values without redundant labels.
+SECTION_CAPTIONS: dict[str, str] = {
+    "Latency": "each cell: p50 | p95 | share of total p95",
+}
+
+
+# One-sentence description per row in METRIC_SPECS — surfaced via the
+# collapsed Glossary accordion at the bottom of the Metrics tab. Keys must
+# match the display labels in METRIC_SPECS exactly; a forcing-function test
+# pins the two together so a label rename can't silently drop a description.
+METRIC_GLOSSARY: dict[str, str] = {
+    # Outcome
+    "Total interactions":                                  "Count of all logged turns in the window — pure volume signal.",
+    "Gap rate":                                            "Share of turns where the system emitted the canonical \"I don't have that information\" phrase (knew_answer=False).",
+    "Deflection rate":                                     "Share of BEHAVIOURAL turns that redirected to a STAR anecdote in personal_stories.",
+    "Refusal rate":                                        "Share of turns that bottomed out into the canned-refusal copy after 3 rejected guardrail attempts.",
+    "Guardrail rejection rate":                            "Share of turns where the guardrail rejected at least one attempt — composite over fabrication, scope, tone, injection, dishonest gap.",
+    "Retry-exhaustion rate":                               "Share of turns that consumed all 3 generation attempts — superset of refusal_rate; the gap is barely-accepted turns.",
+    "Attempts distribution":                               "Share of turns by attempt count (1 / 2 / 3+) — fills the middle between first-attempt-pass and retry-exhausted.",
+    # Routing
+    "Classifier branch distribution":                      "Fraction of turns routed to each branch (GENERIC / GAP / TECHNICAL / BEHAVIOURAL / LOGISTICAL) — orientation only.",
+    "Classifier mean confidence":                          "Average classifier confidence across the window — direct read of how sure the classifier is on average.",
+    "Classifier low-confidence rate (<0.7)":               "Share of turns where the classifier itself flagged uncertainty — catches misroutes the classifier admits to.",
+    "Classifier confident-failure rate (≥0.8 & failed)":   "Share of turns where the classifier was sure (≥0.8) and the system still failed — catches misroutes the classifier missed.",
+    "Classifier multi-label rate":                         "Fraction of turns where the classifier returned more than one branch label — validates whether composition routing fires (currently dormant by design).",
+    # Engagement
+    "Unique sessions":                                     "Count of distinct chat sessions — volume orientation.",
+    "Avg questions per session":                           "Mean turns per session — companion to the median, more sensitive to deeply-engaged outliers.",
+    "Turns/session (median)":                              "Median chat depth — typical engagement signal; pair with contact_conversion before judging.",
+    "Contact-offer rate":                                  "Fraction of turns where the contact form was visible — depends on traffic shape and trigger configuration.",
+    "Contact-conversion rate":                             "Share of offered sessions that submitted the form — joined session-level on contacts.jsonl.",
+    # Tool use
+    "Tool calls (count)":                                  "Total fetch_project_readme invocations across the window — volume signal.",
+    "Tool uptake (TECHNICAL)":                             "Fraction of TECHNICAL turns that invoked a tool — orientation only (denominator is conceptually noisy).",
+    "Tool-call success rate":                              "Fraction of tool invocations that returned successfully — should be ~100% for local file reads.",
+    # Latency
+    "classifier":                                          "p50 | p95 | share of total p95 for the classifier stage — typical 1s, p95 ≈ 1.7s; gpt-4.1-nano cached.",
+    "retrieval":                                           "p50 | p95 | share of total p95 for the ChromaDB retrieval stage — sub-100ms typical; spikes signal embedding cache miss.",
+    "generation":                                          "p50 | p95 | share of total p95 for the OpenAI generation stage — typical 3.5s; spikes correlate with retry rounds.",
+    "guardrail":                                           "p50 | p95 | share of total p95 for the Anthropic guardrail stage — typical 5s; slower than the gpt-4.1 generator.",
+    "total (p95)":                                         "End-to-end p95 latency — the headline operator-facing number across all stages.",
+}
+
+
+def format_metrics_glossary() -> str:
+    """Glossary HTML — one row per metric, grouped by the same sections as
+    METRIC_SPECS. Rendered inside a collapsed Accordion at the bottom of the
+    Metrics tab so the operator can recall what each row means without
+    leaving the dashboard."""
+    parts: list[str] = []
+    for section_name, specs in METRIC_SPECS:
+        parts.append(
+            f"<div class='glossary-section-header'>{html.escape(section_name)}</div>"
+        )
+        for spec in specs:
+            label = spec[0]
+            desc = METRIC_GLOSSARY.get(label, "")
+            parts.append(
+                "<div class='glossary-row'>"
+                f"<span class='glossary-name'>{html.escape(label)}</span>"
+                f"<span class='glossary-desc'>{html.escape(desc)}</span>"
+                "</div>"
+            )
+    return "<div class='glossary'>" + "".join(parts) + "</div>"
 
 
 def _value_cell(
@@ -1130,8 +1416,14 @@ def format_metrics_overview(
             ))
         # No card wrapper — whitespace + the section header carry the
         # separation. Cleaner, less chrome (operator directive).
+        caption = SECTION_CAPTIONS.get(section_name, "")
+        caption_html = (
+            f"<div class='section-caption'>{html.escape(caption)}</div>"
+            if caption else ""
+        )
         blocks.append(
             f"<div class='section-header'>{section_name}</div>"
+            f"{caption_html}"
             f"{''.join(rows)}"
         )
     return "".join(blocks)
@@ -1333,6 +1625,61 @@ def format_deflection_panel(text: str | None) -> str:
     return text
 
 
+KB_COVERAGE_EMPTY_PLACEHOLDER = (
+    "_No KB sections found — check that ``data/knowledge_base/*.md`` exists._"
+)
+
+
+def format_kb_coverage_panel(entries: list[CoverageEntry]) -> str:
+    """Source coverage — every canonical KB section with its retrieval count
+    in the window, sorted ascending. Never-retrieved sections surface first
+    (alert ribbon); off-canon retrievals (embedded sections that no longer
+    exist in source files) sit at the bottom as a drift signal."""
+    if not entries:
+        return KB_COVERAGE_EMPTY_PLACEHOLDER
+
+    never_retrieved = [e for e in entries if not e.off_canon and e.retrieval_count == 0]
+    retrieved = [e for e in entries if not e.off_canon and e.retrieval_count > 0]
+    off_canon = [e for e in entries if e.off_canon]
+
+    summary = (
+        f"<div class='kb-coverage-summary'>"
+        f"<span class='kb-cov-count never'>{len(never_retrieved)} never retrieved</span>"
+        f"<span class='kb-cov-count retrieved'>{len(retrieved)} retrieved</span>"
+        + (
+            f"<span class='kb-cov-count off-canon'>{len(off_canon)} off-canon</span>"
+            if off_canon else ""
+        )
+        + "</div>"
+    )
+
+    def _card(e: CoverageEntry, ribbon: str) -> str:
+        count_chip = (
+            f"<span class='kb-cov-chip never'>0</span>"
+            if e.retrieval_count == 0 and not e.off_canon
+            else f"<span class='kb-cov-chip'>{e.retrieval_count}</span>"
+        )
+        return (
+            f"<div class='kb-cov-card {ribbon}'>"
+            f"<div class='kb-cov-header'>"
+            f"<span class='kb-cov-label'>{html.escape(e.section_heading)}</span>"
+            f"{count_chip}"
+            f"</div>"
+            f"<div class='kb-cov-meta'>{html.escape(e.source_file)}</div>"
+            f"</div>"
+        )
+
+    cards: list[str] = []
+    for e in never_retrieved:
+        cards.append(_card(e, "never"))
+    for e in retrieved:
+        cards.append(_card(e, "retrieved"))
+    for e in off_canon:
+        cards.append(_card(e, "off-canon"))
+
+    return summary + "<div class='kb-cov-grid'>" + "".join(cards) + "</div>"
+
+
 # ---- Flags panel ------------------------------------------------------------
 
 
@@ -1371,6 +1718,14 @@ def format_flags_summary(flags: list[Flag]) -> str:
     if not flags:
         return FLAGS_EMPTY_PLACEHOLDER
     return "\n".join(format_flag_card(f) for f in flags)
+
+
+def _kb_coverage_entries(records: list[InteractionRecord]) -> list[CoverageEntry]:
+    """Flatten retrieved chunks across `records` and cross-reference against
+    the canonical KB section list. Pure helper — Sentinel calls this at
+    page-load and refresh."""
+    flat = [chunk for r in records for chunk in r.retrieved_chunks]
+    return compute_coverage(flat, load_sections())
 
 
 def _build_flags(model: DashboardModel) -> list[Flag]:
@@ -1412,23 +1767,19 @@ THEMATIC_BLOCKS: dict[str, list[str]] = {
     "Latency": ["latency_p95_total"],
 }
 
-TREND_WINDOWS: list[tuple[str, int | None]] = [
-    ("7d", 7), ("30d", 30), ("90d", 90), ("All-time", None),
-]
-
-# Per-status palette: (dim shade for actual line, bright shade for trend).
-# Replaces the static fixed-threshold reference lines with dynamic colouring
-# of the value + trend series based on the metric's current status.
-_STATUS_CHART_COLOR: dict[str | None, tuple[str, str]] = {
-    "healthy": ("#166534", "#4ade80"),  # green-800, green-400
-    "warning": ("#92400e", "#fbbf24"),  # amber-800, amber-400
-    "alert":   ("#991b1b", "#f87171"),  # red-800,   red-400
-    None:      ("#525252", "#a3a3a3"),  # text-muted / text-secondary (orientation)
+# Per-branch palette — fixed dict-iteration order is the source of truth
+# for both the bar-grouping order and the shared legend at the top of the
+# Trends tab. Distinct from the failure-feed mode palette (which lives on
+# the Failures tab); same hue family, different roles per tab.
+BRANCH_CHART_COLORS: dict[str, str] = {
+    "GENERIC":     "#60a5fa",  # blue
+    "GAP":         "#9ca3af",  # gray (the "no answer" branch — neutral)
+    "TECHNICAL":   "#34d399",  # green
+    "BEHAVIOURAL": "#c084fc",  # purple
+    "LOGISTICAL":  "#fb923c",  # orange
 }
+BRANCH_BAR_ALPHA = 0.85
 
-# Prior-overlay colour stays constant (compares against current period's data,
-# which already carries the status colouring on its own series).
-_PRIOR_CHART_COLOR = "#818cf8"
 
 
 def _y_axis_title(metric: str) -> str:
@@ -1469,250 +1820,161 @@ def _fmt_metric_value(metric: str, value: float | None) -> str:
     return _fmt_num(value)
 
 
-def chart_dataframe(
+@dataclass(frozen=True)
+class BarPoint:
+    """One bar position in the grouped bar chart.
+
+    `value` is in chart-axis units (post-`_scale_value`); `has_data=False`
+    means the branch had no records (or the metric returned None) in the
+    window — the bar renders at zero height with a `—` annotation rather
+    than as a 0% bar, so `no data` is visually distinct from `measured 0%`.
+    """
+    window: str
+    branch: str
+    value: float
+    has_data: bool
+
+
+def bar_chart_data(model: DashboardModel, metric: str) -> list[BarPoint]:
+    """Per-(window, branch) bar positions for the Trends bar chart.
+
+    Iterates `WINDOWS` × `BRANCH_CHART_COLORS` in stable order; the caller
+    can rely on the result tracking the visual layout of bar groups (left to
+    right) and bar slots within each group (legend order).
+    """
+    points: list[BarPoint] = []
+    for window_label, days in WINDOWS:
+        window_model = model.for_window(days=days)
+        for branch in BRANCH_CHART_COLORS:
+            branch_records = [r for r in window_model.records if r.branch == branch]
+            if not branch_records:
+                points.append(BarPoint(window_label, branch, 0.0, False))
+                continue
+            value = METRIC_GETTERS[metric](DashboardModel(branch_records))
+            if value is None:
+                points.append(BarPoint(window_label, branch, 0.0, False))
+            else:
+                scaled = _scale_value(metric, value)
+                points.append(BarPoint(window_label, branch, float(scaled), True))
+    return points
+
+
+def render_metric_bars(
     model: DashboardModel,
     metric: str,
-    days: int | None,
     *,
-    prior_model: DashboardModel | None = None,
-) -> pd.DataFrame:
-    """Long-format DataFrame for the trend chart: ``actual`` + ``3-day avg``
-    (+ optional ``prior``).
-
-    Trimmed to ``[first_real_data − 2d, last_real_data]`` so the chart's
-    x-axis doesn't carry empty space when the log spans only a few days.
-    No threshold reference rows — status colouring on the trend line itself
-    carries the healthy/warning/alert signal (the threshold *values* live in
-    the chart caption)."""
-    series = model.time_series_by_day(metric, days=days)
-    if not series:
-        return pd.DataFrame(columns=["date", "value", "series"])
-
-    raw = pd.DataFrame(series, columns=["date", "value"])
-    raw["date"] = pd.to_datetime(raw["date"])
-    raw["value"] = raw["value"].apply(lambda v: _scale_value(metric, v))
-
-    real_rows = raw.dropna(subset=["value"])
-    if real_rows.empty:
-        return pd.DataFrame(columns=["date", "value", "series"])
-    first_data = real_rows["date"].iloc[0]
-    last_data = real_rows["date"].iloc[-1]
-    visible_start = first_data - pd.Timedelta(days=2)
-    raw = raw[(raw["date"] >= visible_start) & (raw["date"] <= last_data)].reset_index(drop=True)
-
-    rolling = raw["value"].rolling(window=ROLLING_AVG_DAYS, center=True, min_periods=1).mean()
-
-    rows: list[dict] = []
-    for d, v in zip(raw["date"], raw["value"]):
-        if pd.notna(v):
-            rows.append({"date": d, "value": float(v), "series": "actual"})
-    for d, v in zip(raw["date"], rolling):
-        if pd.notna(v):
-            rows.append({"date": d, "value": float(v), "series": "3-day avg"})
-
-    if prior_model is not None and days is not None and prior_model.records:
-        # Group prior records by their actual day and shift forward by ``days``
-        # so the prior period overlays the current visible window. Bypass
-        # ``time_series_by_day`` because it always anchors to "today" — prior
-        # records sit in the *previous* window and don't survive that anchor.
-        from collections import defaultdict as _dd
-        by_day: dict = _dd(list)
-        for r in prior_model.records:
-            d = datetime.fromisoformat(r.timestamp).date()
-            by_day[d].append(r)
-        for d, recs in by_day.items():
-            v = METRIC_GETTERS[metric](DashboardModel(recs))
-            if v is None:
-                continue
-            shifted = pd.to_datetime(d) + pd.Timedelta(days=days)
-            if shifted < visible_start or shifted > last_data:
-                continue
-            rows.append({
-                "date": shifted, "value": float(_scale_value(metric, v)),
-                "series": "prior",
-            })
-
-    return pd.DataFrame(rows)
-
-
-def _monitoring_since(df: pd.DataFrame) -> str:
-    """Earliest real data point in the trimmed dataframe — drives the
-    'monitoring since' annotation under each chart."""
-    if df.empty:
-        return ""
-    real = df[df["series"].isin(["actual", "3-day avg"])]
-    if real.empty:
-        return ""
-    return _fmt_date(real["date"].min())
-
-
-def render_trend_plot(
-    model: DashboardModel,
-    metric: str,
-    days: int | None,
-    *,
-    prior_model: DashboardModel | None = None,
     height: int = 220,
 ) -> Figure:
-    """Matplotlib trend plot — status-coloured trend line + visible point
-    markers, monitoring-since caption baked in. Returns the Figure for
-    rendering inside ``gr.Plot``.
+    """Grouped bar chart — N windows × M branches per window.
 
-    Uses ``matplotlib.figure.Figure`` directly (not ``plt.subplots``) so
-    figures don't accumulate in the pyplot global registry across the many
-    chart renders this dashboard does."""
-    df = chart_dataframe(model, metric, days=days, prior_model=prior_model)
+    X-axis: WINDOWS labels (7d / 30d / 90d / Global). Y-axis: metric value
+    in chart-axis units. One coloured bar per branch within each window
+    group; bars whose value is undefined render at zero with a `—`
+    annotation so missing data is visually distinct from a measured zero.
 
-    # Wider canvas (10 inches) so the chart fills its card. ``dpi=200`` so the
-    # rasterised PNG that gr.Plot ships to the browser stays sharp when
-    # zoomed in (operator directive — chart rendering looked low-res before).
-    # Effective output: 10in × 200dpi = 2000px wide; downscales cleanly into
-    # any container width.
+    Threshold reference lines drawn as faint horizontal dashes at the
+    healthy/warning levels for thresholded metrics. No legend on the figure
+    itself — the shared `.branch-legend` strip at the top of the Trends tab
+    carries the colour↔branch mapping for every chart on the page.
+
+    Uses `matplotlib.figure.Figure` directly (not `plt.subplots`) so figures
+    don't accumulate in the pyplot global registry across the many renders
+    this dashboard does.
+    """
+    points = bar_chart_data(model, metric)
+
+    # 10in × dpi=200 → 2000px wide; same canvas size as the line chart.
     fig = Figure(figsize=(10, height / 100), dpi=200, facecolor="#1c1c20")
     ax = fig.add_subplot(111)
     ax.set_facecolor("#1c1c20")
-    if df.empty:
-        ax.text(0.5, 0.5, "no data", ha="center", va="center",
-                color="#5a5a64", transform=ax.transAxes, fontsize=10)
-        ax.set_xticks([]); ax.set_yticks([])
-    else:
-        # Status of the headline value drives the colour of both series.
-        value = METRIC_GETTERS[metric](model)
-        status = metric_status(metric, value) if metric in THRESHOLDS else None
-        actual_color, trend_color = _STATUS_CHART_COLOR.get(status, _STATUS_CHART_COLOR[None])
 
-        actual_df = df[df["series"] == "actual"]
-        trend_df = df[df["series"] == "3-day avg"]
-        prior_df = df[df["series"] == "prior"]
+    n_windows = len(WINDOWS)
+    n_branches = len(BRANCH_CHART_COLORS)
+    # 0.78 group width leaves ~22% spacing between groups for visual breathing.
+    bar_width = 0.78 / n_branches
+    group_positions = list(range(n_windows))
 
-        if not trend_df.empty:
-            ax.plot(trend_df["date"], trend_df["value"],
-                    color=trend_color, linewidth=1.4, zorder=2)
-        if not actual_df.empty:
-            # Markers visibly larger than the line so the operator can see
-            # where real data exists vs where the trend is interpolated.
-            ax.scatter(actual_df["date"], actual_df["value"],
-                       color=trend_color, s=44, zorder=3,
-                       edgecolor="#0a0a0a", linewidth=0.8)
-        if not prior_df.empty:
-            ax.plot(prior_df["date"], prior_df["value"],
-                    color=_PRIOR_CHART_COLOR, linewidth=1.0,
-                    linestyle="--", zorder=1, alpha=0.7)
+    # Index points by (window, branch) for stable lookup per branch series.
+    by_key = {(p.window, p.branch): p for p in points}
+    em_dash_targets: list[tuple[float, float]] = []  # (x, y_baseline) for `—` labels
 
-    # Style — Midnight Mono palette
-    ax.tick_params(colors="#9999a3", labelsize=8.5)
+    for i, (branch, color) in enumerate(BRANCH_CHART_COLORS.items()):
+        offset = (i - (n_branches - 1) / 2) * bar_width
+        x_positions = [pos + offset for pos in group_positions]
+        values = [by_key[(label, branch)].value for label, _ in WINDOWS]
+        has_data = [by_key[(label, branch)].has_data for label, _ in WINDOWS]
+        ax.bar(
+            x_positions, values, bar_width,
+            color=color, alpha=BRANCH_BAR_ALPHA, edgecolor="none", zorder=2,
+        )
+        for x, ok in zip(x_positions, has_data):
+            if not ok:
+                em_dash_targets.append((x, 0.0))
+
+    # `—` annotations for missing-data positions — drawn after bars so the
+    # text sits above the (zero-height) bar mark.
+    for x, y in em_dash_targets:
+        ax.text(
+            x, y, "—", ha="center", va="bottom",
+            color="#5a5a64", fontsize=7, zorder=3,
+        )
+
+    # X-axis: categorical window labels, no tick lines.
+    ax.set_xticks(group_positions)
+    ax.set_xticklabels(
+        [label for label, _ in WINDOWS],
+        color="#9999a3", fontsize=8.5,
+    )
+    ax.tick_params(axis="x", length=0)
+    ax.tick_params(axis="y", colors="#9999a3", labelsize=8.5)
     for spine in ax.spines.values():
         spine.set_color("#1f1f24")
     ax.set_ylabel(_y_axis_title(metric), color="#9999a3", fontsize=9)
-    ax.grid(True, color="#1f1f24", linewidth=0.5)
+    ax.grid(True, axis="y", color="#1f1f24", linewidth=0.5, zorder=1)
+    ax.set_axisbelow(True)
 
-    if not df.empty:
-        # ``%-d`` drops the leading zero — "May 3" not "May 03" (operator
-        # directive). On Windows the equivalent is ``%#d``; on POSIX (mac /
-        # linux) ``%-d`` is correct.
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %-d"))
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=6))
+    # Y-axis floor at zero (rates) — without this matplotlib auto-frames the
+    # zero-height "no data" bars off the bottom edge.
+    ymin, ymax = ax.get_ylim()
+    if ymin > 0:
+        ax.set_ylim(0, ymax)
 
-    # Coloured caption — colour-match the labels to the threshold lines'
-    # implied colours (healthy = green, warning = amber, rest in muted).
-    threshold_caption = _threshold_caption(metric)
-    monitoring_since = _monitoring_since(df)
-    if threshold_caption:
-        # Split "healthy ≤ X · warning ≤ Y" into colored segments.
-        # Render with multiple fig.text calls so each chunk gets its own colour.
-        x = 0.015
-        y = 0.02
-        spacing = 0.006  # between segments
-        for chunk, color in _caption_chunks(threshold_caption):
-            t = fig.text(x, y, chunk, color=color, fontsize=8,
-                         family="monospace")
-            # Render then measure to advance x for the next chunk.
-            fig.canvas.draw_idle()  # ensures bbox is computed
-            try:
-                bbox = t.get_window_extent(renderer=fig.canvas.get_renderer())
-                x += bbox.width / fig.bbox.width + spacing
-            except Exception:
-                x += 0.18  # fallback
-        if monitoring_since:
-            fig.text(x, y, f"·  monitoring since {monitoring_since}",
-                     color="#5a5a64", fontsize=8, family="monospace")
-    elif monitoring_since:
-        fig.text(0.015, 0.02, f"monitoring since {monitoring_since}",
-                 color="#5a5a64", fontsize=8, family="monospace")
-
-    fig.tight_layout(rect=[0, 0.08, 1, 1])
+    fig.tight_layout()
     return fig
 
 
-def _caption_chunks(caption: str) -> list[tuple[str, str]]:
-    """Split the threshold caption into ``(chunk, colour)`` pairs so each
-    segment can be rendered in matplotlib with its own colour.
+def branch_legend_html() -> str:
+    """Shared per-branch colour swatches at the top of the Trends tab.
 
-    Caption shape: ``healthy ≤ 10.0%  ·  warning ≤ 15.0%`` — split on the
-    ``  ·  `` separator and colour the leading word per token."""
-    chunks: list[tuple[str, str]] = []
-    parts = caption.split("  ·  ")
-    for i, part in enumerate(parts):
-        prefix_color = "#5a5a64"
-        if part.startswith("healthy"):
-            prefix_color = "#34d399"
-        elif part.startswith("warning"):
-            prefix_color = "#fbbf24"
-        if i > 0:
-            chunks.append(("·  ", "#5a5a64"))
-        chunks.append((part + "  ", prefix_color))
-    return chunks
-
-
-def _threshold_caption(metric: str) -> str:
-    """Threshold portion of the chart caption — replaces the legend."""
-    t = THRESHOLDS.get(metric)
-    if t is None:
-        return ""
-    if t.unit == "pp":
-        h = f"{t.healthy * 100:.1f}%"
-        w = f"{t.warning * 100:.1f}%"
-    elif t.unit == "ms":
-        # Display threshold values in seconds to match the seconds-only Y-axis.
-        h = f"{t.healthy / 1000:.2f} s"
-        w = f"{t.warning / 1000:.2f} s"
-    else:
-        h = f"{t.healthy:.1f}"
-        w = f"{t.warning:.1f}"
-    direction = "≥" if t.higher_is_better else "≤"
-    return f"healthy {direction} {h}  ·  warning {direction} {w}"
+    One legend strip serves every chart below it — no per-chart legend
+    chrome on individual figures. Iterates `BRANCH_CHART_COLORS` in fixed
+    order so the swatch sequence matches the bar order within each group."""
+    swatches = "".join(
+        "<span class='branch-swatch'>"
+        f"<span class='swatch-color' style='background:{color}'></span>"
+        f"{branch}"
+        "</span>"
+        for branch, color in BRANCH_CHART_COLORS.items()
+    )
+    return (
+        "<div class='branch-legend'>"
+        "<span class='legend-label'>Branches</span>"
+        f"{swatches}"
+        "</div>"
+    )
 
 
-def _chart_caption(metric: str, df: pd.DataFrame) -> str:
-    """Combined caption: threshold annotation + 'monitoring since' note."""
-    parts: list[str] = []
-    threshold = _threshold_caption(metric)
-    if threshold:
-        parts.append(threshold)
-    since = _monitoring_since(df)
-    if since:
-        parts.append(f"monitoring since {since}")
-    return "  ·  ".join(parts)
+def format_trend_header(metric: str, model: DashboardModel) -> str:
+    """Inline header above each chart — `<b>Label:</b> {global value}`.
 
-
-def format_trend_header(
-    metric: str,
-    model: DashboardModel,
-    prior_model: DashboardModel | None = None,
-) -> str:
-    """Inline header above each chart — pure HTML so it can sit inside the
-    chart-card wrapper without markdown getting passed through unparsed."""
+    The chart itself is per-branch; the header surfaces the global aggregate
+    as the headline number so the operator sees `what does this metric look
+    like overall?` without summing the bars mentally. No status colour
+    applied — Metrics tab is the source of truth for `is this healthy?`."""
     label = METRIC_LABELS.get(metric, metric)
     value = METRIC_GETTERS[metric](model)
     value_str = _fmt_metric_value(metric, value)
-    status = _status_class(metric, value)
-    coloured = (
-        f"<span class='metric-value mono {status}'>{value_str}</span>" if status
-        else f"<span class='mono'>{value_str}</span>"
-    )
-    prior_value = METRIC_GETTERS[metric](prior_model) if prior_model is not None else None
-    delta = _delta_inline(metric, value, prior_value)
-    return f"<b>{label}:</b> {coloured}{delta}"
+    return f"<b>{label}:</b> <span class='mono'>{value_str}</span>"
 
 
 # ---- Auto-refresh of cached cluster + summary files -------------------------
@@ -1845,35 +2107,31 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
         with gr.Tabs() as tabs:
             # ---- Metrics tab ----------------------------------------------
             with gr.Tab("Metrics", id=TAB_METRICS):
-                gr.Markdown("<div class='section-header'>Flags</div>")
+                gr.Markdown("<div class='section-header-major'>Flags</div>")
                 # Empty-state markdown shows when no flags fire.
                 initial_flags = _build_flags(model)
                 flags_empty_md = gr.Markdown(
                     "" if initial_flags else FLAGS_EMPTY_PLACEHOLDER
                 )
-                # Pre-allocated per-flag slots: card markdown + ghost
-                # destination link side by side. Slots beyond the active flag
-                # count render hidden.
-                flag_rows: list[gr.Row] = []
-                flag_card_mds: list[gr.Markdown] = []
-                flag_link_btns: list[gr.Button] = []
+                # Pre-allocated per-flag slots: each slot is a single
+                # full-width gr.Button styled as a card. Clicking anywhere
+                # on the card switches to the target tab. Slots beyond the
+                # active flag count render hidden.
+                flag_btns: list[gr.Button] = []
                 for i in range(MAX_FLAGS_RENDERED):
                     if i < len(initial_flags):
                         f = initial_flags[i]
-                        card_html = format_flag_card(f)
-                        link_label = f"→ {_FLAG_TARGET_LABEL.get(f.target, 'Investigate')}"
+                        btn_value = f"{f.headline}\n{f.detail}"
                         slot_visible = True
                     else:
-                        card_html = ""
-                        link_label = ""
+                        btn_value = ""
                         slot_visible = False
-                    with gr.Row(elem_classes=["flag-row"], visible=slot_visible) as row:
-                        flag_card_mds.append(gr.Markdown(card_html))
-                        with gr.Column(scale=0, elem_classes=["flag-link"]):
-                            flag_link_btns.append(
-                                gr.Button(link_label, size="sm")
-                            )
-                    flag_rows.append(row)
+                    flag_btns.append(
+                        gr.Button(
+                            btn_value, visible=slot_visible,
+                            elem_classes=["flag-button"],
+                        )
+                    )
                 # Per-slot target tab state — read by the click handlers to
                 # know where to jump.
                 flag_target_state = gr.State(
@@ -1884,64 +2142,48 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                     ]
                 )
 
-                gr.Markdown("<div class='section-header'>Health overview</div>")
+                gr.Markdown("<div class='section-header-major'>Health overview</div>")
                 metrics_md = gr.Markdown(
                     format_metrics_overview(models, priors, DISPLAY_MODE_DEFAULT)
                 )
 
+                with gr.Accordion("Glossary", open=False):
+                    gr.Markdown(format_metrics_glossary())
+
             # ---- Trends tab -----------------------------------------------
             with gr.Tab("Trends", id=TAB_TRENDS):
-                gr.Markdown("## Trend Explorer")
+                gr.Markdown("<div class='section-header-major'>Trend Explorer</div>")
 
-                selected_metric = gr.State(None)
-                scan_buttons: dict[str, gr.Button] = {}
-                scan_charts: dict[str, gr.Plot] = {}
-                scan_headers: dict[str, gr.Markdown] = {}
+                # Shared per-branch legend at the top — one strip serves
+                # every chart on the page (no per-chart legend chrome).
+                gr.Markdown(branch_legend_html())
 
-                with gr.Column(visible=True) as scan_view:
-                    for block_name, block_metrics in THEMATIC_BLOCKS.items():
-                        gr.Markdown(
-                            f"<div class='section-header'>{block_name}</div>"
-                        )
-                        # Outcome jams 5 charts — chunk into 2-per-row so each
-                        # chart has room for axis labels (operator directive).
-                        per_row = 2 if block_name == "Outcome" else len(block_metrics)
-                        for chunk_start in range(0, len(block_metrics), per_row):
-                            chunk = block_metrics[chunk_start:chunk_start + per_row]
-                            with gr.Row():
-                                for metric in chunk:
-                                    with gr.Column(min_width=320, elem_classes=["chart-card"]):
-                                        scan_headers[metric] = gr.Markdown(
-                                            f"<div class='chart-header'>{format_trend_header(metric, model)}</div>"
-                                        )
-                                        scan_charts[metric] = gr.Plot(
-                                            value=render_trend_plot(model, metric, days=30),
-                                            show_label=False,
-                                        )
-                                        with gr.Row(elem_classes=["investigate-link"]):
-                                            scan_buttons[metric] = gr.Button(
-                                                "investigate ↗", size="sm",
-                                            )
-
-                with gr.Column(visible=False) as investigate_view:
-                    investigate_title = gr.Markdown("")
-                    with gr.Row():
-                        window_radio = gr.Radio(
-                            choices=[label for label, _ in TREND_WINDOWS],
-                            value="30d", label="Window", scale=1,
-                        )
-                        prior_chk = gr.Checkbox(
-                            label="Show prior period", value=False, scale=0,
-                        )
-                    investigate_chart = gr.Plot(
-                        value=None, show_label=False,
+                bar_charts: dict[str, gr.Plot] = {}
+                bar_headers: dict[str, gr.Markdown] = {}
+                for block_name, block_metrics in THEMATIC_BLOCKS.items():
+                    gr.Markdown(
+                        f"<div class='section-header'>{block_name}</div>"
                     )
-                    back_to_scan_btn = gr.Button("Back to scan", variant="secondary")
+                    # Outcome jams 5 charts — chunk into 2-per-row so each
+                    # chart has room for axis labels.
+                    per_row = 2 if block_name == "Outcome" else len(block_metrics)
+                    for chunk_start in range(0, len(block_metrics), per_row):
+                        chunk = block_metrics[chunk_start:chunk_start + per_row]
+                        with gr.Row():
+                            for metric in chunk:
+                                with gr.Column(min_width=320, elem_classes=["chart-card"]):
+                                    bar_headers[metric] = gr.Markdown(
+                                        f"<div class='chart-header'>{format_trend_header(metric, model)}</div>"
+                                    )
+                                    bar_charts[metric] = gr.Plot(
+                                        value=render_metric_bars(model, metric),
+                                        show_label=False,
+                                    )
 
             # ---- Failures tab ---------------------------------------------
             with gr.Tab("Failures", id=TAB_FAILURES):
                 gr.Markdown(
-                    "<div class='section-header'>Failure Feed</div>"
+                    "<div class='section-header-major'>Failure Feed</div>"
                 )
                 with gr.Row(elem_classes=["filter-bar"]):
                     branch_dd = gr.Dropdown(
@@ -2005,14 +2247,19 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                     session_md = gr.Markdown("")
                     back_btn = gr.Button("← Back to feed", variant="secondary")
 
-                gr.Markdown("<div class='section-header'>Gap Clusters</div>")
+                gr.Markdown("<div class='section-header-major'>Gap Clusters</div>")
                 cluster_md = gr.Markdown(
                     format_cluster_panel(read_clusters(CLUSTERS_DEFAULT_PATH))
                 )
 
-                gr.Markdown("<div class='section-header'>Deflection summary</div>")
+                gr.Markdown("<div class='section-header-major'>Deflection summary</div>")
                 deflection_md = gr.Markdown(
                     format_deflection_panel(read_summary("deflection", DEFAULT_SUMMARIES_DIR))
+                )
+
+                gr.Markdown("<div class='section-header-major'>KB Source Coverage</div>")
+                kb_coverage_md = gr.Markdown(
+                    format_kb_coverage_panel(_kb_coverage_entries(model.records))
                 )
 
         # ---- Wiring ---------------------------------------------------------
@@ -2066,26 +2313,21 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
 
             # Per-flag slot updates: row visible only when its slot has a
             # flag; card markdown holds the card HTML; link button shows
-            # destination ("→ Failures") with the matching tab id queued in
-            # flag_target_state for the click handler to read.
-            row_updates: list = []
-            card_updates: list = []
-            link_updates: list = []
+            # Per-flag slot updates: each slot's button carries the
+            # multi-line label (headline + detail) and the matching tab id is
+            # queued in flag_target_state for the click handler to read.
+            btn_updates: list = []
             target_state: list[str] = []
             for i in range(MAX_FLAGS_RENDERED):
                 if i < len(flags):
                     f = flags[i]
-                    row_updates.append(gr.update(visible=True))
-                    card_updates.append(format_flag_card(f))
-                    link_updates.append(gr.update(
+                    btn_updates.append(gr.update(
                         visible=True,
-                        value=f"→ {_FLAG_TARGET_LABEL.get(f.target, 'Investigate')}",
+                        value=f"{f.headline}\n{f.detail}",
                     ))
                     target_state.append(FLAG_TARGET_TAB.get(f.target, TAB_METRICS))
                 else:
-                    row_updates.append(gr.update(visible=False))
-                    card_updates.append("")
-                    link_updates.append(gr.update(visible=False, value=""))
+                    btn_updates.append(gr.update(visible=False, value=""))
                     target_state.append("")
 
             flags_empty_html = "" if flags else FLAGS_EMPTY_PLACEHOLDER
@@ -2095,9 +2337,7 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 _autorefresh_banner([cluster_msg, summary_msg]),
                 format_status_banner(_status_summary(headline)),
                 flags_empty_html,
-                *row_updates,
-                *card_updates,
-                *link_updates,
+                *btn_updates,
                 target_state,
                 format_metrics_overview(new_models, new_priors, DISPLAY_MODE_DEFAULT),
                 feed_summary_html,
@@ -2107,6 +2347,18 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 *state_values,
                 format_cluster_panel(read_clusters(CLUSTERS_DEFAULT_PATH)),
                 format_deflection_panel(read_summary("deflection", DEFAULT_SUMMARIES_DIR)),
+                format_kb_coverage_panel(_kb_coverage_entries(new_model.records)),
+                # Trends — re-render every chart and its header. Aligned with
+                # `bar_headers` + `bar_charts` dicts which iterate THEMATIC_BLOCKS
+                # in the same order as the build-time pass below.
+                *[
+                    f"<div class='chart-header'>{format_trend_header(metric, new_model)}</div>"
+                    for metrics in THEMATIC_BLOCKS.values() for metric in metrics
+                ],
+                *[
+                    render_metric_bars(new_model, metric)
+                    for metrics in THEMATIC_BLOCKS.values() for metric in metrics
+                ],
             ]
 
         refresh_btn.click(
@@ -2115,9 +2367,7 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
             outputs=[
                 header_md, banner_md, status_md,
                 flags_empty_md,
-                *flag_rows,
-                *flag_card_mds,
-                *flag_link_btns,
+                *flag_btns,
                 flag_target_state,
                 metrics_md,
                 feed_summary_md,
@@ -2125,12 +2375,15 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 *feed_accordions,
                 *feed_drilldowns,
                 *feed_session_states,
-                cluster_md, deflection_md,
+                cluster_md, deflection_md, kb_coverage_md,
+                *[bar_headers[m] for ms in THEMATIC_BLOCKS.values() for m in ms],
+                *[bar_charts[m] for ms in THEMATIC_BLOCKS.values() for m in ms],
             ],
         )
 
-        # Per-flag click → switch to the target tab. Each button reads the
-        # current flag_target_state (a list of N tab ids) at its slot index.
+        # Per-flag click → switch to the target tab. The whole card-shaped
+        # button is the click target; each button reads flag_target_state at
+        # its slot index to know which tab to jump to.
         def _make_flag_click(slot_index: int):
             def _handler(targets):
                 target = targets[slot_index] if slot_index < len(targets) else ""
@@ -2139,7 +2392,7 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 return gr.Tabs(selected=target)
             return _handler
 
-        for i, btn in enumerate(flag_link_btns):
+        for i, btn in enumerate(flag_btns):
             btn.click(
                 fn=_make_flag_click(i),
                 inputs=[flag_target_state],
@@ -2213,63 +2466,6 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
             fn=_back_to_feed,
             outputs=[feed_view, session_view],
             scroll_to_output=True,
-        )
-
-        # Trend Explorer: investigate-mode renderer
-        def _build_investigate_figure(metric, window_label, show_prior):
-            if not metric:
-                return gr.update(), None
-            days = dict(TREND_WINDOWS).get(window_label, 30)
-            current_records, _ = _load(reader)
-            prior = current_records.for_prior_window(days=days) if show_prior else None
-            fig = render_trend_plot(
-                current_records, metric, days=days,
-                prior_model=prior, height=480,
-            )
-            title = (
-                f"### Investigating: {METRIC_LABELS.get(metric, metric)}\n"
-                + format_trend_header(metric, current_records, prior_model=prior)
-            )
-            return title, fig
-
-        def _enter_investigate_for(metric: str):
-            def _handler(window_label, show_prior):
-                title, fig = _build_investigate_figure(metric, window_label, show_prior)
-                return (
-                    metric,
-                    gr.update(visible=False),
-                    gr.update(visible=True),
-                    title,
-                    fig,
-                )
-            return _handler
-
-        for metric, btn in scan_buttons.items():
-            btn.click(
-                fn=_enter_investigate_for(metric),
-                inputs=[window_radio, prior_chk],
-                outputs=[
-                    selected_metric, scan_view, investigate_view,
-                    investigate_title, investigate_chart,
-                ],
-            )
-
-        def _refresh_investigate(metric, window_label, show_prior):
-            title, fig = _build_investigate_figure(metric, window_label, show_prior)
-            return title, fig
-
-        for control in (window_radio, prior_chk):
-            control.change(
-                fn=_refresh_investigate,
-                inputs=[selected_metric, window_radio, prior_chk],
-                outputs=[investigate_title, investigate_chart],
-            )
-
-        def _back_to_scan():
-            return gr.update(visible=True), gr.update(visible=False)
-
-        back_to_scan_btn.click(
-            fn=_back_to_scan, outputs=[scan_view, investigate_view]
         )
 
     return app

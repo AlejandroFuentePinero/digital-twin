@@ -45,6 +45,7 @@ MODULE_CATEGORY: dict[str, str] = {
     "guardrail": "LLM Callers",
     "retrieval": "Retrieval (RAG)",
     "ingest": "Retrieval (RAG)",
+    "kb_corpus": "Retrieval (RAG)",
     "interaction_log": "Logging",
     "log_reader": "Logging",
     "session_state": "Logging",

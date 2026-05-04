@@ -13,11 +13,17 @@ from failure_feed import Session, group_by_session
 from interaction_log import DEFAULT_LOG_PATH, InteractionRecord
 from log_reader import LocalReader
 from sentinel import (
+    BRANCH_CHART_COLORS,
+    METRIC_GLOSSARY,
+    METRIC_SPECS,
     THEMATIC_BLOCKS,
+    WINDOWS,
+    bar_chart_data,
+    branch_legend_html,
     build_app,
-    chart_dataframe,
     format_failure_drilldown,
     format_header,
+    format_metrics_glossary,
     format_metrics_overview,
     format_session_view,
     format_status_banner,
@@ -613,10 +619,10 @@ def test_format_session_view_uses_drilldown_for_each_turn_body():
 # ----- Trend Explorer (issue #30) ---------------------------------------------
 
 
-def test_chart_dataframe_includes_value_series_and_threshold_reference_lines():
-    """chart_dataframe returns a long-format pandas frame with `date`, `value`, `series`
-    columns. Series column carries 'value' for the metric line plus 'healthy'/'warning'
-    horizontal threshold references — gr.LinePlot can colour them via the series column."""
+def test_bar_chart_data_returns_one_point_per_window_branch_pair():
+    """The grouped bar chart needs one BarPoint per (window, branch) cell —
+    `len(WINDOWS) × len(BRANCH_CHART_COLORS)` rows total, regardless of
+    whether the branch had any records in that window."""
     from datetime import datetime, timezone
 
     record = InteractionRecord.model_validate({
@@ -628,52 +634,64 @@ def test_chart_dataframe_includes_value_series_and_threshold_reference_lines():
         "latency_ms": {"classifier": 0, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 0},
         "knew_answer": True,
     })
-    model = DashboardModel([record])
-    df = chart_dataframe(model, metric="gap_rate", days=7)
+    points = bar_chart_data(DashboardModel([record]), metric="gap_rate")
 
-    assert set(df.columns) >= {"date", "value", "series"}
-    series_set = set(df["series"].unique())
-    assert "actual" in series_set, "raw daily values rendered as 'actual' series"
-    assert "3-day avg" in series_set, "rolling-average smoother must be drawn"
-    # No fixed threshold reference lines — status colouring on the trend
-    # itself signals health (operator directive). The threshold *values*
-    # appear in the chart caption.
-    assert "healthy" not in series_set
-    assert "warning" not in series_set
+    assert len(points) == len(WINDOWS) * len(BRANCH_CHART_COLORS)
+    seen = {(p.window, p.branch) for p in points}
+    expected = {
+        (label, branch)
+        for label, _ in WINDOWS for branch in BRANCH_CHART_COLORS
+    }
+    assert seen == expected
 
 
-def test_chart_dataframe_includes_prior_period_series_when_prior_model_supplied():
-    """When prior_model is passed and its dates (shifted forward by `days`)
-    fall in the visible range, chart_dataframe adds a 'prior' series — the
-    basis for the 'Show prior period' overlay in investigate mode."""
-    from datetime import datetime, timedelta, timezone
+def test_bar_chart_data_marks_no_data_branches_with_has_data_false():
+    """A branch with zero records in a window must render as an empty slot
+    (`has_data=False`, `value=0.0`) so the bar position is preserved (X-axis
+    grouping stays aligned across windows) but renders as a `—` annotation
+    rather than a misleading 0% bar."""
+    from datetime import datetime, timezone
 
-    def rec(days_ago: int) -> InteractionRecord:
-        ts = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
-        return InteractionRecord.model_validate({
-            "timestamp": ts,
-            "session_id": f"s-{days_ago}", "turn_index": 0, "question": "q?",
-            "event_type": "answered", "branch": "GENERIC",
-            "classification_confidence": 1.0,
-            "attempts": [{"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""}],
-            "retrieved_chunks": [],
-            "latency_ms": {"classifier": 0, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 0},
-            "knew_answer": True,
-        })
+    record = InteractionRecord.model_validate({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "session_id": "s", "turn_index": 0, "question": "q?", "event_type": "answered",
+        "branch": "GENERIC", "classification_confidence": 1.0,
+        "attempts": [{"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""}],
+        "retrieved_chunks": [],
+        "latency_ms": {"classifier": 0, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 0},
+        "knew_answer": True,
+    })
+    points = bar_chart_data(DashboardModel([record]), metric="gap_rate")
 
-    # Current period: a record 1 day ago. Prior: a record 8 days ago — when
-    # shifted forward by `days=7` it lands at "1 day ago", inside the trim.
-    model = DashboardModel([rec(1)])
-    prior = DashboardModel([rec(8)])
-    df = chart_dataframe(model, metric="gap_rate", days=7, prior_model=prior)
-    assert "prior" in set(df["series"].unique())
+    by_branch_global = {
+        p.branch: p for p in points if p.window == "Global"
+    }
+    assert by_branch_global["GENERIC"].has_data is True
+    # Every other branch had no records → has_data=False, value=0.
+    for branch in BRANCH_CHART_COLORS:
+        if branch == "GENERIC":
+            continue
+        assert by_branch_global[branch].has_data is False
+        assert by_branch_global[branch].value == 0.0
 
 
-def test_chart_dataframe_returns_empty_dataframe_for_empty_model():
-    """An empty model yields a chart with no rows — the chart layer renders an
-    'insufficient data' placeholder instead of crashing on missing series."""
-    df = chart_dataframe(DashboardModel([]), metric="gap_rate", days=7)
-    assert len(df) == 0
+def test_bar_chart_data_returns_empty_for_empty_model():
+    """An empty model still emits a full grid (every branch marked `no data`)
+    so the chart can render its empty placeholder uniformly across windows."""
+    points = bar_chart_data(DashboardModel([]), metric="gap_rate")
+    assert len(points) == len(WINDOWS) * len(BRANCH_CHART_COLORS)
+    assert all(p.has_data is False for p in points)
+    assert all(p.value == 0.0 for p in points)
+
+
+def test_branch_legend_html_includes_every_branch_with_a_swatch():
+    """The shared legend at the top of the Trends tab must list every branch
+    in `BRANCH_CHART_COLORS` with its colour swatch — single source of truth
+    for per-chart bar colours."""
+    legend = branch_legend_html()
+    for branch, color in BRANCH_CHART_COLORS.items():
+        assert branch in legend, f"legend missing branch {branch!r}"
+        assert color in legend, f"legend missing colour {color!r} for {branch!r}"
 
 
 def test_thematic_blocks_partition_every_plottable_metric_exactly_once():
@@ -960,3 +978,113 @@ def test_format_trend_header_surfaces_metric_label_and_current_value():
 
     assert "gap" in header.lower()  # metric label
     assert "100" in header           # current value 100% rendered as percentage
+
+
+def test_attempts_distribution_renders_with_three_buckets_in_metrics_overview():
+    """Attempts distribution row appears in the Outcome block with the three
+    bucket labels (1 / 2 / 3+) inline — operator sees the share of turns at
+    each retry depth at a glance."""
+    bad = _record_dict()
+    bad["attempts"] = [
+        {"answer": "x", "is_acceptable": False, "guardrail_feedback": "f"},
+        {"answer": "x", "is_acceptable": False, "guardrail_feedback": "f"},
+        {"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""},
+    ]
+    records = [
+        InteractionRecord.model_validate(_record_dict()),
+        InteractionRecord.model_validate(bad),
+    ]
+    models, priors = _models_and_priors(records)
+    overview = format_metrics_overview(models, priors)
+
+    assert "Attempts distribution" in overview
+    # The bucket labels appear as the value-cell text.
+    assert "1:" in overview and "2:" in overview and "3+" in overview
+
+
+def test_latency_section_renders_caption_and_share_per_stage():
+    """The Latency section has a caption above the rows labelling the
+    tri-tuple (p50 | p95 | share); per-stage value cells render the three
+    values without redundant labels."""
+    rec = _record_dict(total_latency=1000)
+    rec["latency_ms"] = {
+        "classifier": 100, "retrieval": 50, "generation": 600,
+        "guardrail": 250, "total": 1000,
+    }
+    records = [InteractionRecord.model_validate(rec)]
+    models, priors = _models_and_priors(records)
+    overview = format_metrics_overview(models, priors)
+
+    # Caption labels the per-cell tri-tuple once.
+    assert "p50 | p95 | share" in overview
+    # Stage rows render the share (e.g. generation 600/1000 = 60%).
+    assert "latency-share" in overview
+    assert "60%" in overview
+
+
+def test_format_kb_coverage_panel_surfaces_never_retrieved_first():
+    """Never-retrieved sections sort first (they're the actionable signal —
+    pruning candidates or prompt rewrites). Off-canon retrievals sort last."""
+    from kb_corpus import CoverageEntry
+    from sentinel import format_kb_coverage_panel
+
+    entries = [
+        CoverageEntry("a.md", "Beta", 5),
+        CoverageEntry("a.md", "Alpha", 0),
+        CoverageEntry("ghost.md", "Removed", 1, off_canon=True),
+    ]
+    # Caller is responsible for sort order; the panel respects whatever it
+    # gets. compute_coverage already sorts correctly, so just pass sorted.
+    sorted_entries = sorted(
+        entries,
+        key=lambda e: (e.off_canon, e.retrieval_count, e.source_file, e.section_heading),
+    )
+    html_out = format_kb_coverage_panel(sorted_entries)
+
+    # Both classes appear in the right order — never-retrieved first, off-canon last.
+    never_pos = html_out.find("Alpha")
+    retrieved_pos = html_out.find("Beta")
+    off_canon_pos = html_out.find("Removed")
+    assert never_pos < retrieved_pos < off_canon_pos
+    # Summary line counts each bucket.
+    assert "1 never retrieved" in html_out
+    assert "1 retrieved" in html_out
+    assert "1 off-canon" in html_out
+
+
+def test_metric_glossary_keys_match_metric_specs_labels():
+    """Forcing function: every row label in METRIC_SPECS must have a glossary
+    entry, and the glossary must not carry orphan keys for labels that don't
+    exist on the dashboard. Catches drift on label rename without coupling
+    tests to prose."""
+    spec_labels = {label for _, specs in METRIC_SPECS for (label, *_) in specs}
+    glossary_labels = set(METRIC_GLOSSARY.keys())
+
+    missing = spec_labels - glossary_labels
+    orphan = glossary_labels - spec_labels
+    assert not missing, f"glossary missing entries for: {sorted(missing)}"
+    assert not orphan, f"glossary has orphan entries: {sorted(orphan)}"
+
+
+def test_format_metrics_glossary_renders_every_section_header_once():
+    """Same single-header invariant as the metrics overview — five thematic
+    sections, each named once."""
+    glossary_html = format_metrics_glossary()
+    for header in ("Outcome", "Routing", "Engagement", "Tool use", "Latency"):
+        assert glossary_html.count(header) >= 1, (
+            f"section header {header!r} must appear in the glossary"
+        )
+
+
+def test_format_metrics_glossary_renders_one_row_per_metric_with_description():
+    """Each glossary row must carry both the metric name and a non-empty
+    description — empty descriptions would defeat the point of the panel."""
+    import html
+    glossary_html = format_metrics_glossary()
+    for label, desc in METRIC_GLOSSARY.items():
+        assert desc, f"glossary description for {label!r} is empty"
+        # Labels are HTML-escaped on render (e.g. `<0.7` → `&lt;0.7`); compare
+        # against the escaped form so the test tracks the actual output.
+        assert html.escape(label) in glossary_html, (
+            f"glossary missing rendered label {label!r}"
+        )
