@@ -189,10 +189,22 @@ Cohort cross-tabs (e.g. conversion-by-branch); CSV / JSONL export; pagination; c
 
 ## Phase 5 — Break the live system
 
+Two threads; the canary baseline gave us a head start on thread (b).
+
+**(a) Original adversarial probe + KB additions:**
 - [ ] Local probe session — try recruiter probes, behavioural questions, gap questions, edge cases.
 - [ ] Identify actual failure modes (informed by Sentinel signals when log is non-trivial).
 - [ ] Add 1–2 STAR-format stories to `profile.md`'s `personal_stories` section — only ones Alejandro would say verbatim live.
 - [ ] Add ≤10 KB-grounded recruiter eval questions (only after corresponding KB content exists). Run v5 eval.
+
+**(b) Evaluate canary baseline output (Session 42 — free data):** the first canary run surfaced three real signals before any adversarial probing. Read the actual records, decide which patterns to fix at rule / prompt / KB level, re-run the canary as the verification surface.
+
+- [ ] **Branch-misroute records (11/50, `branch_match_rate=78.7%`).** Read each misrouted question's record. Cluster by shape — paper-title-shaped, project-named-but-not-deep, behavioural-shaped, etc. Decide between (i) classifier-prompt sharpening on the dominant shape, (ii) registering more positive examples per branch in the prompt, (iii) accepting the misroute when the GENERIC+retrieval path produces the correct answer anyway. `LIMITATIONS::O6` updated with the canary numbers.
+- [ ] **Tool-uptake-on-warranted records (8/~13 warranted skipped, `tool_uptake_on_warranted=38.5%`).** Read each warranted-but-skipped record. Test the LLM advisor's candidate `tool_rules` language ("if visitor names a specific project, default to fetch unless unambiguously general"). Re-run canary; verify uptake on warranted moves up without false-positive overfiring on general TECHNICAL probes. `LIMITATIONS::P8` trip-wire #2 fires on the canary surface.
+- [ ] **Bridging-instead-of-gap records (5/8 gap-aimed answered instead, gap rate 6%).** Read each bridging response. Decide per-record: tighten `rules.GAP_PHRASE` enforcement (some bridging *is* honest — "I haven't used kdb+/q but I have used time-series databases X" — and the right answer depends on the specific shape), add the question shape to a curated negative-example list, or accept the bridging behaviour. `LIMITATIONS::O1` updated with the canary numbers.
+- [ ] **After any fix, re-run canary** (`uv run python src/canary_runner.py`, no `--freeze-baseline`) and check the three numbers move in the right direction. Re-baseline only when the fixed state is the new "correct" state.
+
+The canary baseline is the verification surface for Phase 5 fixes. The adversarial probe is the discovery surface for new failures the corpus doesn't cover.
 
 ---
 

@@ -35,6 +35,8 @@ The generator sometimes fabricates plausible content rather than emitting the ca
 
 **What Sentinel needs to make this trackable cleanly:** `attempts[*].rejection_reason` field on the interaction log record, with a small enum (`fabrication`, `bridging`, `scope`, `tone`, `multi-turn-coherence`, `other`). Today's `interaction_log.py` carries `attempts[*].guardrail_feedback` (free-text) but no structured reason — so cross-session aggregation requires text classification of the feedback strings. Add the field when Sentinel work begins.
 
+**Canary baseline (Session 42, 2026-05-04, run `run-20260504-121937-9af6fb`):** the 8 gap-aimed canary questions (C006-C009 niche-tech + C019-C022 out-of-scope) produced **3 gap-phrase emissions and 5 answered-instead-of-gapped** events. That's a 62.5% bridging rate on a curated probe set — same shape, different sample frame from the smoke-test trip-wire. Doesn't directly trip the existing trip-wires (which were defined on adversarial-probe sample shapes), but is the cleanest signal yet that the bridging behaviour is the dominant first-attempt response to no-coverage probes. **Phase 5 will read the 5 specific records to decide whether to tighten `rules.GAP_PHRASE` enforcement, add the question shapes to a curated negative-example list, or treat the bridging behaviour as acceptable on certain niche-tech probes** (some bridging may be honest — "I haven't used kdb+/q but I have used time-series databases X, Y" — and the right answer depends per-record).
+
 ---
 
 ### O2 — TECHNICAL classifier over-firing on tool-name probes
@@ -276,6 +278,8 @@ The `fetch_project_readme` tool fires on the model's discretion — `tool_rules`
 
 **Partial fix (Session 42, #39):** the Canary tab's `tool_uptake_on_warranted(corpus)` metric uses a clean denominator — only canary questions with `requires_tool=True`. Live `technical_tool_uptake_rate` keeps its noisy denominator (every TECHNICAL turn, regardless of whether the question warranted a tool call). The canary surface gives a sharp signal on a closed corpus; the live metric remains a coarse aggregate. Both are kept — they answer different questions.
 
+**Canary baseline (Session 42, 2026-05-04, run `run-20260504-121937-9af6fb`):** **`tool_uptake_on_warranted(corpus) = 38.5%`** — 8 of ~13 `requires_tool=True` canary questions did NOT trigger a `fetch_project_readme` call. Tool call success rate when the tool *did* fire = 100% (so it's uptake, not reliability). This is the false-negative pattern (#1) materialising at corpus-relevant magnitude. Trip-wire #2 from the original entry ("Aggregate uptake rate over time shows TECHNICAL turns calling the tool at a rate that doesn't match the question shape") **fires** on the canary surface — the question shape is curated to be tool-warranting, and the rate is below 40%. Phase 5 should tighten `tool_rules`'s "When to call" with sharper triggers — the LLM advisor's earlier suggestion ("if visitor names a specific project, default to fetch unless unambiguously general") is the candidate language to test against the canary as a verification surface.
+
 ---
 
 ### O6 — Classifier routes specific-paper questions to GENERIC, losing TECHNICAL tool access
@@ -307,6 +311,8 @@ The semantic shape — "give me a fact about a specific named publication / proj
 - If misroute defense is still wanted at that point, the right factoring per `P7` is splitting `DEFLECTION` into a portable `offer_contact` half rather than promoting the whole rule.
 
 **Companion observability:** Sentinel can surface this as `category=direct_fact AND branch=GENERIC AND classification_confidence < 0.5 AND question_mentions_paper_or_project()` — a boolean signal for misroute-to-fallback patterns. `#34`'s shipped `FlagDetector` doesn't model this shape today (its three detectors are `gap_rate_jump` / `new_cluster` / `repeat_failure`); the `confident_failure_rate` metric (#35) is the closest existing surface and the right place to start.
+
+**Canary baseline (Session 42, 2026-05-04, run `run-20260504-121937-9af6fb`):** broader than the original specific-paper observation — `branch_match_rate(corpus) = 78.7%` (11 / 50 canary questions misrouted), with **mean classification confidence 0.873 across the corpus**. The misroutes aren't low-confidence-correctly-floored cases; they're confident-and-wrong. Phase 5 will read the 11 specific records to identify whether the misroute clusters by question shape (paper-title-shaped misroutes only? all-direct-fact misroutes? branch-specific?) and decide between (a) classifier-prompt sharpening on the dominant shape, (b) registering more positive examples, or (c) accepting the misroute when the answer surfaces correctly anyway via GENERIC + retrieval.
 
 ---
 

@@ -250,7 +250,25 @@ Drift-focused panel between Trends and Failures. Closes the specific-question-re
 
 A 50-question canary corpus (`data/canaries/corpus.json`) is replayed through the live pipeline N=3 replicates per question. Each replay produces `InteractionRecord`s tagged `is_canary=True` and writes to the canonical `data/logs/interactions.jsonl` alongside live records. A frozen golden baseline (a designated past run) is the reference; drift fires per-question when the current run's aggregate diverges.
 
-> **Status (2026-05-04):** Implementation shipped Session 42; **baseline not yet frozen.** The first establishment batch crashed on Anthropic API credit exhaustion at question 26/50 (`LIMITATIONS::P14`). 76 orphan canary records sit under `run_id=run-20260504-115055-336112`; no `baseline.json` exists. The Canary tab renders the cold-start state until the batch is re-run with credits restored: `uv run python src/canary_runner.py --freeze-baseline`.
+> **Status (2026-05-04):** Baseline frozen. `run-20260504-121937-9af6fb` (sha `5ff42cc`) is the golden reference — 150 records, 50/50 distinct questions, 3 replicates each. Three real signals surfaced on day one and are queued for Phase 5 to address (see § "First baseline run — observed signals" below).
+
+### First baseline run — observed signals
+
+The first baseline run did its job: three predicted failure modes the `LIMITATIONS` register listed surfaced as concrete numbers. The dashboard's aggregate metrics could not catch any of these directly — that's exactly why the canary exists.
+
+| Signal | Reading | Predicted by | Action |
+|---|---|---|---|
+| **Branch match rate 78.7%** | 11 / 50 questions misrouted; mean classification confidence 0.873 — confident wrong, not unsure wrong | `LIMITATIONS::O6` (specific-paper misroute to GENERIC) | Phase 5: classifier prompt tightening on the misrouted shapes |
+| **Tool uptake on warranted 38.5%** | 8 of ~13 `requires_tool=True` canary questions did NOT trigger `fetch_project_readme`; tool call success on the ones that fired = 100% (so it's uptake, not reliability) | `LIMITATIONS::P8` (TECHNICAL tool-uptake unmeasured) | Phase 5: tighten `tool_rules` "When to call" with sharper triggers; consider promoting "if visitor names a specific project, default to fetch unless unambiguously general" |
+| **Gap rate 6% (3/50)** | The corpus carries 8 gap-aimed questions (C006-C009 niche-tech + C019-C022 out-of-scope); only 3 emitted the gap phrase. **5 questions that should have honestly said "I don't have that" got answered instead.** | `LIMITATIONS::O1` (first-attempt fabrication on no-coverage probes) | Phase 5: read the 5 specific records; decide whether to tighten `rules.GAP_PHRASE` enforcement, add the question shapes to a curated negative-example list, or treat the bridging behaviour as acceptable on certain niche-tech probes |
+
+What was healthy on day one:
+- First-attempt pass rate **94.0%** (47 / 50 accepted on attempt 1 — guardrail discipline working).
+- Refusal rate **0%** (no canned-refusal bottom-out).
+- Tool call success rate **100%** (when the tool fires, it works).
+- Total p95 **24.7s** with guardrail at 13.9s = 56% share, matching the Session 40 "guardrail dominates" pattern.
+
+The numbers above are the locked baseline — drift fires when *future* runs deviate. They are not promoted to Phase 5 fixes by the canary alone; the operator decides which to act on.
 
 ### Live vs canary separation
 

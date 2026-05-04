@@ -106,10 +106,25 @@ Test surface that locks the contract:
 
 **Issue #39 stays open** until the baseline is frozen. The implementation modules are shipped + tested; the benchmark-establishment step is the only blocker. A comment on the issue records the deferred state.
 
+### Baseline frozen — observed signals
+
+After the credit top-up, re-ran `uv run python src/canary_runner.py --freeze-baseline`. **Clean completion**: 150 records under `run-20260504-121937-9af6fb`, all 50 distinct questions covered with 3 replicates each, baseline frozen on sha `5ff42cc` (the canary-under-test, before today's UI work). Issue #39 closed; `needs-triage` stripped. The 76 orphan records from the first attempt remain inert in the log per `LIMITATIONS::P14`.
+
+**Three real signals surfaced on day one** — exactly what a working drift-detection surface looks like on its first run. None are catastrophic, all are predicted by the `LIMITATIONS` register, all are queued for Phase 5:
+
+| Metric | Reading | Predicted by | Why the live dashboard couldn't see it |
+|---|---|---|---|
+| **Branch match rate 78.7%** | 11/50 misrouted; mean confidence 0.873 — *confidently* wrong | `O6` | The dashboard tracks `low_confidence_rate` and `confident_failure_rate` but neither is question-specific; high-confidence misroutes on long-tail recruiter probes don't move the aggregate |
+| **Tool uptake on warranted 38.5%** | 8 of ~13 `requires_tool=True` questions skipped the tool fetch | `P8` | The live `technical_tool_uptake_rate` has a noisy denominator (every TECHNICAL turn, regardless of whether the question warranted a tool); the canary's clean denominator (only canary questions with `requires_tool=True`) makes the gap visible |
+| **Gap rate 6% on 8 gap-aimed questions** | 5 questions that should have emitted "I don't have that" got answered instead | `O1` | Live `gap_rate` runs at ~9.4% on real traffic and looks healthy; the canary distinguishes "answered correctly" from "answered when should have gapped" by carrying `expected_event_type` per question |
+
+What was healthy: first-attempt pass rate 94%, refusal rate 0%, tool call success 100%, total p95 24.7s with guardrail at 56% share (matches Session 40 pattern).
+
+**Phase 5 takes these as free input.** The original Phase 5 plan (Alejandro plays adversarial recruiter, Sentinel records, decide what to add) keeps. Now there are also **three concrete signals from the canary baseline** to evaluate before the adversarial probe — read the misrouted-question records, the warranted-but-skipped-tool records, and the gap-aimed-but-answered records, decide which patterns to fix at the rule / prompt / KB level, and re-run the canary as the verification surface.
+
 ### Outstanding
 
-- **Establish the canary benchmark** — re-run `uv run python src/canary_runner.py --freeze-baseline` once Anthropic credits are restored. Cost ~$1.50, ~30 min wall-clock. Verification on completion: 150 fresh records under a new `run_id`, all `is_canary=True`; `data/canaries/baseline.json` exists; Sentinel banner shows "0 major · 0 minor". This step closes #39.
-- **Phase 5 (break the live system)** — blocked on baseline establishment. Plan unchanged: deliberately introduce regressions; check whether canary catches what the dashboard misses, and what the dashboard catches that canary doesn't.
+- **Phase 5 (break the live system)** — unblocked. Two threads now: (a) original adversarial probe + KB additions + v5 eval, (b) evaluate canary baseline output (3 signals above) before / alongside the probe.
 - **Push the local commits** — push remains harness-protected.
 
 ### Next session entry-point
