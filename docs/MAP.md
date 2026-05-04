@@ -107,6 +107,7 @@ graph LR
   subgraph sg_retrieval["Retrieval (RAG)"]
     direction TB
     ingest["ingest.py"]:::retrieval
+    kb_corpus["kb_corpus.py"]:::retrieval
     retrieval["retrieval.py"]:::retrieval
   end
 
@@ -198,6 +199,7 @@ graph LR
   sentinel --> flag_detector
   sentinel --> failure_feed
   sentinel --> interaction_log
+  sentinel --> kb_corpus
   sentinel --> log_reader
   sentinel --> metric_status
   summarize_failures --> failure_feed
@@ -247,6 +249,7 @@ graph LR
 | `guardrail.py` | Guardrail — branch-aware quality evaluator (ADR-0003). |
 | `ingest.py` | Ingest the digital twin knowledge base into ChromaDB. |
 | `interaction_log.py` | Enriched per-turn interaction log (ADR-0002 / issue #13 step 7). |
+| `kb_corpus.py` | Lightweight KB section inventory — no ChromaDB / OpenAI imports. |
 | `log_reader.py` | Sentinel-facing typed reader over the canonical interaction log (issue #28). |
 | `metric_status.py` | Per-metric thresholds + week-over-week deltas — Sentinel's observability |
 | `module_health.py` | Local Gradio dashboard showing pass/fail status of digital-twin tests. |

@@ -73,6 +73,15 @@ When a metric goes red, the matching **runbook** at the bottom of this doc tells
 - **Thresholds:** healthy ≤ 3%, warning ≤ 5%, alert above. *Source:* live baseline (2.4%).
 - **Confidence:** moderate; explicit signal.
 
+#### `attempts_distribution` (Session 40)
+
+- **Definition:** `Counter(min(len(r.attempts), 3) for r in records)` bucketed as `{"1", "2", "3+"}`, expressed as fractions.
+- **What it measures:** share of turns by retry depth — what fraction sailed through clean (attempt 1), what fraction needed one rejection-and-recovery (attempt 2), what fraction hit the retry ceiling (3+).
+- **What it proxies:** guardrail health, mid-band. The endpoints are already covered by `refusal_rate` (3+ rejected) and `retry_exhausted_rate` (3+ regardless of acceptance); this row fills in the middle and lets the operator see "20% of turns needed the guardrail to push back" as its own number.
+- **No threshold** — orientation. The thresholded `refusal_rate` and `retry_exhausted_rate` carry the alerting; this is for context.
+- **Confidence:** high — direct read.
+- **Display:** inline distribution `1: 91% · 2: 7% · 3+: 2%` in the Outcome block, matching the `branch_distribution` rendering pattern.
+
 ### Routing block
 
 #### `branch_distribution`
@@ -185,13 +194,17 @@ When a metric goes red, the matching **runbook** at the bottom of this doc tells
 
 Per-stage latency split surfaces *which stage* is slow. Total alone hides this — generation up to 17s and guardrail up to 28s are both happening, and the headline can be misread as either.
 
-- **`classifier`** — typical 1s, p95 ≈ 1.7s. Stable; gpt-4.1-nano cached.
-- **`retrieval`** — sub-100ms; ChromaDB local read. Spikes signal embedding cache miss or query-rewriter hiccup.
-- **`generation`** — typical 3.5s, p95 ≈ 10s. Spikes correlate with retry rounds.
-- **`guardrail`** — typical 5s, p95 ≈ 12s. Sonnet's slower than the gpt-4.1 generator.
-- **`total`** — typical 13s, p95 ≈ 25s.
+**Display (Session 40):** each per-stage row renders as `p50 | p95 | share` with the column labels rendered once in the section caption above the rows (`each cell: p50 | p95 | share of total p95`). `share = stage_p95 / total_p95` — the stage's contribution to the headline tail value. Stage shares can sum to >100% because `total_p95` is the 95th percentile of per-record totals, not the sum of per-stage 95th percentiles; read shares as "of the headline tail, this stage contributes ~X%" rather than as a strict accounting partition.
+
+- **`classifier`** — typical p50 1s / p95 ≈ 1.7s; share ≈ 7%. Stable; gpt-4.1-nano cached.
+- **`retrieval`** — sub-100ms; share ≈ 1%. ChromaDB local read. Spikes signal embedding cache miss or query-rewriter hiccup.
+- **`generation`** — typical p50 3.5s / p95 ≈ 10s; share ≈ 30%. Spikes correlate with retry rounds.
+- **`guardrail`** — typical p50 5s / p95 ≈ 12s; share ≈ 42%. Sonnet's slower than the gpt-4.1 generator — the dominant tail driver in the current pipeline.
+- **`total (p95)`** — typical 13s, p95 ≈ 25s.
   - **Thresholds:** healthy p95 ≤ 25s, warning ≤ 40s, alert above. *Source:* live baseline (Session 28).
   - **Confidence:** high — direct read.
+
+The share column makes architectural drift visible: a per-stage absolute regression (e.g. classifier 1s → 3s) is one signal, but a per-stage *share* shift (e.g. guardrail moves from 42% → 60% of total) tells you the bottleneck has migrated even when total p95 looks similar.
 
 ---
 
@@ -225,7 +238,63 @@ The Flags panel sits above Panel 1 and surfaces three automatically-detected ano
 - **What it proxies:** a recurring failure mode the system is reproducing rather than recovering from. Distinct from `new_cluster` (which is gap-only) — `repeat_failure` is deflection / refusal patterns.
 - **Why exclude `gap`:** gap turns are handled by `new_cluster` + the clustering batch; surfacing them here would double-count across two flags.
 - **Target panel:** Failure Feed (`#failure-feed-section`).
-- **Runbook:** filter the Failure Feed by the question text + use the Replay button (#38) on one of the records to confirm the failure reproduces under current code; then attribute via the matching runbook (`guardrail_rejection_rate` for refusals; `gap_rate` for deflections).
+- **Runbook:** filter the Failure Feed by the question text + read the underlying records' `guardrail_feedback`; then attribute via the matching runbook (`guardrail_rejection_rate` for refusals; `gap_rate` for deflections). (Replay was deleted in Session 38; the canary-set workflow under PRD #39 covers the broader regression-catch use case at population level.)
+
+---
+
+## Trends tab (Session 41 redesign — grouped bar charts)
+
+Trend charts now compare 5 branches across 4 time windows in one glance. Replaces the Session 40 line/time-series view: at portfolio-scale traffic (~30 records/day, 4-day history at the time of redesign), line charts were rendering 3–4 dots per series — most "trends" were single line segments between two points. Bar charts with 4 × 5 = 20 bars per chart are denser and don't fake temporal smoothness.
+
+Trends remain decoupled from status framing — the Metrics tab is the source of truth for "is this healthy?". Trends carries per-branch decomposition + window comparison only.
+
+### What renders on every chart
+
+- **X-axis:** 4 categorical positions — `7d / 30d / 90d / Global`. Same windows as the Metrics tab columns, identical semantics.
+- **Y-axis:** metric value in chart-axis units (`Gap rate (%)`, `Total latency p95 (s)`, etc.). Auto-scaled per chart with a zero floor.
+- **5 grouped bars per window** — one colour per branch (`GENERIC` blue, `GAP` gray, `TECHNICAL` green, `BEHAVIOURAL` purple, `LOGISTICAL` orange). Fixed palette; same order in every chart.
+- **`—` annotations** at the baseline for branches with no records in a window (or with the metric returning `None`). Distinct from a measured 0% bar (which renders as a small tick at zero); the position is reserved either way so the X-axis grouping stays aligned across windows.
+- **No threshold reference lines and no caption** — Trends is decoupled from healthy/warning semantics by design. Threshold values appear on the Metrics tab + this doc.
+- **No aggregate bar** — operator-driven directive. The visual sum across the 5 branches is implicit; if the operator wants the aggregate scalar, it reads off the chart header (`Gap rate: 8.1%`).
+
+### Shared per-branch legend at the top of the tab
+
+A single `.branch-legend` strip — five colour swatches + branch names — rendered once at the top of the Trends tab. Every chart on the page reads against the same legend; no per-chart matplotlib legend chrome on individual figures. Matches the bar order within each window group.
+
+### No investigate mode
+
+Removed in Session 41. The bar chart already shows all 4 windows; window radio + prior-period overlay + deployment markers don't apply to a categorical x-axis. Clicking a chart does nothing (deliberately).
+
+If deeper investigation is needed for a specific metric, the workflow is: read the bar chart on Trends → drill into the Failure Feed (Failures tab) for per-record forensics → consult the LLM-batched Gap Clusters / Deflection summary for pattern attribution.
+
+---
+
+## KB Source Coverage panel (Session 40)
+
+Lives at the bottom of the Failures tab below Deflection summary. Surfaces three buckets of `(source_file, section_heading)` pairs:
+
+- **Never retrieved** (count = 0, alert ribbon) — sections in the canonical KB that have not appeared in any retrieval over the loaded window. Pruning candidates or content-rewrite candidates if they look load-bearing.
+- **Retrieved** (count > 0, healthy ribbon) — sections that show up in `retrieved_chunks`, sorted ascending by frequency so the rarely-used sections sit at the top of the bucket.
+- **Off-canon** (warning ribbon) — sections that appear in retrievals but do **not** match any current canonical `(source_file, section_heading)` pair from the KB files. These are stale embeddings the operator forgot to clean up after a KB rewrite. Action: re-run `uv run python src/ingest.py` to refresh ChromaDB.
+
+### How it's computed
+
+- Canonical inventory comes from `kb_corpus.load_sections()` — pure file walk over `data/knowledge_base/*.md` mirroring `ingest.py`'s split rule (split on `## ` boundaries; preamble survives only if meaningful; SUMMARY/INDEX stay un-split).
+- Retrieval counts come from flattening `record.retrieved_chunks` across the loaded window.
+- Cross-reference happens in `kb_corpus.compute_coverage` — a pure function with no I/O, testable in isolation.
+
+### Caveats
+
+- The off-canon bucket has natural false-positives during a KB rewrite-in-progress. If you've just edited a section heading and haven't re-ingested yet, the old name is correctly flagged as off-canon. Re-ingest, the flag clears.
+- "Retrieval" counts every appearance, not unique queries. A high-frequency section may simply be the answer to a high-frequency question, not over-retrieving.
+
+---
+
+## Metrics tab — Glossary (Session 40)
+
+A collapsed `gr.Accordion` at the bottom of the Metrics tab listing every row in the metric grid with a one-sentence description, grouped by the same Outcome / Routing / Engagement / Tool use / Latency sections. Forcing function: `tests/test_sentinel.py::test_metric_glossary_keys_match_metric_specs_labels` pins the glossary keys to `METRIC_SPECS` labels — adding a new row without a glossary entry fails CI.
+
+Defaults closed so the at-a-glance scan stays clean; click to expand when learning the metric vocabulary or onboarding a new operator.
 
 ---
 

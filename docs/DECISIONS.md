@@ -5,6 +5,180 @@
 
 ---
 
+## Session 41 (2026-05-04) — Trends tab redesign (line charts → grouped bars) + UX polish + honest over-engineering audit
+
+**Status:** Trends tab fundamentally rewired. Suite holds at **416 passing** (net −1 from Session 40 due to deleted line-chart tests + new bar-chart tests). Primary outcome: a clearer surface that compares 5 branches × 4 time windows in one glance. Secondary outcome: an honest over-engineering audit that locks in the next move — **stop polishing, build canary (PRD #39), then run Phase 5**.
+
+### What shipped — code
+
+| Change | Where |
+|---|---|
+| **Trends rewrite from line → grouped bar charts.** Each chart shows 4 windows × 5 branches as grouped bars; X-axis = window labels, Y-axis = metric value, one colour per branch. No aggregate (visual sum is implicit). | `src/sentinel.py` — new `bar_chart_data() -> list[BarPoint]` + `render_metric_bars(model, metric)`; old `chart_dataframe` and `render_trend_plot` deleted entirely |
+| **Investigate mode removed.** Bar chart already shows all 4 windows; window radio + prior-period overlay + deployment markers + back-to-scan button all gone. Trends now has scan view only. | `build_app` in `src/sentinel.py` — ~80 lines of investigate plumbing removed |
+| **Shared per-branch legend** at the top of the Trends tab; one strip serves every chart on the page (no per-chart matplotlib legend). | New `branch_legend_html()` + `.branch-legend` CSS |
+| **No-data render** as a `—` annotation at the baseline (distinct from "measured zero" which renders as a tick at zero). Branches with no records in a window show as empty positions, X-axis grouping stays aligned. | `render_metric_bars` |
+| **Threshold reference lines + caption removed entirely** from Trends (reaffirms ADR-0003 / earlier design: Trends carries trajectory + per-branch decomposition; the Metrics tab is the source of truth for "is this healthy?"). | `_threshold_caption`, `_caption_chunks`, `_THRESHOLD_LINE_*` constants — all deleted as orphan code |
+| **Flag cards now whole-card clickable** — replaced `Markdown card + "→ Failures" ghost button` per slot with a single `gr.Button` styled as a card. Multi-line label (`headline\n\ndetail`) rendered via CSS `white-space: pre-line` + `::first-line` for the headline-in-bold-red typography. | `build_app` flag-slot construction + `.flag-button` CSS |
+| **Neon-red flag styling** (`--flag-neon: #ff1f4e`, `--flag-neon-bright: #ff3a64`, `--flag-bg: rgba(255, 31, 78, 0.20)`). Locally scoped to flag cards; doesn't change the global `--alert` colour. CSS uses both Gradio's button theme variables AND high-specificity selectors with `:not()` chains to win against Gradio's `.lg.secondary.svelte-XXX` class chain. | `.flag-button` CSS in `SENTINEL_CSS` |
+| **Heading hierarchy** — `.section-header-major` (20px / 700 / `border-strong` underline / `text-primary`) for top-of-tab landmarks; `.section-header` (13px / 600 / softer underline / `text-secondary`) demoted for sub-sections inside Health Overview / Trend Explorer's per-block titles. | New CSS class + 6 build-time call sites flipped to `section-header-major` |
+| **Tab column headers** (7d / 30d / 90d / Global) bigger + less faded — `0.72em → 0.85em`, `font-weight: 500 → 600`, colour from `text-muted` → `text-secondary`, looser tracking + extra bottom padding. | `.metric-row .col-header` CSS |
+| **Orientation rows now carry a 2px gray ribbon** so every row has a left ribbon (alert/warning/healthy/orientation all ribboned) — visual rhythm preserved. | `.metric-row.row-orientation` CSS |
+| **All four severity rows use the same density + bg-tint treatment** — 8px padding, 4px margin, 3px ribbon, tinted background; only ribbon colour and bg hue differ. Subtle typography distinctions kept (alert label slightly bolder, healthy label slightly muted). | `.metric-row.row-{alert,warning,orientation,healthy}` CSS rewrite |
+| **Refresh handler now re-renders bar charts + headers** on click (previously charts were build-time only). | `_refresh` outputs in `build_app` |
+
+### Critical evaluation — over-engineering audit
+
+Triggered by operator's question: *"are we over-engineering this? will Sentinel actually flag failures accurately?"*
+
+**Answer: Yes and yes.** Both are simultaneously true. The polish work doesn't move the regression-detection needle, AND the dashboard still has the blind spot the operator sensed.
+
+**What Sentinel CAN catch today (sufficient → don't over-build):**
+- Aggregate-level regressions (gap rate doubling, classifier confidence collapsing, latency spikes)
+- Pattern-level shifts (new gap clusters, repeated refusals, KB-section drift via off-canon retrievals)
+- Per-record forensics (Failure Feed + LLM summaries + drill-down)
+
+**What Sentinel CANNOT catch (the real blind spot):**
+- Specific-question quality regressions. At ~30 records/day with a long-tail distribution, a regression on 4 specific recruiter questions may not surface in live traffic for a month. By then 3 deploys have stacked.
+- Generator fabrication regression where the *kind* of guardrail rejection changes but the rate doesn't (composite metric blind to attribution).
+- KB content rewrites where retrieval still hits the section but the answer changes.
+- Branch-specific regressions on TECHNICAL (10/99 records — too statistically unstable to flag at branch level).
+
+**What was load-bearing this session vs cosmetic:**
+
+| Load-bearing | Cosmetic |
+|---|---|
+| Bar-chart redesign — actual per-branch comparison in one view | Glossary accordion |
+| KB Source Coverage — catches embedding drift | Heading hierarchy (major vs sub) |
+| Attempts distribution — mid-band signal between refusal and pass | Three display modes for metric overview (`stacked`/`collapse`/`inline`) |
+| Latency-share columns — catches stage-bottleneck shifts | Neon-red flag styling |
+| | Severity-tinted backgrounds for healthy/warning/orientation |
+| | Time-period column-header sizing |
+
+The cosmetic column doesn't make the dashboard worse — Midnight Mono still looks great — but none of it catches a single new failure mode. **Past diminishing returns for current data volume.** With ~30 records/day, many of the metrics being tuned are statistically too noisy to be load-bearing yet.
+
+### Locked next steps (post-audit)
+
+1. **Stop dashboard polish.** Decision is final.
+2. **Implement canary set + drift detector — PRD #39** before Phase 5. This addresses the actual blind spot. Frozen golden baseline + N=3 replicates per question + 5 drift kinds × 2 severity tiers + stratified summary + re-baseline workflow.
+3. **Run Phase 5 against the canary + current dashboard.** Deliberately introduce regressions; check whether the canary catches what the dashboard misses, and what the dashboard catches that canary doesn't.
+4. **Tune the dashboard based on what Phase 5 surfaces** — not what looks elegant. Half the polish so far might prove redundant; the other half might reveal that *different* surfaces are needed (fabrication-specific detector, cross-turn detector, etc.).
+
+### Design choices (selected)
+
+- **Bar chart over line chart for trend visualisation.** Line charts at 30 records/day with 4 days of history were rendering 3-4 dots per series at most — most "trends" were single line segments between two points. Bar charts with 4 windows × 5 branches = 20 bars per chart give the operator a comparable, dense surface that doesn't fake temporal smoothness.
+- **Investigate mode dropped, not preserved.** With all 4 windows on every chart, the window radio is redundant. Prior-period overlay + deployment markers don't apply (no time-series x-axis). Removing the whole investigate plumbing was simpler than keeping a "click to enlarge" affordance with no other functionality.
+- **No threshold reference lines + no caption on Trends.** Per the earlier "Trends decoupled from status" decision: the Metrics tab is where the operator reads "is this healthy?" Bar chart with reference lines would re-introduce status semantics that should live one tab away. Threshold values still appear in the metric overview (Metrics tab) and SENTINEL.md.
+- **`BarPoint` dataclass with explicit `has_data: bool`.** Rendering a bar at zero conflates "measured zero rate" with "no records to measure." Keeping has_data lets the renderer draw a `—` annotation at missing positions while preserving X-axis grouping.
+- **Branch palette stays the same as the Session 40 line palette** — no point churning the colour↔branch mapping across iterations.
+- **Neon-red flag tokens scoped local to `.flag-button`** — `--flag-neon` / `--flag-bg` / etc. as CSS custom properties on the wrapper, not modifications to the global `--alert`. Status banner / metric badges / failure-feed strips keep their existing palette.
+- **Severity-tinted bg on every metric row, not just alerts.** Operator pointed out the alert tint creates an inconsistent visual rhythm (alert rows have tinted bg, others don't). Normalising to all-have-bg-tint with hue matching the ribbon gives the four severities an even visual treatment; ribbon colour + label-weight do the differentiation.
+- **Same density across all four severity rows** (8px padding, 4px margin, 3px ribbon) — operator directive. Replaces the prior "alerts heavier, healthy lighter" hierarchy. Soft hierarchy preserved via label font-weight (alert) + label colour (healthy) only.
+
+### Verified
+
+- `uv run pytest -q` → **416 passed**.
+- Live runtime: `PYTHONPATH=src uv run python -c "from sentinel import build_app; build_app(autorefresh=False)"` → boots cleanly against the 99-record live log.
+- Smoke check on bar charts: `gap_rate / 30d` returns the expected 4 × 5 = 20 BarPoints; per-branch values match `DashboardModel(branch_records).gap_rate` for each branch.
+
+### Outstanding
+
+- **Push the local commits** — push remains harness-protected (now 25+ commits ahead of origin).
+- **Phase 5** + **canary (PRD #39)** are the locked next steps. Operator clearing context after this session to pick up canary fresh.
+
+---
+
+## Session 40 (2026-05-04) — Phase 4.5: Sentinel metric expansions + canary PRD published
+
+**Status:** Q/A pass through the dashboard surfaced six load-bearing additions. All shipped. Suite **402 → 417** (+15 tests). Plus PRD published as Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39) covering the canary set + drift detector — Phase 5 prep, not implemented this session.
+
+### What shipped — code
+
+| Change | Where it lives |
+|---|---|
+| **Glossary** at bottom of Metrics tab (collapsed `gr.Accordion`) | `sentinel.py` — `METRIC_GLOSSARY` dict (24 entries) + `format_metrics_glossary()` HTML formatter + glossary CSS in `SENTINEL_CSS` |
+| **Per-branch trend overlay** always-on; aggregate as thick neutral line; status colour removed from Trends entirely | `sentinel.py` — `chart_dataframe` rewritten (drops `actual` + `3-day avg` series, adds one series per branch with ≥ 2 data points + `aggregate`); `render_trend_plot` rewritten (faded coloured lines, neutral aggregate, compact legend top-right when >1 series, scatter dots removed); `_STATUS_CHART_COLOR` deleted; `format_trend_header` no longer applies status class to the value |
+| **Attempts distribution** (`1: 75% · 2: 18% · 3+: 7%`) row in Outcome | `dashboard_model.py::attempts_distribution`; `sentinel.py::_fmt_attempts_distribution`; new spec row in `METRIC_SPECS["Outcome"]` |
+| **Latency share** of total (per stage) — `p50 \| p95 \| share` in each cell, single section caption labels the tri-tuple once at the top | `dashboard_model.py::latency_with_share(stage)` (returns `{p50, p95, share}` where `share = stage_p95 / total_p95`); `sentinel.py::_fmt_latency_row` rewritten; new `SECTION_CAPTIONS` dict + render hook in `format_metrics_overview` |
+| **KB Source Coverage** panel under Failures (never-retrieved / retrieved / off-canon, sorted ascending) | New `src/kb_corpus.py` (pure inventory: `Section` + `CoverageEntry` dataclasses + `load_sections()` mirror of ingest's split rule + `compute_coverage()` cross-reference); `sentinel.py::format_kb_coverage_panel` + `_kb_coverage_entries` helper; new section under Failures tab; `system_map.py::MODULE_CATEGORY` registers `kb_corpus` under `Retrieval (RAG)` |
+| **Deployment markers** on Trends investigate mode (vertical dashed line + rotated short-sha label at every `git_sha` boundary) | `sentinel.py::_git_sha_boundaries` + `show_deployment_markers` parameter on `render_trend_plot`; investigate-mode call site sets `True`, scan mode keeps default `False` |
+
+### Live data after the changes (99 records, 1 distinct git_sha)
+
+- **Attempts distribution**: `1: 91% · 2: 7% · 3+: 2%` — long tail small but visible
+- **Latency share**: guardrail at **42% of total p95**, classifier at **7%**, generation at **31%** — exactly the "guardrail dominates" pattern the LLM advisor predicted
+- **KB Source Coverage**: **41 never retrieved · 63 retrieved · 4 off-canon** (off-canon = sections in old embeddings that no longer exist in `data/knowledge_base/` — real drift to action)
+- **Deployment markers**: 1 boundary at `2026-05-04 → 911e85c` (only post-#37 records carry `git_sha`)
+- **Per-branch trends on `gap_rate`/30d**: aggregate (3 points) + GENERIC (3) + GAP (2) + TECHNICAL (2); BEHAVIOURAL/LOGISTICAL skipped (under `BRANCH_MIN_POINTS=2`)
+
+### Q/A → recommendation set (the framing for this session)
+
+The session opened with a Q/A pass through the Metrics tab and a separate review of an external LLM advisor's metric suggestions. That review classified the suggestions into:
+- **Already implemented** (refusal, gap, p50/p95/per-stage, schema fingerprints)
+- **Equivalent to existing, different framing** (first-attempt-pass = `1 − guardrail_rejection_rate`)
+- **Worth adding now — high value, low cost** — the 5 changes above
+- **Worth adding later — high value, higher cost** (canary set, cross-turn offer-then-retract detector, tool-call refinement)
+- **Skip** (LLM-evaluated gap rate, retrieval entropy / Jaccard, p99 latency)
+
+Operator chose to ship 1–5 (the cheap-and-load-bearing set) before Phase 5, deferring the canary set as a separate PRD.
+
+### Design choices
+
+- **Per-branch by overlay, not by dropdown.** First proposal was a Branch filter dropdown on the Metrics tab. Operator pushed back ("clutter, plus I want time-trend visibility"). Pivoted to "always-on per-branch overlay in Trends, decoupled from the Metrics tab entirely." Cleaner: zero new Metrics-tab affordances, one new view in Trends.
+- **Status colour removed from Trends entirely.** The Metrics tab is the source of truth for "is this metric healthy?"; Trends carries trajectory + per-branch decomposition. Mixing the two surfaces was redundant and made charts noisier. Threshold *values* still appear in the chart caption.
+- **Branch palette distinct from failure-mode palette.** Failure-mode colours live on the Failures tab (refused/retry-exhausted/rejected-then-recovered/gap). Branch colours live on the Trends tab (GENERIC blue, GAP gray, TECHNICAL green, BEHAVIOURAL purple, LOGISTICAL orange). Same hue family, different roles per tab — no semantic collision when the operator scans both tabs in one session.
+- **`BRANCH_MIN_POINTS=2` to skip phantom singletons.** Branches with one data point in the visible window draw nothing in matplotlib's `plot()` (no marker by default) and pollute the legend with empty entries. Threshold of 2 points means "actually has a line to draw."
+- **Aggregate dropped the `3-day avg` smoother.** With 5 faded branch lines beneath, an additional rolling-avg series was visual noise. The aggregate is now the raw daily rate over all records, drawn as a single thick line. Easy to add the smoother back if Phase 5 reveals jagged aggregate is hard to read.
+- **Attempts distribution as one row, not three.** Inline `{1: 91%, 2: 7%, 3+: 2%}` matches `branch_distribution` rendering. Three separate rows would have created visual disconnection between values that should be read as a distribution.
+- **Latency share computed against total_p95, not summed-stage_p95.** Stage shares can sum to >100% because total_p95 is the 95th percentile of per-record totals, not the sum of per-stage 95th percentiles. Operator reads the stage shares as "of the headline tail value, this stage contributes ~X%" — directionally correct, mathematically loose. Acceptable trade-off.
+- **Section caption hook (`SECTION_CAPTIONS`) generalises beyond Latency.** Today only Latency uses it (`each cell: p50 | p95 | share of total p95`). Future sections that need a one-line subhead can opt in by adding a key to the dict.
+- **KB Coverage in a separate `kb_corpus.py`, not in `ingest.py`.** Importing `ingest` pulls `chromadb` + `openai` and requires `OPENAI_API_KEY` at module load — too heavy for the dashboard. `kb_corpus.py` mirrors the section-split rule (split on `## ` boundaries; preamble survives only if meaningful) without those dependencies. Drift between the two is constrained by both reading the same `data/knowledge_base/*.md` files; if `ingest.split_on_headings` ever adds new rules, `kb_corpus.load_sections` needs the matching update.
+- **Off-canon retrievals as a third bucket, not silently dropped.** Sections retrieved from ChromaDB that don't exist in current `data/knowledge_base/*.md` files = stale embeddings the operator forgot to clean up. Surface them as a warning-coloured group at the bottom of the panel — actionable signal.
+- **Deployment markers in investigate mode only.** Scan-mode mini-charts are 110px tall; rotated short-sha labels would dominate. Investigate is where the operator goes when they want this signal anyway.
+- **`_git_sha_boundaries` dedupes on first-seen.** A sha that appears, disappears, and reappears registers exactly one boundary (the first appearance). Prevents flicker when records are not strictly time-ordered (e.g. retry timestamp variance).
+- **Canary deferred to a PRD, not a follow-up issue.** PRD shape captures the design rationale (frozen baseline, replicates, severity gradations, stratified summary, re-baseline workflow) which an issue body would either be too long for or too thin to communicate.
+
+### Tests added (+15)
+
+| Test | Module |
+|---|---|
+| `test_metric_glossary_keys_match_metric_specs_labels` | `tests/test_sentinel.py` (forcing function) |
+| `test_format_metrics_glossary_renders_every_section_header_once` | same |
+| `test_format_metrics_glossary_renders_one_row_per_metric_with_description` | same |
+| `test_chart_dataframe_includes_aggregate_series` | rewritten from prior `_includes_value_series_and_threshold_reference_lines` |
+| `test_chart_dataframe_adds_per_branch_series_when_branch_has_enough_data` | new |
+| `test_attempts_distribution_renders_with_three_buckets_in_metrics_overview` | new |
+| `test_latency_section_renders_caption_and_share_per_stage` | new |
+| `test_format_kb_coverage_panel_surfaces_never_retrieved_first` | new |
+| `test_git_sha_boundaries_returns_first_appearance_per_unique_sha` | new |
+| `test_load_sections_returns_pairs_for_split_files` | new `tests/test_kb_corpus.py` |
+| `test_load_sections_drops_empty_preamble` | same |
+| `test_load_sections_keeps_unsplit_files_whole` | same |
+| `test_load_sections_against_real_kb_returns_nonempty` | same |
+| `test_compute_coverage_counts_retrievals_and_marks_never_retrieved` | same |
+| `test_compute_coverage_flags_off_canon_retrievals` | same |
+| `test_compute_coverage_handles_empty_inputs` | same |
+
+(Net +15 — one rewrite, four removed-and-replaced; gross test count moved 402 → 417.)
+
+### Verified
+
+- `uv run pytest -q` → **417 passed**.
+- Live runtime: `PYTHONPATH=src uv run python src/sentinel.py` boots cleanly against the 99-record live log; all 5 surfaces render with real values shown above.
+- `system_map` regenerated → `MAP.md` includes `kb_corpus` under `Retrieval (RAG)`.
+
+### Outstanding
+
+- **Push the local commits** — `main` push remains harness-protected; commit count keeps growing.
+- **Run cluster + summary batches once in a fresh process** to populate cached files so the next launch's auto-refresh has nothing to do (carry-over from Session 39).
+- **Triage Issue #39** (canary PRD) — the PRD lands with `needs-triage`; operator decides whether it gets `ready-for-agent` or `ready-for-human`, and where it slots vs Phase 5.
+- **Phase 5** (break the live system) is unblocked. The 5 dashboard additions sharpen the lens before Phase 5 starts producing real failures.
+
+### Next session entry-point
+
+Read `docs/SENTINEL.md` for the latest operator reference (updated this session: new Attempts distribution metric, new latency-share rendering, new KB Coverage panel, deployment markers on Trends). Read this Session 40 entry for the design rationale behind those additions. Then either pick up Phase 5 or triage Issue #39.
+
+---
+
 ## Session 39 (2026-05-04) — Sentinel UX hardening: Midnight Mono + severity-driven layout + 7 follow-up bug-fix passes
 
 **Status:** Three full UX iterations + 4 follow-up bundles on top of Session 38's restructure. Suite **402 passing**. 8 commits since the Phase 4 closeout: `1ef06c2` Midnight Mono + status banner + single-header sections, `911e85c` iteration-3 spec (severity sort + chart cards + design tokens), `6a872f1` 7 visual bug fixes (latency HTML escape regression, chart titles markdown leak, threshold caption colour, chart blur, per-mode colours, session-view focus, brighter section headers), `ab42eac` 90d window + drop unused suffix column + chart DPI bump (100 → 200), `4a571b5` per-flag clickable destination links (`→ Failures` / `→ Trends`), `d0b1454` drop tool-uptake threshold (false-warning at 60%) + add tool_call_count volume metric.

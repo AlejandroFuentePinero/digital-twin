@@ -3,12 +3,17 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-04 (Session 37 — `#34` shipped; **Phase 4 complete** — all 11 issues closed)
-**Current phase:** **Phase 4 in progress.** Slices 1 (`#28` LogReader) and 2 (`#29` Sentinel skeleton + Panel 1 v1) closed in `da77567` + `f2c1231` (local, push-protected). Suite 224 → 245 (+21). Phase 4 plan was restructured this session from "5 panels + 3-flag panel" into an 11-issue surface organised around the **9 failure modes Sentinel exists to detect**; 4 new issues filed (`#35` `#36` `#37` `#38`), 2 existing rewritten (`#30` `#31`). Senior-engineer audit surfaced four hidden gaps before TDD started: proxy-metric caveats (lands in `docs/SENTINEL.md` per `#36`), structural observability blind spot (no `git_sha` / `prompt_hash` for replay or deployment markers — filed as `#37` prereq), confident-failure detection gap (added to `#35`), and replay capability (filed as `#38`). Live-log inventory of `data/logs/interactions.jsonl` (85 records, 64 sessions) drove all metric definitions. See `DECISIONS.md` Session 28 for full rationale.
+**Last updated:** 2026-05-04 (Session 41 — Trends bar-chart redesign + UX polish + over-engineering audit; canary PRD #39 stays the locked next move)
+**Current phase:** **Phase 4 complete** (all 11 issues closed). **Phase 4.5 polish complete** across Sessions 40-41. Suite at **416 passing**.
+
+**Honest audit at end of Session 41:** dashboard polish past diminishing returns for current data volume (~30 records/day). The live aggregate metrics are statistically too noisy on most surfaces; the actual blind spot is **specific-question quality regressions** which canary (#39) addresses. **Stop dashboard polish; build canary; run Phase 5; tune from what Phase 5 surfaces.** See DECISIONS.md Session 41 for the full audit.
 
 **Phase 1 + Phase 2 + Phase 3 complete.**
 
-**Next: Phase 5** — break the live system. Phase 4's instrumentation surface is now complete; Phase 5 turns that lens on the live pipeline to find real regressions.
+**Locked next-step order:**
+1. **Build canary set + drift detector** — Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39). The dashboard cannot catch regressions on specific recruiter questions without it; aggregate metrics on long-tail traffic will trail real regressions by weeks.
+2. **Run Phase 5** (break the live system) against canary + dashboard. Use what surfaces to inform any further dashboard work.
+3. **Iterate dashboard from Phase 5 findings**, not from polish instinct.
 
 ---
 
@@ -136,9 +141,33 @@ GitHub Issues are the source of truth for slice-level scope; this list is a chec
 
 Sentinel reads precomputed cluster/summary files — no live LLM calls in the dashboard hot path.
 
+### Phase 4.5 polish (Sessions 40–41)
+
+Two-session arc: Session 40 added 5 load-bearing metric surfaces + published the canary PRD; Session 41 redesigned Trends from line charts to grouped bars + iterated UX based on operator feedback + ran an honest over-engineering audit.
+
+**Session 40 (load-bearing additions):**
+- [x] **Glossary** at the bottom of the Metrics tab (collapsed) — 24 entries pinned to `METRIC_SPECS` labels via forcing-function test.
+- [x] **Per-branch trend overlay** (line-chart era — superseded by Session 41 bar charts).
+- [x] **Attempts distribution** row in the Outcome block (`1: 91% · 2: 7% · 3+: 2%`).
+- [x] **Latency share-of-total** per stage, with single section caption labelling the tri-tuple `p50 | p95 | share` once at the top.
+- [x] **KB Source Coverage** panel under Failures — never-retrieved / retrieved / off-canon, sorted ascending. New `src/kb_corpus.py`.
+- [x] **Deployment markers** on Trends investigate mode (line-chart era — removed in Session 41 with investigate mode).
+- [x] **PRD published** as Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39) — canary set + drift detector. `needs-triage`.
+
+**Session 41 (Trends rewrite + UX polish + audit):**
+- [x] **Bar-chart redesign** — line/time-series charts replaced with grouped bars. 4 windows × 5 branches per chart. Investigate mode + deployment markers + prior overlay all removed.
+- [x] **Shared per-branch legend** at the top of the Trends tab (one strip serves every chart).
+- [x] **Threshold caption + reference lines removed** from Trends entirely (Metrics tab owns "is this healthy?").
+- [x] **Whole-card-clickable flag buttons** — `gr.Markdown` card + ghost link replaced with single `gr.Button` styled as a card.
+- [x] **Neon-red flag styling** (`--flag-neon: #ff1f4e`); locally scoped, doesn't change global `--alert`.
+- [x] **Heading hierarchy** — `.section-header-major` for top-of-tab landmarks, `.section-header` demoted for sub-sections.
+- [x] **Time-period column headers** bigger + less faded.
+- [x] **Severity-tinted backgrounds** on every metric row (warning amber, healthy green, orientation gray) — same density as alert rows; only ribbon colour + bg hue differ.
+- [x] **Honest over-engineering audit** — operator-triggered evaluation. Outcome: stop dashboard polish, build canary, run Phase 5, iterate from real failures. See DECISIONS.md Session 41.
+
 ### Explicitly punted as YAGNI (reopen if signal demands)
 
-Cohort cross-tabs (e.g. conversion-by-branch); CSV / JSONL export; pagination; custom date-range picker; multi-metric overlay in investigate mode; side-by-side attempt diff; configurable thresholds via UI; cost tracking (`tokens_in` / `tokens_out`); KB version stamp in records; materialised daily aggregates. Documented in respective issue Out-of-scope sections.
+Cohort cross-tabs (e.g. conversion-by-branch); CSV / JSONL export; pagination; custom date-range picker; multi-metric overlay in investigate mode; side-by-side attempt diff; configurable thresholds via UI; cost tracking (`tokens_in` / `tokens_out`); KB version stamp in records; materialised daily aggregates. **Phase 4.5-deferred:** Metrics-tab branch-filter dropdown (per-branch trends in Trends covered the use case at zero new Metrics-tab chrome); p99 latency (p50 + p95 + share is enough); LLM-evaluated gap rate (separate evaluator dependency, doesn't add over `knew_answer`); retrieval entropy / Jaccard across question pairs (too noisy at portfolio scale; KB Coverage covers most of the same signal more cheaply).
 
 ---
 
