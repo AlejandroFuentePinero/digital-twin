@@ -52,3 +52,16 @@ class ContactReader:
             return []
         with self._path.open("r", encoding="utf-8") as f:
             return [json.loads(line) for line in f if line.strip()]
+
+
+def read_provided_session_ids(path: Path = DEFAULT_CONTACT_LOG_PATH) -> set[str]:
+    """Set of `session_id`s that submitted the contact form.
+
+    Cross-reference target for ``DashboardModel.contact_conversion_rate``.
+    Required because the live writer sets ``contact_provided=True`` on the
+    InteractionRecord *after* the form is submitted, so a record never
+    carries both ``contact_offered=True`` and ``contact_provided=True``;
+    record-level intersection always returns 0%. Joining on ``session_id``
+    gives the true conversion: a session that was offered the form AND has
+    an entry in ``contacts.jsonl`` counts as converted."""
+    return {r["session_id"] for r in ContactReader(path).read_all()}

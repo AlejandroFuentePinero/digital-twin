@@ -8,7 +8,7 @@ Sentinel UI in `sentinel.py` is the only consumer.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from statistics import median, quantiles
 from typing import Callable
@@ -26,6 +26,15 @@ HIGH_CONFIDENCE_THRESHOLD = 0.8
 @dataclass(frozen=True)
 class DashboardModel:
     records: list[InteractionRecord]
+    # Cross-reference set of session IDs that submitted contact info via
+    # `contacts.jsonl`. Required because the live pipeline writer sets
+    # `contact_provided=True` on the InteractionRecord *after* the form
+    # submit, so the same record never carries both `contact_offered=True`
+    # and `contact_provided=True` — record-level intersection returns 0%
+    # even when the form *was* converted. Joining on `session_id` gives the
+    # true conversion. Empty default preserves the legacy record-level
+    # signal for callers that don't load the contact log.
+    provided_session_ids: frozenset[str] = field(default_factory=frozenset)
 
     @property
     def total_interactions(self) -> int:
@@ -97,6 +106,17 @@ class DashboardModel:
         return self._rate_of(lambda r: r.classification_confidence < threshold)
 
     @property
+    def mean_classification_confidence(self) -> float | None:
+        """Mean classifier confidence across all records, or None if empty.
+
+        Direct read of how sure the classifier is on average — sits alongside
+        the rate-style ``low_confidence_rate`` and ``confident_failure_rate``
+        in the Routing block."""
+        if not self.records:
+            return None
+        return sum(r.classification_confidence for r in self.records) / len(self.records)
+
+    @property
     def unique_sessions(self) -> int:
         return len({r.session_id for r in self.records})
 
@@ -105,6 +125,15 @@ class DashboardModel:
         if not self.records:
             return None
         return median(Counter(r.session_id for r in self.records).values())
+
+    @property
+    def mean_turns_per_session(self) -> float | None:
+        """Mean turns per session — direct read of "average questions asked
+        per session". Operator-friendly companion to the median."""
+        if not self.records:
+            return None
+        sessions = Counter(r.session_id for r in self.records)
+        return sum(sessions.values()) / len(sessions)
 
     @property
     def dropoff_by_turn(self) -> dict[int, int]:
@@ -116,10 +145,19 @@ class DashboardModel:
 
     @property
     def contact_conversion_rate(self) -> float | None:
-        offered = [r for r in self.records if r.contact_offered]
-        if not offered:
+        """Sessions that converted ÷ sessions that were offered the form.
+
+        Counts a session as converted when *either* an in-log record carries
+        `contact_provided=True` OR the session_id appears in the cross-
+        referenced `provided_session_ids` from contacts.jsonl. The
+        cross-reference is the load-bearing signal in production — the
+        in-log signal is a fallback for tests / synthetic data."""
+        sessions_offered = {r.session_id for r in self.records if r.contact_offered}
+        if not sessions_offered:
             return None
-        return sum(1 for r in offered if r.contact_provided) / len(offered)
+        sessions_provided_in_log = {r.session_id for r in self.records if r.contact_provided}
+        sessions_provided = sessions_provided_in_log | self.provided_session_ids
+        return len(sessions_offered & sessions_provided) / len(sessions_offered)
 
     @property
     def technical_tool_uptake_rate(self) -> float | None:
@@ -173,7 +211,10 @@ class DashboardModel:
         if days is None:
             return self
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        return DashboardModel([r for r in self.records if r.timestamp >= cutoff])
+        return DashboardModel(
+            [r for r in self.records if r.timestamp >= cutoff],
+            provided_session_ids=self.provided_session_ids,
+        )
 
     def time_series_by_day(
         self, metric: str, days: int | None
@@ -224,7 +265,8 @@ class DashboardModel:
         prior_start = (now - timedelta(days=2 * days)).isoformat()
         prior_end = (now - timedelta(days=days)).isoformat()
         return DashboardModel(
-            [r for r in self.records if prior_start <= r.timestamp < prior_end]
+            [r for r in self.records if prior_start <= r.timestamp < prior_end],
+            provided_session_ids=self.provided_session_ids,
         )
 
 

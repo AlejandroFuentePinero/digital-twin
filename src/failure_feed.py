@@ -40,6 +40,60 @@ class FailureRow:
 FAILURE_MODES = ("refused", "gap", "retry-exhausted", "rejected-then-recovered")
 
 
+# Plain-English labels that telegraph the underlying record field — closes
+# the discoverability gap where an operator sees "gap" and doesn't realise
+# it means knew_answer=false. Used in the Failure Feed accordion summary.
+FAILURE_MODE_LABELS: dict[str, str] = {
+    "refused":                  "refused (no answer)",
+    "gap":                      "unknown answer (knew_answer=false)",
+    "retry-exhausted":          "retry exhausted (3+ attempts rejected)",
+    "rejected-then-recovered":  "rejected then recovered (is_acceptable=false on early attempt)",
+}
+
+
+# Severity rank for sorting + visual treatment in the Failure Feed.
+# refused / retry-exhausted are the operator-actionable alerts;
+# rejected-then-recovered is a warning (the system did recover);
+# gap is informational (the system honestly said it didn't know).
+FAILURE_MODE_SEVERITY: dict[str, str] = {
+    "refused":                  "alert",
+    "retry-exhausted":          "alert",
+    "rejected-then-recovered":  "warning",
+    "gap":                      "muted",
+}
+
+_SEVERITY_RANK: dict[str, int] = {"alert": 0, "warning": 1, "muted": 2}
+
+
+def failure_mode_counts(records: list[InteractionRecord]) -> dict[str, int]:
+    """Per-mode count over ``records``. Surfaces the per-mode breakdown above
+    the feed so the operator sees the distribution at a glance ('17 failures
+    · 8 unknown answer · 5 rejected then recovered · 1 retry exhausted · 1
+    refused')."""
+    counts: dict[str, int] = {mode: 0 for mode in FAILURE_MODES}
+    for r in records:
+        mode = classify_failure(r)
+        if mode is not None:
+            counts[mode] = counts.get(mode, 0) + 1
+    return counts
+
+
+def sort_feed(rows: "list[FailureRow]") -> "list[FailureRow]":
+    """Severity-then-recency sort used by the Failure Feed view.
+
+    Two-pass stable sort: first by recency descending (so within each band
+    the newest row sits at the top), then by severity ascending (alerts →
+    warnings → muted). Python's ``sort`` is stable so the recency order
+    survives within each severity band."""
+    by_recency = sorted(rows, key=lambda r: r.timestamp, reverse=True)
+    return sorted(
+        by_recency,
+        key=lambda r: _SEVERITY_RANK.get(
+            FAILURE_MODE_SEVERITY.get(r.failure_mode, "muted"), 99
+        ),
+    )
+
+
 def classify_failure(record: InteractionRecord) -> str | None:
     """Return a failure-mode label for the record, or None if it isn't a failure."""
     if record.event_type == "refused":
@@ -96,8 +150,7 @@ def select_failures(
                 record=r,
             )
         )
-    rows.sort(key=lambda row: row.timestamp, reverse=True)
-    return rows
+    return sort_feed(rows)
 
 
 @dataclass(frozen=True)

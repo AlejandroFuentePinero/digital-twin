@@ -30,6 +30,11 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import gradio as gr
+import matplotlib
+
+matplotlib.use("Agg")  # non-interactive backend — no display needed
+import matplotlib.dates as mdates
+from matplotlib.figure import Figure
 import pandas as pd
 
 from branches import REGISTRY as BRANCH_REGISTRY
@@ -41,6 +46,7 @@ from cluster_gaps import (
 )
 import cluster_gaps
 import summarize_failures
+from contact_log import read_provided_session_ids
 from dashboard_model import METRIC_GETTERS, DashboardModel
 from flag_detector import (
     Flag,
@@ -50,10 +56,13 @@ from flag_detector import (
 )
 from summarize_failures import DEFAULT_SUMMARIES_DIR, latest_summary_path, read_summary
 from failure_feed import (
+    FAILURE_MODE_LABELS,
+    FAILURE_MODE_SEVERITY,
     FAILURE_MODES,
     FailureRow,
     Session,
     classify_failure,
+    failure_mode_counts,
     group_by_session,
     select_failures,
 )
@@ -78,6 +87,11 @@ DEFAULT_FRESHNESS_DAYS = 7
 # Smoothing window for the trend chart's rolling-average line.
 ROLLING_AVG_DAYS = 3
 
+# Minimum data span before WoW deltas carry semantic colour. With <14 days of
+# log history a 'prior week' baseline is just a slice of the same chunk of
+# data — colouring it green/red implies a real comparison that doesn't exist.
+MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA = 14
+
 # Tab identifiers so flag-click handlers can switch tabs by ID.
 TAB_METRICS = "tab-metrics"
 TAB_TRENDS = "tab-trends"
@@ -93,6 +107,13 @@ FLAG_TARGET_TAB: dict[str, str] = {
 # 30 covers the realistic upper bound (~17 failures in the live log today).
 MAX_FEED_ROWS = 30
 
+# Window-display modes the metrics overview supports. Sentinel ships in
+# ``stacked`` mode by default per operator directive — every row always shows
+# the three windowed values so the columns scan consistently. The other modes
+# remain available to direct callers but the UI doesn't expose a toggle.
+DISPLAY_MODES: list[str] = ["stacked", "collapse-when-same", "inline"]
+DISPLAY_MODE_DEFAULT = "stacked"
+
 # Flag-button slot cap. Three detector kinds; up to 6 covers repeat_failure
 # firing on multiple distinct questions.
 MAX_FLAGS_RENDERED = 6
@@ -103,24 +124,38 @@ MAX_FLAGS_RENDERED = 6
 
 SENTINEL_CSS = """
 :root {
-    --bg-base:       #0a0a0a;
-    --bg-surface:    #171717;
-    --text-primary:  #fafafa;
-    --text-secondary:#a3a3a3;
-    --text-muted:    #525252;
-    --border:        #262626;
-    --healthy:       #4ade80;
+    --bg-base:       #0b0b0d;
+    --bg-surface:    #141417;
+    --bg-surface-2:  #1c1c20;   /* elevated cards (Flags / Charts) */
+    --text-primary:  #f5f5f7;
+    --text-secondary:#9999a3;
+    --text-muted:    #5a5a64;
+    --border:        #1f1f24;
+    --border-strong: #2a2a30;
+    --healthy:       #34d399;
     --warning:       #fbbf24;
     --alert:         #f87171;
-    --divergence:    #818cf8;
+    --divergence:    #a78bfa;
+    --alert-tint:    rgba(248, 113, 113, 0.08);
+    --warning-tint:  rgba(251, 191, 36, 0.06);
 }
 
 body, .gradio-container {
     background: var(--bg-base) !important;
     color: var(--text-primary);
-    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
     font-weight: 400;
 }
+
+/* Tighter focus ring — subtle outline rather than the bright Gradio default. */
+*:focus-visible {
+    outline: 1px solid var(--text-secondary) !important;
+    outline-offset: 1px !important;
+    box-shadow: none !important;
+}
+
+/* Page padding — 32px outer rhythm for the dashboard shell. */
+.gradio-container > .main { padding: 32px !important; }
 
 /* Monospace for data */
 .mono, code, .metric-value, .status-counts, .feed-meta, .threshold-caption {
@@ -133,39 +168,56 @@ body, .gradio-container {
     background: var(--bg-surface);
     border: 1px solid var(--border);
     border-radius: 4px;
-    padding: 12px 16px;
+    padding: 14px 18px;
     margin: 6px 0 14px;
 }
+.status-banner .status-header {
+    display: flex; align-items: baseline; gap: 18px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
 .status-banner .status-title {
-    font-weight: 500;
-    letter-spacing: 0.06em;
-    font-size: 0.78em;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    font-size: 0.85em;
     text-transform: uppercase;
     color: var(--text-secondary);
-    margin-right: 12px;
 }
-.status-banner .status-counts span {
-    margin-right: 14px;
-    font-weight: 500;
+.status-counts span {
+    font-weight: 600; font-size: 1em;
+    margin-right: 16px;
 }
 .status-counts .count-alert    { color: var(--alert); }
 .status-counts .count-warning  { color: var(--warning); }
 .status-counts .count-healthy  { color: var(--healthy); }
-.status-banner .status-list {
-    margin-top: 6px;
-    font-size: 0.92em;
-    color: var(--text-secondary);
+
+.status-group {
+    margin-top: 10px;
+    padding: 6px 0 6px 12px;
+    border-left: 3px solid transparent;
+    display: flex; align-items: baseline; gap: 12px;
+    flex-wrap: wrap;
 }
-.status-banner .status-list .label {
-    color: var(--text-muted);
-    margin-right: 6px;
+.status-group.alert    { border-left-color: var(--alert); }
+.status-group.warning  { border-left-color: var(--warning); }
+.status-group.healthy  { border-left-color: var(--healthy); }
+.status-group .group-label {
+    font-weight: 700;
+    font-size: 1em;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    min-width: 90px;
 }
-.status-banner details { margin-top: 4px; }
-.status-banner details summary {
-    color: var(--text-muted); cursor: pointer; font-size: 0.85em;
-    list-style: none;
+.status-group.alert    .group-label { color: var(--alert); }
+.status-group.warning  .group-label { color: var(--warning); }
+.status-group.healthy  .group-label { color: var(--healthy); }
+.status-group .group-items {
+    color: var(--text-primary);
+    font-size: 0.95em;
 }
-.status-banner details summary::-webkit-details-marker { display: none; }
+.status-group.alert    .group-items { color: var(--text-primary); }
+.status-group.warning  .group-items { color: var(--text-secondary); }
+.status-group.healthy  .group-items { color: var(--text-secondary); }
 
 /* ---- Section block (Metrics) ---- */
 .section-block {
@@ -176,42 +228,109 @@ body, .gradio-container {
     margin: 8px 0;
 }
 .section-title {
-    font-size: 0.78em; font-weight: 500;
-    letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--text-secondary);
+    font-size: 1.05em; font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--text-primary);
     border-bottom: 1px solid var(--border);
-    padding-bottom: 4px; margin-bottom: 8px;
+    padding-bottom: 6px; margin-bottom: 10px;
 }
-.metric-grid {
+.metric-row {
     display: grid;
     grid-template-columns: 1.6fr repeat(3, 1fr) 1fr;
-    column-gap: 14px; row-gap: 4px;
+    column-gap: 14px;
     align-items: baseline;
+    padding: 4px 8px;
+    border-radius: 3px;
+    border-left: 3px solid transparent;
+    margin: 1px 0;
 }
-.metric-grid .col-header {
+.metric-row .col-header,
+.metric-row.header > div {
     font-size: 0.72em; font-weight: 500;
     color: var(--text-muted);
     letter-spacing: 0.08em; text-transform: uppercase;
     padding-bottom: 2px;
     border-bottom: 1px solid var(--border);
 }
-.metric-grid .col-header.numeric { text-align: right; }
-.metric-grid .metric-label { color: var(--text-primary); }
-.metric-grid .metric-value {
+.metric-row.header .col-header.numeric { text-align: right; }
+.metric-row .metric-label { color: var(--text-primary); }
+.metric-row .metric-value {
     text-align: right;
     color: var(--text-primary);
     padding: 1px 6px;
     border-radius: 2px;
 }
-.metric-grid .metric-value.healthy { color: var(--healthy); }
-.metric-grid .metric-value.warning { color: var(--warning); }
-.metric-grid .metric-value.alert   { color: var(--alert); }
-.metric-grid .metric-value.divergent {
+.metric-row .metric-value.healthy { color: var(--healthy); }
+.metric-row .metric-value.warning { color: var(--warning); }
+.metric-row .metric-value.alert   { color: var(--alert); }
+.metric-row .metric-value.divergent {
     border: 1px solid var(--divergence);
 }
-.metric-grid .metric-suffix {
+.metric-row .metric-suffix {
     color: var(--text-muted);
     font-size: 0.85em;
+}
+/* WoW delta colouring — muted until 14d of history exists, semantic after. */
+.delta {
+    font-size: 11px;
+    margin-left: 4px;
+    color: var(--text-muted);
+}
+.delta.improving { color: var(--healthy); }
+.delta.degrading { color: var(--alert); }
+.delta.stable    { color: var(--text-muted); }
+.delta.muted     { color: var(--text-muted); }
+.metric-row .metric-value-inline {
+    grid-column: 2 / span 3;
+    text-align: right;
+    color: var(--text-primary);
+    padding: 1px 6px;
+}
+.metric-row .metric-value-inline .inline-value {
+    color: var(--text-primary);
+    margin: 0 2px;
+}
+.metric-row .metric-value-inline .inline-value.healthy { color: var(--healthy); }
+.metric-row .metric-value-inline .inline-value.warning { color: var(--warning); }
+.metric-row .metric-value-inline .inline-value.alert   { color: var(--alert); }
+.metric-row .metric-value-inline .inline-value.divergent {
+    border: 1px solid var(--divergence);
+    border-radius: 2px;
+    padding: 0 4px;
+}
+.metric-row .metric-value-inline .inline-sep {
+    color: var(--text-muted);
+    margin: 0 2px;
+}
+
+/* Severity-driven row treatment — alerts dominate visually, healthy collapses
+   in density but keeps a green ribbon so the column scans symmetrically. Font
+   sizes stay consistent across severities (operator directive — no value-size
+   bump). The left ribbon does the work of differentiating severity. */
+.metric-row.row-alert {
+    background: rgba(248, 113, 113, 0.06);
+    border-left-color: var(--alert);
+    padding-top: 8px; padding-bottom: 8px;
+    margin: 4px 0;
+}
+.metric-row.row-alert .metric-label {
+    font-weight: 500;
+}
+.metric-row.row-warning {
+    border-left-color: var(--warning);
+    border-left-width: 2px;
+}
+.metric-row.row-orientation {
+    /* No left border, standard density. Context rows stay legible without
+       claiming visual urgency. */
+}
+.metric-row.row-healthy {
+    border-left-color: var(--healthy);
+    border-left-width: 2px;
+    padding-top: 1px; padding-bottom: 1px;
+}
+.metric-row.row-healthy .metric-label {
+    color: var(--text-secondary);
 }
 
 /* ---- Flags ---- */
@@ -238,37 +357,120 @@ body, .gradio-container {
 }
 
 /* ---- Failure feed ---- */
+.feed-summary {
+    padding: 8px 0 16px;
+    color: var(--text-secondary);
+    font-size: 0.92em;
+}
+.feed-summary .feed-summary-total {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-right: 8px;
+}
+.feed-summary .feed-summary-mode {
+    margin-right: 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.feed-summary .feed-summary-mode.alert    { color: var(--alert); }
+.feed-summary .feed-summary-mode.warning  { color: var(--warning); }
+.feed-summary .feed-summary-mode.muted    { color: var(--text-muted); }
+
 .feed-row {
     border: 1px solid var(--border);
+    border-left: 3px solid transparent;
     border-radius: 3px;
     background: var(--bg-surface);
     margin: 4px 0;
 }
+.feed-row.sev-alert    { border-left-color: var(--alert); }
+.feed-row.sev-warning  { border-left-color: var(--warning); }
+.feed-row.sev-muted    { border-left-color: var(--text-muted); }
+
 .feed-row summary {
     list-style: none; cursor: pointer;
     padding: 8px 12px;
     display: grid;
-    grid-template-columns: 100px 110px 150px 1fr 60px 60px;
-    column-gap: 14px; align-items: baseline;
+    grid-template-columns: 100px 100px 220px 1fr 60px 60px;
+    column-gap: 14px; align-items: center;
 }
 .feed-row summary::-webkit-details-marker { display: none; }
-.feed-row .feed-meta { color: var(--text-secondary); }
-.feed-row .feed-mode {
-    text-transform: uppercase; font-size: 0.8em;
-    letter-spacing: 0.04em;
+.feed-row .feed-meta {
+    color: var(--text-secondary);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
 }
-.feed-row .feed-mode.refused             { color: var(--alert); }
-.feed-row .feed-mode.gap                 { color: var(--warning); }
-.feed-row .feed-mode.retry-exhausted     { color: var(--warning); }
-.feed-row .feed-mode.rejected-then-recovered { color: var(--text-secondary); }
+/* Branch + mode rendered as monospace pills */
+.feed-pill {
+    display: inline-block;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.78em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+}
+.feed-pill.sev-alert    { color: var(--alert); border-color: var(--alert); }
+.feed-pill.sev-warning  { color: var(--warning); border-color: var(--warning); }
+.feed-pill.sev-muted    { color: var(--text-muted); border-color: var(--text-muted); }
+
 .feed-row .feed-q { color: var(--text-primary); }
-.feed-row .feed-num { color: var(--text-secondary); text-align: right; }
+.feed-row .feed-num {
+    color: var(--text-secondary); text-align: right;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+}
 .feed-row[open] summary { border-bottom: 1px solid var(--border); }
 .feed-row .feed-body { padding: 10px 14px; color: var(--text-primary); }
 
 .feed-empty {
     padding: 18px; text-align: center;
     color: var(--text-muted); font-style: italic;
+}
+
+/* ---- Gap clusters (2-column card grid) ---- */
+.cluster-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 12px;
+    margin-top: 8px;
+}
+.cluster-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+}
+.cluster-card .cluster-header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+}
+.cluster-card .cluster-label {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.cluster-card .cluster-count {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.82em;
+    color: var(--text-muted);
+    background: var(--bg-base);
+    padding: 1px 8px;
+    border-radius: 4px;
+}
+.cluster-card ul {
+    margin: 0; padding-left: 1.1em;
+    color: var(--text-secondary);
+    font-size: 0.92em;
+}
+.cluster-card li { margin: 3px 0; }
+.cluster-card .cluster-meta {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.78em;
+    color: var(--text-muted);
 }
 
 /* ---- Charts: caption styling ---- */
@@ -280,6 +482,89 @@ body, .gradio-container {
 
 /* Restraint: no shadows, no gradients, small radii everywhere */
 button { border-radius: 6px !important; }
+
+/* Hide Gradio default footer ("Built with Gradio · Settings · Use via API") */
+footer { display: none !important; }
+
+/* ---- Page header (eyebrow + title + metadata line) ---- */
+.page-header {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    margin-bottom: 16px;
+}
+.page-header .eyebrow {
+    font-size: 11px; font-weight: 400;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+.page-header .page-title {
+    font-size: 28px; font-weight: 500;
+    color: var(--text-primary);
+    line-height: 1.1;
+}
+.page-header .page-meta {
+    margin-top: 8px;
+    font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* Ghost Refresh button — transparent, 1px subtle border, 32px height. */
+.ghost-button button {
+    background: transparent !important;
+    border: 1px solid var(--border-strong) !important;
+    color: var(--text-secondary) !important;
+    height: 32px !important;
+    border-radius: 6px !important;
+    font-weight: 400 !important;
+}
+.ghost-button button:hover {
+    color: var(--text-primary) !important;
+    border-color: var(--text-secondary) !important;
+}
+
+/* ---- Section header (between sections; no card wrappers) ---- */
+.section-header {
+    font-size: 14px; font-weight: 500;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--text-secondary);
+    margin: 24px 0 8px;
+}
+
+/* Latency stages — p50 muted, p95 primary, drives the eye to the headline. */
+.metric-row .latency-p50 { color: var(--text-secondary); }
+.metric-row .latency-p95 { color: var(--text-primary); font-weight: 500; }
+
+/* ---- Chart card — wrap each scan-mode chart in a bordered surface ---- */
+.chart-card {
+    background: var(--bg-surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    margin: 4px 0;
+}
+.chart-card .chart-header { margin-bottom: 6px; }
+
+/* Investigate link — no chrome; small, muted, hover lifts to primary. */
+.investigate-link button {
+    background: transparent !important;
+    border: none !important;
+    color: var(--text-muted) !important;
+    font-size: 11px !important;
+    padding: 2px 0 !important;
+    height: auto !important;
+    text-align: left !important;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
+}
+.investigate-link button:hover {
+    color: var(--text-primary) !important;
+}
+
+/* ---- Filter bar (Failures) — single 36px row ---- */
+.filter-bar { gap: 8px !important; }
+.filter-bar .gradio-dropdown,
+.filter-bar .gradio-textbox { min-height: 36px !important; }
 """
 
 
@@ -303,26 +588,38 @@ EM_DASH = "—"
 
 
 def _fmt_date(value) -> str:
-    """Date-only render (``YYYY-MM-DD``) for any ISO timestamp / datetime / date."""
+    """Date-only render (``YYYY-MM-DD``) for any ISO timestamp / datetime /
+    date / pd.Timestamp."""
     if value is None:
         return EM_DASH
+    if isinstance(value, pd.Timestamp):
+        return value.strftime("%Y-%m-%d")
     if isinstance(value, date) and not isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.date().isoformat()
         return value.astimezone(timezone.utc).date().isoformat()
     return str(value)[:10]
 
 
 def format_header(source: str, loaded_at: datetime) -> str:
-    return f"**Source:** {source}  ·  **Loaded:** {_fmt_date(loaded_at)}"
+    """Single-line metadata for the page header — source + load date in mono."""
+    return f"{source}  ·  loaded {_fmt_date(loaded_at)}"
 
 
 def _fmt_pct(rate: float | None) -> str:
     return EM_DASH if rate is None else f"{rate * 100:.1f}%"
 
 
-def _fmt_ms(ms: float | None) -> str:
-    return EM_DASH if ms is None else f"{ms:.0f} ms"
+def _fmt_seconds(ms: float | None) -> str:
+    """Render latency in seconds with 2 decimals (operator directive — ms is
+    too granular to scan; sub-second precision isn't load-bearing)."""
+    return EM_DASH if ms is None else f"{ms / 1000:.2f} s"
+
+
+# Backwards-compatible alias for older call sites — same seconds rendering.
+_fmt_ms = _fmt_seconds
 
 
 def _fmt_num(n: float | None, ndigits: int = 1) -> str:
@@ -333,18 +630,35 @@ def _fmt_branches(distribution: dict[str, float]) -> str:
     if not distribution:
         return EM_DASH
     parts = sorted(distribution.items(), key=lambda kv: -kv[1])
-    return ", ".join(f"{branch} {fraction * 100:.0f}%" for branch, fraction in parts)
+    return " | ".join(f"{branch} {fraction * 100:.0f}%" for branch, fraction in parts)
 
 
 def _fmt_dropoff(dropoff: dict[int, int]) -> str:
+    """Surface only the most common drop-off turn — the operator wants the
+    headline pattern (where do most users last interact?), not the per-turn
+    table. Computed as ``count_at_N − count_at_N+1`` for each N; biggest
+    drop wins."""
     if not dropoff:
         return EM_DASH
-    parts = sorted(dropoff.items())
-    return " · ".join(f"t{idx}:{count}" for idx, count in parts)
+    sorted_counts = sorted(dropoff.items())
+    drops: dict[int, int] = {}
+    for i, (turn, count) in enumerate(sorted_counts):
+        next_count = sorted_counts[i + 1][1] if i + 1 < len(sorted_counts) else 0
+        drops[turn] = count - next_count
+    most_common = max(drops, key=drops.get)
+    return f"after t{most_common} ({drops[most_common]} sessions)"
 
 
 def _fmt_latency_row(p: dict[int, float | None]) -> str:
-    return f"p50 {_fmt_ms(p.get(50))} / p95 {_fmt_ms(p.get(95))}"
+    """Two-tier latency display — p50 in muted secondary, p95 in primary so
+    the operator's eye lands on the headline tail value."""
+    p50 = _fmt_seconds(p.get(50))
+    p95 = _fmt_seconds(p.get(95))
+    return (
+        f"<span class='latency-p50'>p50 {p50}</span>"
+        f" / "
+        f"<span class='latency-p95'>p95 {p95}</span>"
+    )
 
 
 # ---- Threshold-aware rendering helpers --------------------------------------
@@ -357,8 +671,41 @@ def _status_class(metric_name: str | None, value: float | None) -> str:
     return metric_status(metric_name, value) or ""
 
 
-def _delta_inline(metric_name: str | None, current, prior) -> str:
-    """Compact inline delta arrow (post-value), or empty string when no delta applies."""
+def _data_history_days(records: list[InteractionRecord]) -> int:
+    """Number of days spanned by the record set (max-timestamp − min-timestamp).
+
+    Drives the delta-colour gate: with <14d the WoW comparison isn't a real
+    'this week vs last week' read, so deltas render muted to suppress false
+    alarms before the system has accumulated enough history to be trusted."""
+    if not records:
+        return 0
+    timestamps = [r.timestamp for r in records]
+    earliest = min(timestamps)[:10]
+    latest = max(timestamps)[:10]
+    try:
+        d_early = datetime.fromisoformat(earliest).date()
+        d_late = datetime.fromisoformat(latest).date()
+    except ValueError:
+        return 0
+    return (d_late - d_early).days
+
+
+def _delta_inline(
+    metric_name: str | None,
+    current,
+    prior,
+    history_days: int = 0,
+) -> str:
+    """Compact inline delta arrow (post-value), or empty string when no delta applies.
+
+    When ``history_days < MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA`` the delta
+    renders in muted colour at 11px — there isn't enough history yet for the
+    'good vs bad' interpretation to be trustworthy. Above that threshold the
+    delta picks up the semantic colour (improving = healthy green; degrading
+    = alert red; stable = muted) — direction already accounts for the
+    metric's polarity (gap rate up = degrading; tool-call success up =
+    improving) via ``wow_delta``.
+    """
     if metric_name is None or prior is None:
         return ""
     delta = wow_delta(metric_name, current, prior)
@@ -374,17 +721,40 @@ def _delta_inline(metric_name: str | None, current, prior) -> str:
         body = f"{delta.arrow}"
     else:
         body = f"{delta.arrow}{magnitude}"
-    return f"<span class='metric-suffix'> {body}</span>"
+    css_class = (
+        "delta muted" if history_days < MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA
+        else f"delta {delta.direction}"
+    )
+    return f"<span class='{css_class}'>{body}</span>"
 
 
 # ---- Status banner (top of every tab) --------------------------------------
+
+
+# Plain-language labels for the status banner — strip parentheticals and
+# operator jargon so the banner reads to anyone, not just the engineer who
+# wrote the metric definitions. Metric grids elsewhere keep the technical
+# names; this map is banner-only.
+FRIENDLY_BANNER_LABELS: dict[str, str] = {
+    "gap_rate":                     "Unknown answers",
+    "deflection_rate":              "Deflected to story",
+    "refusal_rate":                 "Refused to answer",
+    "guardrail_rejection_rate":     "Quality-check rejections",
+    "retry_exhausted_rate":         "Retries exhausted",
+    "low_confidence_rate":          "Uncertain classifications",
+    "confident_failure_rate":       "Misclassified questions",
+    "latency_p95_total":            "Slow responses",
+    "technical_tool_uptake_rate":   "Tool usage",
+    "contact_conversion_rate":      "Contact form submitted",
+    "turns_per_session_median":     "Conversation depth",
+}
 
 
 def _status_summary(model: DashboardModel) -> dict[str, list[str]]:
     """Aggregate the headline window's metric statuses into 3 buckets.
 
     Returns ``{"alert": [...], "warning": [...], "healthy": [...]}`` of
-    metric labels, one per thresholded metric in ``METRIC_GETTERS``."""
+    *friendly* metric labels (banner-readable, not technical)."""
     buckets: dict[str, list[str]] = {"alert": [], "warning": [], "healthy": []}
     for metric, getter in METRIC_GETTERS.items():
         if metric not in THRESHOLDS:
@@ -393,15 +763,16 @@ def _status_summary(model: DashboardModel) -> dict[str, list[str]]:
         status = metric_status(metric, value)
         if status is None:
             continue
-        buckets[status].append(METRIC_LABELS.get(metric, metric))
+        buckets[status].append(FRIENDLY_BANNER_LABELS.get(metric, METRIC_LABELS.get(metric, metric)))
     return buckets
 
 
 def format_status_banner(summary: dict[str, list[str]]) -> str:
-    """Render the SENTINEL · N alerts · N warnings · N healthy banner.
+    """Render the SENTINEL banner — counts header + always-expanded groups.
 
-    Alert names are listed beneath; warnings collapse by default; healthy is
-    hidden behind a toggle. Hierarchy by severity per the design spec."""
+    Banner is intentionally short (one row per severity, items separated by
+    ``|``); no collapse-toggles because the per-group lists are already
+    short enough to scan inline."""
     alerts = summary.get("alert", [])
     warnings = summary.get("warning", [])
     healthy = summary.get("healthy", [])
@@ -412,34 +783,34 @@ def format_status_banner(summary: dict[str, list[str]]) -> str:
         f"<span class='count-healthy'>{len(healthy)} healthy</span>"
     )
 
-    parts = [
-        "<div class='status-banner'>",
-        "<span class='status-title'>SENTINEL</span>",
-        f"<span class='status-counts'>{counts}</span>",
-    ]
-    if alerts:
-        parts.append(
-            "<div class='status-list'>"
-            "<span class='label'>Alerts:</span>"
-            f"{', '.join(html.escape(name) for name in alerts)}"
-            "</div>"
+    def _group(severity: str, names: list[str]) -> str:
+        if not names:
+            return (
+                f"<div class='status-group {severity}'>"
+                f"<span class='group-label'>{severity.title()}</span>"
+                f"<span class='group-items'>—</span>"
+                f"</div>"
+            )
+        items = " | ".join(html.escape(n) for n in names)
+        return (
+            f"<div class='status-group {severity}'>"
+            f"<span class='group-label'>{severity.title()}</span>"
+            f"<span class='group-items'>{items}</span>"
+            f"</div>"
         )
-    if warnings:
-        parts.append(
-            "<details>"
-            f"<summary>{len(warnings)} warnings (expand)</summary>"
-            f"<div class='status-list'>{', '.join(html.escape(n) for n in warnings)}</div>"
-            "</details>"
-        )
-    if healthy:
-        parts.append(
-            "<details>"
-            f"<summary>{len(healthy)} healthy (show)</summary>"
-            f"<div class='status-list'>{', '.join(html.escape(n) for n in healthy)}</div>"
-            "</details>"
-        )
-    parts.append("</div>")
-    return "".join(parts)
+
+    # Drop the explicit "SENTINEL" prefix — the page header already names
+    # the dashboard, and the per-severity counts speak for themselves.
+    return (
+        "<div class='status-banner'>"
+        "<div class='status-header'>"
+        f"<span class='status-counts'>{counts}</span>"
+        "</div>"
+        f"{_group('alert', alerts)}"
+        f"{_group('warning', warnings)}"
+        f"{_group('healthy', healthy)}"
+        "</div>"
+    )
 
 
 # ---- Per-section / per-metric rendering (single header, 3 inline values) ---
@@ -462,15 +833,16 @@ METRIC_SPECS: list[tuple[str, list[tuple]]] = [
         ("Retry-exhaustion rate",      "retry_exhausted_rate",        lambda m: m.retry_exhausted_rate, _fmt_pct),
     ]),
     ("Routing", [
-        ("Branch distribution",        None,                          lambda m: m.branch_distribution, _fmt_branches),
-        ("Low-confidence rate (<0.7)", "low_confidence_rate",         lambda m: m.low_confidence_rate(), _fmt_pct),
-        ("Confident-failure rate (≥0.8 & failed)", "confident_failure_rate", lambda m: m.confident_failure_rate(), _fmt_pct),
-        ("Multi-label rate",           None,                          lambda m: m.multi_label_rate, _fmt_pct),
+        ("Classifier branch distribution",         None,                          lambda m: m.branch_distribution, _fmt_branches),
+        ("Classifier mean confidence",             None,                          lambda m: m.mean_classification_confidence, lambda v: _fmt_num(v, 2)),
+        ("Classifier low-confidence rate (<0.7)",  "low_confidence_rate",         lambda m: m.low_confidence_rate(), _fmt_pct),
+        ("Classifier confident-failure rate (≥0.8 & failed)", "confident_failure_rate", lambda m: m.confident_failure_rate(), _fmt_pct),
+        ("Classifier multi-label rate",            None,                          lambda m: m.multi_label_rate, _fmt_pct),
     ]),
     ("Engagement", [
         ("Unique sessions",            None,                          lambda m: m.unique_sessions, str),
+        ("Avg questions per session",  None,                          lambda m: m.mean_turns_per_session, lambda v: _fmt_num(v, 2)),
         ("Turns/session (median)",     "turns_per_session_median",    lambda m: m.turns_per_session_median, _fmt_num),
-        ("Drop-off by turn",           None,                          lambda m: m.dropoff_by_turn, _fmt_dropoff),
         ("Contact-offer rate",         None,                          lambda m: m.contact_offer_rate, _fmt_pct),
         ("Contact-conversion rate",    "contact_conversion_rate",     lambda m: m.contact_conversion_rate, _fmt_pct),
     ]),
@@ -514,6 +886,54 @@ def _is_divergent(values: list[str]) -> bool:
     return len(set(values)) > 1
 
 
+def _row_severity(metric_name: str | None, raws: list) -> str:
+    """Worst per-window status across the three windows — drives the row's
+    visual treatment. Orientation metrics (no threshold) → 'orientation'.
+
+    Worst-status ranking: alert > warning > healthy. A metric that's healthy
+    on 7d but alerted on Global gets the alert row treatment so the operator
+    can't miss it."""
+    if metric_name is None:
+        return "orientation"
+    statuses = {metric_status(metric_name, v) for v in raws}
+    if "alert" in statuses:
+        return "alert"
+    if "warning" in statuses:
+        return "warning"
+    if "healthy" in statuses:
+        return "healthy"
+    return "orientation"
+
+
+# Sort priority within a section. Lower number → rendered higher.
+_SEVERITY_RANK = {"alert": 0, "warning": 1, "orientation": 2, "healthy": 3}
+
+
+def _inline_value_cell(
+    metric_name: str | None,
+    raws: list,
+    formatted: list[str],
+    divergent: bool,
+) -> str:
+    """Pack the three windowed values into one cell: ``9.4% / 9.4% / 9.4%``.
+
+    Each value gets its own status colour; divergent values get the
+    divergence accent inline. Used by the ``inline`` display mode."""
+    parts: list[str] = []
+    for i, (raw, fmt) in enumerate(zip(raws, formatted)):
+        classes = ["inline-value"]
+        status = _status_class(metric_name, raw) if metric_name else ""
+        if status:
+            classes.append(status)
+        if divergent:
+            classes.append("divergent")
+        parts.append(
+            f"<span class='{' '.join(classes)}'>{html.escape(fmt)}</span>"
+        )
+    joiner = "<span class='inline-sep'>/</span>"
+    return f"<div class='metric-value-inline'>{joiner.join(parts)}</div>"
+
+
 def _render_metric_row(
     label: str,
     metric_name: str | None,
@@ -521,63 +941,108 @@ def _render_metric_row(
     formatter,
     models: list[DashboardModel],
     priors: list[DashboardModel | None],
+    severity: str,
+    display_mode: str = DISPLAY_MODE_DEFAULT,
+    history_days: int = 0,
 ) -> str:
-    """One row in the metric grid: label + three windowed value cells + suffix."""
+    """One row in the metric grid: label + windowed value cells + suffix.
+
+    ``display_mode`` controls how the three windowed values lay out:
+
+    - ``collapse-when-same`` (default): one cell + ``· same across windows``
+      suffix when identical; three separate cells when divergent.
+    - ``stacked``: three separate cells always.
+    - ``inline``: one cell with ``9.4% / 9.4% / 9.4%`` style inline values.
+    """
     raws = [getter(m) for m in models]
     formatted = [formatter(v) if formatter is not str else str(v) for v in raws]
     prior_raws = [getter(p) if p is not None else None for p in priors]
     divergent = _is_divergent(formatted)
 
-    # When all three windows agree, render one value + "· same across windows"
-    # in the suffix column; the other two value cells render empty so the grid
-    # alignment stays.
-    if not divergent:
-        delta = _delta_inline(metric_name, raws[0], prior_raws[0])
-        suffix = "<div class='metric-suffix'>· same across windows</div>"
-        cells = [
-            _value_cell(metric_name, raws[0], formatted[0], divergent=False, delta_html=delta),
-            "<div></div>",
-            "<div></div>",
-            suffix,
-        ]
-    else:
+    if display_mode == "inline":
+        cells = [_inline_value_cell(metric_name, raws, formatted, divergent), "<div></div>"]
+    elif display_mode == "stacked":
         cells = []
         for i, (raw, fmt) in enumerate(zip(raws, formatted)):
-            delta = _delta_inline(metric_name, raw, prior_raws[i])
+            delta = _delta_inline(metric_name, raw, prior_raws[i], history_days)
             cells.append(_value_cell(
-                metric_name, raw, fmt, divergent=True, delta_html=delta,
+                metric_name, raw, fmt, divergent=divergent, delta_html=delta,
             ))
-        cells.append("<div></div>")  # empty suffix when divergent
+        cells.append("<div></div>")
+    else:  # collapse-when-same (default)
+        if not divergent:
+            delta = _delta_inline(metric_name, raws[0], prior_raws[0], history_days)
+            suffix = "<div class='metric-suffix'>· same across windows</div>"
+            cells = [
+                _value_cell(metric_name, raws[0], formatted[0], divergent=False, delta_html=delta),
+                "<div></div>",
+                "<div></div>",
+                suffix,
+            ]
+        else:
+            cells = []
+            for i, (raw, fmt) in enumerate(zip(raws, formatted)):
+                delta = _delta_inline(metric_name, raw, prior_raws[i], history_days)
+                cells.append(_value_cell(
+                    metric_name, raw, fmt, divergent=True, delta_html=delta,
+                ))
+            cells.append("<div></div>")
     return (
+        f"<div class='metric-row row-{severity}'>"
         f"<div class='metric-label'>{html.escape(label)}</div>"
         + "".join(cells)
+        + "</div>"
     )
 
 
 def format_metrics_overview(
     models: list[DashboardModel],
     priors: list[DashboardModel | None],
+    display_mode: str = DISPLAY_MODE_DEFAULT,
 ) -> str:
-    """Full metrics overview: one section block per thematic group, each with
-    a header row (window labels) + one metric row per spec."""
+    """Full metrics overview: one section block per thematic group.
+
+    Within each section, rows are sorted by severity (alerts first, then
+    warnings, then orientation context, then healthy). Each row carries a
+    severity CSS class so the alert ones dominate visually and healthy ones
+    collapse to a compact line. ``display_mode`` ∈ {collapse-when-same,
+    stacked, inline} controls how the three windowed values lay out.
+
+    History depth is computed from the Global window's record set and
+    threaded through to ``_delta_inline`` so deltas render muted until the
+    log spans at least ``MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA`` days."""
+    # Global model is the third entry per WINDOWS = [(7d, 7), (30d, 30), (Global, None)].
+    history_days = _data_history_days(models[-1].records) if models else 0
+
     blocks: list[str] = []
     for section_name, specs in METRIC_SPECS:
-        rows: list[str] = []
-        # Header row: first cell = section title placeholder; then 7d / 30d / Global.
-        rows.append(
+        annotated = []
+        for spec in specs:
+            label, metric_name, getter, formatter = spec
+            raws = [getter(m) for m in models]
+            severity = _row_severity(metric_name, raws)
+            annotated.append((severity, spec))
+        annotated.sort(key=lambda pair: _SEVERITY_RANK.get(pair[0], 99))
+
+        rows = [
+            "<div class='metric-row header'>"
             "<div class='col-header'></div>"
             "<div class='col-header numeric'>7d</div>"
             "<div class='col-header numeric'>30d</div>"
             "<div class='col-header numeric'>Global</div>"
             "<div class='col-header'></div>"
-        )
-        for label, metric_name, getter, formatter in specs:
-            rows.append(_render_metric_row(label, metric_name, getter, formatter, models, priors))
+            "</div>"
+        ]
+        for severity, (label, metric_name, getter, formatter) in annotated:
+            rows.append(_render_metric_row(
+                label, metric_name, getter, formatter, models, priors,
+                severity, display_mode, history_days,
+            ))
+        # No card wrapper — whitespace + the section header carry the
+        # separation. Cleaner, less chrome (operator directive).
         blocks.append(
-            f"<div class='section-block'>"
-            f"<div class='section-title'>{section_name}</div>"
-            f"<div class='metric-grid'>{''.join(rows)}</div>"
-            f"</div>"
+            f"<div class='section-header'>{section_name}</div>"
+            f"{''.join(rows)}"
         )
     return "".join(blocks)
 
@@ -589,16 +1054,44 @@ def _truncate(s: str, n: int = 90) -> str:
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 
 
-def _failure_summary_html(row: FailureRow) -> str:
-    """Render the accordion summary line — date / branch / mode / question / counts."""
+def _failure_accordion_label(row: FailureRow) -> str:
+    """Single-line accordion label — Gradio's Accordion only accepts plain text
+    so the visual treatment lives on the row container; this is the headline."""
     return (
-        f"<div class='feed-meta mono'>{_fmt_date(row.timestamp)}</div>"
-        f"<div class='feed-meta mono'>{html.escape(row.branch)}</div>"
-        f"<div class='feed-mode {row.failure_mode}'>{row.failure_mode}</div>"
-        f"<div class='feed-q'>{html.escape(_truncate(row.question))}</div>"
-        f"<div class='feed-num mono'>{row.attempt_count}×</div>"
-        f"<div class='feed-num mono'>{row.classification_confidence:.2f}</div>"
+        f"{_fmt_date(row.timestamp)}  ·  {row.branch}  ·  "
+        f"{FAILURE_MODE_LABELS.get(row.failure_mode, row.failure_mode)}  ·  "
+        f"{_truncate(row.question, 90)}"
     )
+
+
+def format_feed_summary(rows: list[FailureRow], counts: dict[str, int]) -> str:
+    """Per-mode counts row above the feed.
+
+    'Total · 8 unknown answer · 5 rejected then recovered · 1 retry exhausted
+    · 1 refused' — the mode counts use the friendly labels so the operator
+    sees the underlying-field mapping at a glance, and each count is colored
+    by its severity for at-a-glance scan."""
+    total = len(rows)
+    if total == 0:
+        return ""
+    parts = [
+        f"<span class='feed-summary-total'>{total} failures</span>"
+    ]
+    # Sort the count breakdown by severity so alert modes appear first.
+    sev_rank = {"alert": 0, "warning": 1, "muted": 2}
+    sorted_modes = sorted(
+        counts.items(),
+        key=lambda kv: sev_rank.get(FAILURE_MODE_SEVERITY.get(kv[0], "muted"), 99),
+    )
+    for mode, n in sorted_modes:
+        if n == 0:
+            continue
+        sev = FAILURE_MODE_SEVERITY.get(mode, "muted")
+        friendly = FAILURE_MODE_LABELS.get(mode, mode).split(" (")[0]
+        parts.append(
+            f"<span class='feed-summary-mode {sev}'>{n} {html.escape(friendly)}</span>"
+        )
+    return "<div class='feed-summary'>" + "".join(parts) + "</div>"
 
 
 def format_failure_drilldown(record: InteractionRecord) -> str:
@@ -686,12 +1179,18 @@ CLUSTER_EMPTY_PLACEHOLDER = (
     "or LLM unavailable)._"
 )
 DEFLECTION_EMPTY_PLACEHOLDER = (
-    "_No cached deflection summary yet. Auto-refresh skipped (no deflection turns "
-    "in window, or LLM unavailable)._"
+    "<div class='cluster-card' style='text-align:center; "
+    "color: var(--text-muted); font-style: italic;'>"
+    "No cached deflection summary yet. Auto-refresh skipped — no deflection "
+    "turns in window, or LLM unavailable."
+    "</div>"
 )
 
 
 def format_cluster_panel(data: dict | None) -> str:
+    """Render gap clusters as a responsive 2-column card grid (one card per
+    cluster) — easier to scan than a flat bullet list when there are several
+    clusters of varying sizes."""
     if data is None:
         return CLUSTER_EMPTY_PLACEHOLDER
     clusters = data.get("clusters", [])
@@ -700,16 +1199,28 @@ def format_cluster_panel(data: dict | None) -> str:
             f"_No clusters in the last {data.get('period_days', '?')} days "
             "(no gap turns, or all groups below the minimum size)._"
         )
-    parts = [
-        f"_Generated {_fmt_date(data.get('generated_at'))} · "
-        f"window {data.get('period_days', '?')}d_",
-        "",
-    ]
+    cards: list[str] = []
     for cluster in clusters:
-        parts.append(f"- **{cluster['label']}** · count {cluster['count']}")
-        for example in cluster.get("examples", []):
-            parts.append(f"    - {example}")
-    return "\n".join(parts)
+        examples = cluster.get("examples", [])
+        examples_html = (
+            "<ul>"
+            + "".join(f"<li>{html.escape(ex)}</li>" for ex in examples)
+            + "</ul>"
+        ) if examples else ""
+        cards.append(
+            "<div class='cluster-card'>"
+            "<div class='cluster-header'>"
+            f"<span class='cluster-label'>{html.escape(cluster['label'])}</span>"
+            f"<span class='cluster-count'>{cluster['count']}</span>"
+            "</div>"
+            f"{examples_html}"
+            "</div>"
+        )
+    meta = (
+        f"<div class='cluster-meta'>generated {_fmt_date(data.get('generated_at'))} "
+        f"· window {data.get('period_days', '?')}d</div>"
+    )
+    return meta + "<div class='cluster-grid'>" + "".join(cards) + "</div>"
 
 
 def format_deflection_panel(text: str | None) -> str:
@@ -789,15 +1300,19 @@ TREND_WINDOWS: list[tuple[str, int | None]] = [
     ("7d", 7), ("30d", 30), ("90d", 90), ("All-time", None),
 ]
 
-# Healthy threshold stays GREEN (operator directive overrides the
-# "muted gray for thresholds" recommendation from the design spec).
-CHART_COLOR_MAP = {
-    "actual":     "#a3a3a3",  # text-secondary — raw daily values, low saturation
-    "3-day avg":  "#fafafa",  # text-primary — primary smoothed trend
-    "healthy":    "#4ade80",  # healthy threshold reference
-    "warning":    "#fbbf24",  # warning threshold reference
-    "prior":      "#818cf8",  # divergence — prior-period overlay
+# Per-status palette: (dim shade for actual line, bright shade for trend).
+# Replaces the static fixed-threshold reference lines with dynamic colouring
+# of the value + trend series based on the metric's current status.
+_STATUS_CHART_COLOR: dict[str | None, tuple[str, str]] = {
+    "healthy": ("#166534", "#4ade80"),  # green-800, green-400
+    "warning": ("#92400e", "#fbbf24"),  # amber-800, amber-400
+    "alert":   ("#991b1b", "#f87171"),  # red-800,   red-400
+    None:      ("#525252", "#a3a3a3"),  # text-muted / text-secondary (orientation)
 }
+
+# Prior-overlay colour stays constant (compares against current period's data,
+# which already carries the status colouring on its own series).
+_PRIOR_CHART_COLOR = "#818cf8"
 
 
 def _y_axis_title(metric: str) -> str:
@@ -808,16 +1323,22 @@ def _y_axis_title(metric: str) -> str:
     if threshold.unit == "pp":
         return f"{label} (%)"
     if threshold.unit == "ms":
-        return f"{label} (ms)"
+        return f"{label} (s)"
     return label
 
 
 def _scale_value(metric: str, value: float | None) -> float | None:
+    """Convert raw values to chart-axis units. ``pp`` → percentages (×100);
+    ``ms`` → seconds (÷1000); other passes through."""
     if value is None:
         return None
     threshold = THRESHOLDS.get(metric)
-    if threshold is not None and threshold.unit == "pp":
+    if threshold is None:
+        return value
+    if threshold.unit == "pp":
         return value * 100
+    if threshold.unit == "ms":
+        return value / 1000
     return value
 
 
@@ -828,7 +1349,7 @@ def _fmt_metric_value(metric: str, value: float | None) -> str:
     if threshold.unit == "pp":
         return _fmt_pct(value)
     if threshold.unit == "ms":
-        return _fmt_ms(value)
+        return _fmt_seconds(value)
     return _fmt_num(value)
 
 
@@ -839,7 +1360,14 @@ def chart_dataframe(
     *,
     prior_model: DashboardModel | None = None,
 ) -> pd.DataFrame:
-    """Long-format DataFrame for ``gr.LinePlot``: actual + 3-day-avg + thresholds."""
+    """Long-format DataFrame for the trend chart: ``actual`` + ``3-day avg``
+    (+ optional ``prior``).
+
+    Trimmed to ``[first_real_data − 2d, last_real_data]`` so the chart's
+    x-axis doesn't carry empty space when the log spans only a few days.
+    No threshold reference rows — status colouring on the trend line itself
+    carries the healthy/warning/alert signal (the threshold *values* live in
+    the chart caption)."""
     series = model.time_series_by_day(metric, days=days)
     if not series:
         return pd.DataFrame(columns=["date", "value", "series"])
@@ -847,6 +1375,14 @@ def chart_dataframe(
     raw = pd.DataFrame(series, columns=["date", "value"])
     raw["date"] = pd.to_datetime(raw["date"])
     raw["value"] = raw["value"].apply(lambda v: _scale_value(metric, v))
+
+    real_rows = raw.dropna(subset=["value"])
+    if real_rows.empty:
+        return pd.DataFrame(columns=["date", "value", "series"])
+    first_data = real_rows["date"].iloc[0]
+    last_data = real_rows["date"].iloc[-1]
+    visible_start = first_data - pd.Timedelta(days=2)
+    raw = raw[(raw["date"] >= visible_start) & (raw["date"] <= last_data)].reset_index(drop=True)
 
     rolling = raw["value"].rolling(window=ROLLING_AVG_DAYS, center=True, min_periods=1).mean()
 
@@ -858,25 +1394,23 @@ def chart_dataframe(
         if pd.notna(v):
             rows.append({"date": d, "value": float(v), "series": "3-day avg"})
 
-    threshold = THRESHOLDS.get(metric)
-    if threshold is not None and len(raw):
-        first = raw["date"].iloc[0]
-        last = raw["date"].iloc[-1]
-        healthy = _scale_value(metric, threshold.healthy)
-        warning = _scale_value(metric, threshold.warning)
-        rows.extend([
-            {"date": first, "value": float(healthy), "series": "healthy"},
-            {"date": last, "value": float(healthy), "series": "healthy"},
-            {"date": first, "value": float(warning), "series": "warning"},
-            {"date": last, "value": float(warning), "series": "warning"},
-        ])
-
-    if prior_model is not None and days is not None:
-        prior_series = prior_model.time_series_by_day(metric, days=days)
-        for d, v in prior_series:
+    if prior_model is not None and days is not None and prior_model.records:
+        # Group prior records by their actual day and shift forward by ``days``
+        # so the prior period overlays the current visible window. Bypass
+        # ``time_series_by_day`` because it always anchors to "today" — prior
+        # records sit in the *previous* window and don't survive that anchor.
+        from collections import defaultdict as _dd
+        by_day: dict = _dd(list)
+        for r in prior_model.records:
+            d = datetime.fromisoformat(r.timestamp).date()
+            by_day[d].append(r)
+        for d, recs in by_day.items():
+            v = METRIC_GETTERS[metric](DashboardModel(recs))
             if v is None:
                 continue
             shifted = pd.to_datetime(d) + pd.Timedelta(days=days)
+            if shifted < visible_start or shifted > last_data:
+                continue
             rows.append({
                 "date": shifted, "value": float(_scale_value(metric, v)),
                 "series": "prior",
@@ -885,8 +1419,92 @@ def chart_dataframe(
     return pd.DataFrame(rows)
 
 
+def _monitoring_since(df: pd.DataFrame) -> str:
+    """Earliest real data point in the trimmed dataframe — drives the
+    'monitoring since' annotation under each chart."""
+    if df.empty:
+        return ""
+    real = df[df["series"].isin(["actual", "3-day avg"])]
+    if real.empty:
+        return ""
+    return _fmt_date(real["date"].min())
+
+
+def render_trend_plot(
+    model: DashboardModel,
+    metric: str,
+    days: int | None,
+    *,
+    prior_model: DashboardModel | None = None,
+    height: int = 220,
+) -> Figure:
+    """Matplotlib trend plot — status-coloured trend line + visible point
+    markers, monitoring-since caption baked in. Returns the Figure for
+    rendering inside ``gr.Plot``.
+
+    Uses ``matplotlib.figure.Figure`` directly (not ``plt.subplots``) so
+    figures don't accumulate in the pyplot global registry across the many
+    chart renders this dashboard does."""
+    df = chart_dataframe(model, metric, days=days, prior_model=prior_model)
+
+    # Convert px height → inches @ 100 DPI (matplotlib uses inches).
+    fig = Figure(figsize=(6.4, height / 100), dpi=100, facecolor="#0a0a0a")
+    ax = fig.add_subplot(111)
+    ax.set_facecolor("#171717")
+
+    if df.empty:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center",
+                color="#525252", transform=ax.transAxes, fontsize=10)
+        ax.set_xticks([]); ax.set_yticks([])
+    else:
+        # Status of the headline value drives the colour of both series.
+        value = METRIC_GETTERS[metric](model)
+        status = metric_status(metric, value) if metric in THRESHOLDS else None
+        actual_color, trend_color = _STATUS_CHART_COLOR.get(status, _STATUS_CHART_COLOR[None])
+
+        actual_df = df[df["series"] == "actual"]
+        trend_df = df[df["series"] == "3-day avg"]
+        prior_df = df[df["series"] == "prior"]
+
+        if not trend_df.empty:
+            ax.plot(trend_df["date"], trend_df["value"],
+                    color=trend_color, linewidth=1.4, zorder=2)
+        if not actual_df.empty:
+            # Markers visibly larger than the line so the operator can see
+            # where real data exists vs where the trend is interpolated.
+            ax.scatter(actual_df["date"], actual_df["value"],
+                       color=trend_color, s=44, zorder=3,
+                       edgecolor="#0a0a0a", linewidth=0.8)
+        if not prior_df.empty:
+            ax.plot(prior_df["date"], prior_df["value"],
+                    color=_PRIOR_CHART_COLOR, linewidth=1.0,
+                    linestyle="--", zorder=1, alpha=0.7)
+
+    # Style — Midnight Mono palette
+    ax.tick_params(colors="#a3a3a3", labelsize=8.5)
+    for spine in ax.spines.values():
+        spine.set_color("#262626")
+    ax.set_ylabel(_y_axis_title(metric), color="#a3a3a3", fontsize=9)
+    ax.grid(True, color="#262626", linewidth=0.5)
+
+    if not df.empty:
+        # ``%-d`` drops the leading zero — "May 3" not "May 03" (operator
+        # directive). On Windows the equivalent is ``%#d``; on POSIX (mac /
+        # linux) ``%-d`` is correct.
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %-d"))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=6))
+
+    # Caption (threshold + monitoring since), bottom-left in muted text
+    caption = _chart_caption(metric, df)
+    if caption:
+        fig.text(0.02, 0.02, caption, color="#525252", fontsize=8)
+
+    fig.tight_layout(rect=[0, 0.08, 1, 1])
+    return fig
+
+
 def _threshold_caption(metric: str) -> str:
-    """Inline threshold caption text below each chart — replaces the legend."""
+    """Threshold portion of the chart caption — replaces the legend."""
     t = THRESHOLDS.get(metric)
     if t is None:
         return ""
@@ -894,13 +1512,26 @@ def _threshold_caption(metric: str) -> str:
         h = f"{t.healthy * 100:.1f}%"
         w = f"{t.warning * 100:.1f}%"
     elif t.unit == "ms":
-        h = f"{t.healthy:.0f} ms"
-        w = f"{t.warning:.0f} ms"
+        # Display threshold values in seconds to match the seconds-only Y-axis.
+        h = f"{t.healthy / 1000:.2f} s"
+        w = f"{t.warning / 1000:.2f} s"
     else:
         h = f"{t.healthy:.1f}"
         w = f"{t.warning:.1f}"
     direction = "≥" if t.higher_is_better else "≤"
     return f"healthy {direction} {h}  ·  warning {direction} {w}"
+
+
+def _chart_caption(metric: str, df: pd.DataFrame) -> str:
+    """Combined caption: threshold annotation + 'monitoring since' note."""
+    parts: list[str] = []
+    threshold = _threshold_caption(metric)
+    if threshold:
+        parts.append(threshold)
+    since = _monitoring_since(df)
+    if since:
+        parts.append(f"monitoring since {since}")
+    return "  ·  ".join(parts)
 
 
 def format_trend_header(
@@ -990,7 +1621,17 @@ def _autorefresh_banner(messages: list[str | None]) -> str:
 
 
 def _load(reader: LogReader) -> tuple[DashboardModel, datetime]:
-    return DashboardModel(reader.read()), datetime.now(timezone.utc)
+    """Build a DashboardModel from the log + cross-reference contacts.jsonl.
+
+    The cross-referenced session IDs feed `contact_conversion_rate` so the
+    metric reads true conversion (not the broken record-level intersection
+    that always returned 0%; see contact_log.read_provided_session_ids
+    docstring for the writer-order bug)."""
+    provided = frozenset(read_provided_session_ids())
+    return (
+        DashboardModel(reader.read(), provided_session_ids=provided),
+        datetime.now(timezone.utc),
+    )
 
 
 def _all_window_models(model: DashboardModel) -> tuple[list[DashboardModel], list[DashboardModel | None]]:
@@ -1022,10 +1663,19 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
     initial_failures = select_failures(model.records)
 
     with gr.Blocks(title="Digital Twin · Sentinel", css=SENTINEL_CSS) as app:
-        with gr.Row():
-            gr.Markdown("# Digital Twin · Sentinel")
-            refresh_btn = gr.Button("Refresh", variant="secondary", size="sm", scale=0)
-        header_md = gr.Markdown(format_header(source, loaded_at))
+        # Page header — eyebrow + title + monospace metadata line on one
+        # row; ghost Refresh button anchored top-right.
+        with gr.Row(elem_classes=["page-header"]):
+            with gr.Column(scale=4):
+                gr.Markdown(
+                    "<div class='eyebrow'>Digital Twin</div>"
+                    "<div class='page-title'>Sentinel</div>"
+                )
+                header_md = gr.Markdown(
+                    f"<div class='page-meta'>{format_header(source, loaded_at)}</div>"
+                )
+            with gr.Column(scale=0, elem_classes=["ghost-button"]):
+                refresh_btn = gr.Button("Refresh", size="sm", scale=0)
         banner_md = gr.Markdown(_autorefresh_banner(refresh_messages))
         status_md = gr.Markdown(format_status_banner(_status_summary(headline_model)))
 
@@ -1035,16 +1685,10 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 gr.Markdown("## Flags")
                 flags_md = gr.Markdown(format_flags_summary(_build_flags(model)))
 
-                # Per-flag Investigate buttons — one row of slot buttons, each
-                # toggled visible/hidden + relabelled when the flag set changes.
-                flag_buttons: list[gr.Button] = []
-                with gr.Row():
-                    for _ in range(MAX_FLAGS_RENDERED):
-                        btn = gr.Button("", visible=False, size="sm", variant="secondary")
-                        flag_buttons.append(btn)
-
                 gr.Markdown("## Health overview")
-                metrics_md = gr.Markdown(format_metrics_overview(models, priors))
+                metrics_md = gr.Markdown(
+                    format_metrics_overview(models, priors, DISPLAY_MODE_DEFAULT)
+                )
 
             # ---- Trends tab -----------------------------------------------
             with gr.Tab("Trends", id=TAB_TRENDS):
@@ -1052,31 +1696,33 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
 
                 selected_metric = gr.State(None)
                 scan_buttons: dict[str, gr.Button] = {}
-                scan_charts: dict[str, gr.LinePlot] = {}
+                scan_charts: dict[str, gr.Plot] = {}
                 scan_headers: dict[str, gr.Markdown] = {}
 
                 with gr.Column(visible=True) as scan_view:
                     for block_name, block_metrics in THEMATIC_BLOCKS.items():
-                        gr.Markdown(f"### {block_name}")
-                        with gr.Row():
-                            for metric in block_metrics:
-                                with gr.Column(min_width=260):
-                                    scan_headers[metric] = gr.Markdown(
-                                        format_trend_header(metric, model)
-                                    )
-                                    scan_charts[metric] = gr.LinePlot(
-                                        value=chart_dataframe(model, metric, days=30),
-                                        x="date", y="value", color="series",
-                                        x_title="Date",
-                                        y_title=_y_axis_title(metric),
-                                        color_map=CHART_COLOR_MAP,
-                                        height=200, show_label=False,
-                                        caption=_threshold_caption(metric),
-                                    )
-                                    scan_buttons[metric] = gr.Button(
-                                        f"Investigate {METRIC_LABELS[metric]}",
-                                        size="sm", variant="secondary",
-                                    )
+                        gr.Markdown(
+                            f"<div class='section-header'>{block_name}</div>"
+                        )
+                        # Outcome jams 5 charts — chunk into 2-per-row so each
+                        # chart has room for axis labels (operator directive).
+                        per_row = 2 if block_name == "Outcome" else len(block_metrics)
+                        for chunk_start in range(0, len(block_metrics), per_row):
+                            chunk = block_metrics[chunk_start:chunk_start + per_row]
+                            with gr.Row():
+                                for metric in chunk:
+                                    with gr.Column(min_width=320, elem_classes=["chart-card"]):
+                                        scan_headers[metric] = gr.Markdown(
+                                            f"<div class='chart-header'>{format_trend_header(metric, model)}</div>"
+                                        )
+                                        scan_charts[metric] = gr.Plot(
+                                            value=render_trend_plot(model, metric, days=30),
+                                            show_label=False,
+                                        )
+                                        with gr.Row(elem_classes=["investigate-link"]):
+                                            scan_buttons[metric] = gr.Button(
+                                                "investigate ↗", size="sm",
+                                            )
 
                 with gr.Column(visible=False) as investigate_view:
                     investigate_title = gr.Markdown("")
@@ -1088,19 +1734,17 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                         prior_chk = gr.Checkbox(
                             label="Show prior period", value=False, scale=0,
                         )
-                    investigate_chart = gr.LinePlot(
-                        value=pd.DataFrame(columns=["date", "value", "series"]),
-                        x="date", y="value", color="series",
-                        x_title="Date", y_title="value",
-                        color_map=CHART_COLOR_MAP,
-                        height=520, show_label=False,
+                    investigate_chart = gr.Plot(
+                        value=None, show_label=False,
                     )
                     back_to_scan_btn = gr.Button("Back to scan", variant="secondary")
 
             # ---- Failures tab ---------------------------------------------
             with gr.Tab("Failures", id=TAB_FAILURES):
-                gr.Markdown("## Failure Feed")
-                with gr.Row():
+                gr.Markdown(
+                    "<div class='section-header'>Failure Feed</div>"
+                )
+                with gr.Row(elem_classes=["filter-bar"]):
                     branch_dd = gr.Dropdown(
                         choices=BRANCH_CHOICES, value="All", label="Branch", scale=1
                     )
@@ -1113,6 +1757,12 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                     )
                     search_in = gr.Textbox(value="", label="Search question", scale=2)
 
+                feed_summary_md = gr.Markdown(
+                    format_feed_summary(
+                        initial_failures,
+                        failure_mode_counts(model.records),
+                    )
+                )
                 feed_empty_md = gr.Markdown(
                     "" if initial_failures
                     else "<div class='feed-empty'>No failures match the current filters.</div>"
@@ -1121,6 +1771,8 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 # Pre-allocated accordion slots. Each slot's `label` is set to
                 # the row's summary line; body holds the full drilldown +
                 # View Session button. Slots beyond the row count are hidden.
+                # The severity stripe lives on the accordion's elem_classes so
+                # the .feed-row.sev-* CSS rules apply to the rendered container.
                 feed_accordions: list[gr.Accordion] = []
                 feed_drilldowns: list[gr.Markdown] = []
                 feed_session_btns: list[gr.Button] = []
@@ -1128,19 +1780,21 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 for i in range(MAX_FEED_ROWS):
                     if i < len(initial_failures):
                         row = initial_failures[i]
-                        label = (
-                            f"{_fmt_date(row.timestamp)} · {row.branch} · "
-                            f"{row.failure_mode} · {_truncate(row.question, 70)}"
-                        )
+                        label = _failure_accordion_label(row)
                         body_md = format_failure_drilldown(row.record)
                         sid = row.record.session_id
                         visible = True
+                        sev = FAILURE_MODE_SEVERITY.get(row.failure_mode, "muted")
                     else:
                         label = ""
                         body_md = ""
                         sid = None
                         visible = False
-                    with gr.Accordion(label=label, open=False, visible=visible) as acc:
+                        sev = "muted"
+                    with gr.Accordion(
+                        label=label, open=False, visible=visible,
+                        elem_classes=["feed-row", f"sev-{sev}"],
+                    ) as acc:
                         feed_drilldowns.append(gr.Markdown(body_md))
                         feed_session_btns.append(
                             gr.Button("View full session", size="sm", variant="secondary")
@@ -1152,51 +1806,35 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                     session_md = gr.Markdown("")
                     back_btn = gr.Button("Back to feed", variant="secondary")
 
-                gr.Markdown("---\n## Gap Clusters")
+                gr.Markdown("<div class='section-header'>Gap Clusters</div>")
                 cluster_md = gr.Markdown(
                     format_cluster_panel(read_clusters(CLUSTERS_DEFAULT_PATH))
                 )
 
-                gr.Markdown("---\n## Deflection summary")
+                gr.Markdown("<div class='section-header'>Deflection summary</div>")
                 deflection_md = gr.Markdown(
                     format_deflection_panel(read_summary("deflection", DEFAULT_SUMMARIES_DIR))
                 )
 
         # ---- Wiring ---------------------------------------------------------
 
-        def _flag_button_updates(flags: list[Flag]):
-            updates = []
-            for i in range(MAX_FLAGS_RENDERED):
-                if i < len(flags):
-                    f = flags[i]
-                    updates.append(gr.update(
-                        visible=True,
-                        value=f"Investigate · {f.kind}",
-                    ))
-                else:
-                    updates.append(gr.update(visible=False, value=""))
-            return updates
-
-        initial_flag_targets: list[str] = [
-            FLAG_TARGET_TAB.get(f.target, TAB_METRICS) for f in _build_flags(model)
-        ]
-        initial_flag_targets += [""] * (MAX_FLAGS_RENDERED - len(initial_flag_targets))
-        flag_targets_state = gr.State(initial_flag_targets)
-        for i in range(min(len(_build_flags(model)), MAX_FLAGS_RENDERED)):
-            flag_buttons[i].visible = True
-            flag_buttons[i].value = f"Investigate · {_build_flags(model)[i].kind}"
-
         def _feed_accordion_updates(rows: list[FailureRow]):
-            """Build (accordion-update, drilldown-update, session-state-value) per slot."""
+            """Build (accordion-update, drilldown-update, session-state-value) per slot.
+
+            Note: Gradio's gr.update doesn't support changing elem_classes
+            after construction, so the severity stripe is fixed at build
+            time. The label still updates per-row to reflect the current
+            filter — accepting that the stripe colour may not match the
+            slot's content after a filter change. Acceptable trade-off given
+            how the operator scans (severity-sorted; alerts always at the
+            top in slots that were originally alert-coloured)."""
             acc_updates, body_updates, state_values = [], [], []
             for i in range(MAX_FEED_ROWS):
                 if i < len(rows):
                     row = rows[i]
-                    label = (
-                        f"{_fmt_date(row.timestamp)} · {row.branch} · "
-                        f"{row.failure_mode} · {_truncate(row.question, 70)}"
-                    )
-                    acc_updates.append(gr.update(visible=True, label=label, open=False))
+                    acc_updates.append(gr.update(
+                        visible=True, label=_failure_accordion_label(row), open=False,
+                    ))
                     body_updates.append(format_failure_drilldown(row.record))
                     state_values.append(row.record.session_id)
                 else:
@@ -1218,21 +1856,21 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 records, branch=branch, failure_mode=mode, question_search=search
             )
             flags = _build_flags(new_model)
-            flag_targets = [FLAG_TARGET_TAB.get(f.target, TAB_METRICS) for f in flags]
-            flag_targets += [""] * (MAX_FLAGS_RENDERED - len(flag_targets))
             acc_updates, body_updates, state_values = _feed_accordion_updates(failure_rows)
             empty_html = (
                 "" if failure_rows
                 else "<div class='feed-empty'>No failures match the current filters.</div>"
             )
+            feed_summary_html = format_feed_summary(
+                failure_rows, failure_mode_counts(records),
+            )
             return [
-                format_header(source, new_loaded_at),
+                f"<div class='page-meta'>{format_header(source, new_loaded_at)}</div>",
                 _autorefresh_banner([cluster_msg, summary_msg]),
                 format_status_banner(_status_summary(headline)),
                 format_flags_summary(flags),
-                *_flag_button_updates(flags),
-                flag_targets,
-                format_metrics_overview(new_models, new_priors),
+                format_metrics_overview(new_models, new_priors, DISPLAY_MODE_DEFAULT),
+                feed_summary_html,
                 empty_html,
                 *acc_updates,
                 *body_updates,
@@ -1247,9 +1885,8 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
             outputs=[
                 header_md, banner_md, status_md,
                 flags_md,
-                *flag_buttons,
-                flag_targets_state,
                 metrics_md,
+                feed_summary_md,
                 feed_empty_md,
                 *feed_accordions,
                 *feed_drilldowns,
@@ -1258,23 +1895,7 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
             ],
         )
 
-        # Flag-click handlers: switch to the target tab
-        def _make_flag_click(slot_index: int):
-            def _handler(targets):
-                target = targets[slot_index] if slot_index < len(targets) else ""
-                if not target:
-                    return gr.update()
-                return gr.Tabs(selected=target)
-            return _handler
-
-        for i, btn in enumerate(flag_buttons):
-            btn.click(
-                fn=_make_flag_click(i),
-                inputs=[flag_targets_state],
-                outputs=[tabs],
-            )
-
-        # Failure feed filter changes → re-populate accordions
+        # Failure feed filter changes → re-populate accordions + summary
         def _refresh_feed(branch, mode, window_label, search):
             records = _filter_records(reader, window_label)
             rows = select_failures(
@@ -1286,6 +1907,7 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 else "<div class='feed-empty'>No failures match the current filters.</div>"
             )
             return [
+                format_feed_summary(rows, failure_mode_counts(records)),
                 empty_html,
                 *acc_updates,
                 *body_updates,
@@ -1297,6 +1919,7 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 fn=_refresh_feed,
                 inputs=[branch_dd, mode_dd, window_dd, search_in],
                 outputs=[
+                    feed_summary_md,
                     feed_empty_md,
                     *feed_accordions,
                     *feed_drilldowns,
@@ -1344,32 +1967,31 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
         back_btn.click(fn=_back_to_feed, outputs=[session_view])
 
         # Trend Explorer: investigate-mode renderer
-        def _build_investigate_chart(metric, window_label, show_prior):
+        def _build_investigate_figure(metric, window_label, show_prior):
             if not metric:
-                return gr.update(), pd.DataFrame(columns=["date", "value", "series"])
+                return gr.update(), None
             days = dict(TREND_WINDOWS).get(window_label, 30)
-            current_records = DashboardModel(reader.read())
+            current_records, _ = _load(reader)
             prior = current_records.for_prior_window(days=days) if show_prior else None
-            df = chart_dataframe(current_records, metric, days=days, prior_model=prior)
+            fig = render_trend_plot(
+                current_records, metric, days=days,
+                prior_model=prior, height=480,
+            )
             title = (
                 f"### Investigating: {METRIC_LABELS.get(metric, metric)}\n"
                 + format_trend_header(metric, current_records, prior_model=prior)
             )
-            return title, df
+            return title, fig
 
         def _enter_investigate_for(metric: str):
             def _handler(window_label, show_prior):
-                title, df = _build_investigate_chart(metric, window_label, show_prior)
+                title, fig = _build_investigate_figure(metric, window_label, show_prior)
                 return (
                     metric,
                     gr.update(visible=False),
                     gr.update(visible=True),
                     title,
-                    gr.update(
-                        value=df,
-                        y_title=_y_axis_title(metric),
-                        caption=_threshold_caption(metric),
-                    ),
+                    fig,
                 )
             return _handler
 
@@ -1384,10 +2006,8 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
             )
 
         def _refresh_investigate(metric, window_label, show_prior):
-            title, df = _build_investigate_chart(metric, window_label, show_prior)
-            y_title = _y_axis_title(metric) if metric else "value"
-            caption = _threshold_caption(metric) if metric else ""
-            return title, gr.update(value=df, y_title=y_title, caption=caption)
+            title, fig = _build_investigate_figure(metric, window_label, show_prior)
+            return title, fig
 
         for control in (window_radio, prior_chk):
             control.change(

@@ -127,6 +127,33 @@ def test_contact_reader_roundtrips_writer_records(tmp_path):
     assert records[0]["email"] == "bob@example.com"
 
 
+def test_read_provided_session_ids_returns_set_of_session_ids(tmp_path):
+    """Cross-reference helper for `DashboardModel.contact_conversion_rate` —
+    returns the set of session IDs that appear in contacts.jsonl. Sentinel
+    threads this set into every DashboardModel construction so the metric
+    reads true conversion (the in-log signal alone always returns 0%; see
+    the helper's docstring)."""
+    from contact_log import ContactWriter, read_provided_session_ids
+
+    log = tmp_path / "contacts.jsonl"
+    writer = ContactWriter(log)
+    for sid in ("a", "b", "c"):
+        writer.append({
+            "timestamp": "2026-05-03T12:00:00+00:00",
+            "session_id": sid,
+            "turn_index": 3,
+            "email": f"{sid}@example.com",
+        })
+    assert read_provided_session_ids(log) == {"a", "b", "c"}
+
+
+def test_read_provided_session_ids_returns_empty_set_when_file_missing(tmp_path):
+    """Missing log → empty set. DashboardModel falls back cleanly."""
+    from contact_log import read_provided_session_ids
+
+    assert read_provided_session_ids(tmp_path / "missing.jsonl") == set()
+
+
 def test_contact_writer_accepts_dict_payload(tmp_path):
     """Writer accepts either ContactRecord or dict — convenience for app.py form-submit handlers."""
     log = tmp_path / "contacts.jsonl"

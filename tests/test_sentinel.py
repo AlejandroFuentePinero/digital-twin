@@ -84,9 +84,11 @@ def test_format_metrics_overview_includes_every_metric_label():
     for label in (
         "Gap rate", "Deflection rate", "Refusal rate",
         "Guardrail rejection rate", "Retry-exhaustion rate",
-        "Low-confidence", "Confident-failure",
-        "Branch distribution", "Multi-label",
-        "Unique sessions", "Turns/session", "Contact-conversion",
+        "Classifier low-confidence", "Classifier confident-failure",
+        "Classifier branch distribution", "Classifier multi-label",
+        "Classifier mean confidence",
+        "Unique sessions", "Avg questions per session",
+        "Turns/session", "Contact-conversion",
         "Tool uptake", "Tool-call success",
         "classifier", "retrieval", "generation", "guardrail", "total",
     ):
@@ -94,18 +96,19 @@ def test_format_metrics_overview_includes_every_metric_label():
 
 
 def test_format_metrics_overview_collapses_to_same_across_windows_when_identical():
-    """When the same value renders identically in all 3 windows, the row shows
-    ONE value + 'same across windows' suffix — not three identical cells."""
+    """When the same value renders identically in all 3 windows AND the caller
+    explicitly opts into ``collapse-when-same`` mode, the row shows ONE value
+    + 'same across windows' suffix. Sentinel's default is ``stacked`` per
+    operator directive — this test pins the collapse behaviour for callers
+    that still want it."""
     from interaction_log import InteractionRecord
 
     records = [InteractionRecord.model_validate(_record_dict())]  # 1 record total
     models, priors = _models_and_priors(records)
-    overview = format_metrics_overview(models, priors)
+    overview = format_metrics_overview(models, priors, display_mode="collapse-when-same")
 
-    # The single record sits inside every window, so all three windows agree
-    # on every metric → at least one row says "same across windows".
     assert "same across windows" in overview, (
-        "identical-across-windows rows must collapse to a single value + suffix"
+        "identical-across-windows rows must collapse when caller opts into the mode"
     )
 
 
@@ -167,6 +170,189 @@ def test_format_metrics_overview_applies_status_class_to_thresholded_metric():
     assert "metric-value alert" in overview or "alert" in overview
 
 
+def test_format_metrics_overview_stacked_mode_renders_three_value_cells_always():
+    """`stacked` display mode skips the same-across-windows collapse — every
+    row renders 3 separate value cells even when they're identical. Operator
+    sees the columns at all times in this mode."""
+    from interaction_log import InteractionRecord
+
+    records = [InteractionRecord.model_validate(_record_dict())]
+    models, priors = _models_and_priors(records)
+    overview = format_metrics_overview(models, priors, display_mode="stacked")
+
+    assert "same across windows" not in overview, (
+        "stacked mode must not collapse to one cell + suffix"
+    )
+
+
+def test_format_metrics_overview_inline_mode_packs_values_into_one_cell_with_separators():
+    """`inline` display mode renders `9.4% / 9.4% / 9.4%` in one cell — a
+    compact alternative for operators who want every value on one row without
+    occupying three columns."""
+    from interaction_log import InteractionRecord
+
+    records = [InteractionRecord.model_validate(_record_dict())]
+    models, priors = _models_and_priors(records)
+    overview = format_metrics_overview(models, priors, display_mode="inline")
+
+    assert "metric-value-inline" in overview, (
+        "inline mode must use the metric-value-inline cell"
+    )
+    assert "inline-sep" in overview, "inline mode separators must appear"
+
+
+def test_format_metrics_overview_inline_mode_marks_divergent_values_inline():
+    """When divergent in inline mode, individual values get the divergence
+    accent — operator's eye lands on the disagreeing windows."""
+    from datetime import datetime, timedelta, timezone
+    from interaction_log import InteractionRecord
+
+    now = datetime.now(timezone.utc)
+    bad_recent = _record_dict()
+    bad_recent["knew_answer"] = False
+    bad_recent["timestamp"] = (now - timedelta(days=2)).isoformat()
+    bad_recent["session_id"] = "s-recent"
+    clean_old = _record_dict()
+    clean_old["timestamp"] = (now - timedelta(days=50)).isoformat()
+    clean_old["session_id"] = "s-old"
+
+    records = [
+        InteractionRecord.model_validate(bad_recent),
+        InteractionRecord.model_validate(clean_old),
+    ]
+    models, priors = _models_and_priors(records)
+    overview = format_metrics_overview(models, priors, display_mode="inline")
+
+    # In inline mode the divergence accent is on the inner span, not the cell border
+    assert "inline-value divergent" in overview or "divergent" in overview
+
+
+def test_fmt_dropoff_surfaces_only_the_most_common_drop_off_turn():
+    """`_fmt_dropoff` no longer renders the full per-turn table — operator
+    wants the headline pattern only ('after t0 (44 sessions)'), computed as
+    the biggest count_at_N − count_at_N+1 step."""
+    from sentinel import _fmt_dropoff
+
+    # 56 sessions reach turn 0; 12 reach turn 1; 5 reach turn 2.
+    # Drops: t0=44, t1=7, t2=5. Biggest drop is after t0.
+    out = _fmt_dropoff({0: 56, 1: 12, 2: 5})
+    assert "t0" in out
+    assert "44" in out
+    # Other turns no longer mentioned (compact)
+    assert "t1" not in out
+    assert "t2" not in out
+
+
+def test_fmt_branches_uses_pipe_separator():
+    """Distribution lists use ` | ` as separator (operator directive — easier
+    to scan than commas when each entry has a percentage)."""
+    from sentinel import _fmt_branches
+
+    out = _fmt_branches({"GENERIC": 0.5, "TECHNICAL": 0.3, "GAP": 0.2})
+    assert " | " in out
+    assert ", " not in out
+
+
+def test_format_metrics_overview_renders_deltas_muted_when_history_lt_14_days():
+    """Until the log spans at least 14 days, WoW deltas render in muted colour
+    (no semantic green/red) — there's no real prior-week baseline to compare
+    against; colouring would imply a comparison that doesn't exist."""
+    from datetime import datetime, timedelta, timezone
+    from interaction_log import InteractionRecord
+
+    now = datetime.now(timezone.utc)
+    # 5 days of data — well under the 14-day threshold
+    bad_recent = _record_dict()
+    bad_recent["knew_answer"] = False
+    bad_recent["timestamp"] = (now - timedelta(days=2)).isoformat()
+    clean_recent = _record_dict()
+    clean_recent["timestamp"] = (now - timedelta(days=5)).isoformat()
+
+    records = [
+        InteractionRecord.model_validate(bad_recent),
+        InteractionRecord.model_validate(clean_recent),
+    ]
+    models, priors = _models_and_priors(records)
+    overview = format_metrics_overview(models, priors, display_mode="stacked")
+
+    # Any delta span carries the `muted` class, never the semantic
+    # `improving`/`degrading` ones.
+    assert "delta improving" not in overview, "no semantic green before 14d history"
+    assert "delta degrading" not in overview, "no semantic red before 14d history"
+
+
+def test_format_metrics_overview_renders_deltas_with_direction_when_history_ge_14_days():
+    """Once the log spans 14+ days, deltas pick up the direction colour:
+    improving = healthy green, degrading = alert red. Direction already
+    accounts for metric polarity (gap up = degrading, tool success up =
+    improving) via wow_delta — Sentinel just renders the class."""
+    from datetime import datetime, timedelta, timezone
+    from interaction_log import InteractionRecord
+
+    now = datetime.now(timezone.utc)
+    # 20 days of data — comfortably above the threshold
+    earliest = _record_dict()
+    earliest["knew_answer"] = False
+    earliest["timestamp"] = (now - timedelta(days=20)).isoformat()
+    earliest["session_id"] = "old"
+    recent = _record_dict()
+    recent["timestamp"] = (now - timedelta(days=2)).isoformat()
+    recent["session_id"] = "new"
+
+    records = [
+        InteractionRecord.model_validate(earliest),
+        InteractionRecord.model_validate(recent),
+    ]
+    models, priors = _models_and_priors(records)
+    overview = format_metrics_overview(models, priors, display_mode="stacked")
+
+    # At least one delta carries semantic direction (not all rows have a prior;
+    # but the Refusal / Gap / Confident-failure rates plausibly do).
+    assert (
+        "delta improving" in overview
+        or "delta degrading" in overview
+        or "delta stable" in overview
+    ), "expected at least one semantic-direction delta after 14d history"
+    # And no muted class — history is sufficient
+    assert "delta muted" not in overview
+
+
+def test_data_history_days_returns_zero_for_empty_records():
+    """No records → 0 days history. Defaults the muting check to 'mute'."""
+    from sentinel import _data_history_days
+
+    assert _data_history_days([]) == 0
+
+
+def test_data_history_days_returns_span_in_days():
+    """Span is max-timestamp − min-timestamp in calendar days, computed off
+    the date prefix of each ISO timestamp (time-of-day is irrelevant for the
+    14-day gate)."""
+    from datetime import datetime, timedelta, timezone
+    from interaction_log import InteractionRecord
+    from sentinel import _data_history_days
+
+    now = datetime.now(timezone.utc)
+    rs = [
+        InteractionRecord.model_validate({**_record_dict(), "timestamp": (now - timedelta(days=10)).isoformat()}),
+        InteractionRecord.model_validate({**_record_dict(), "timestamp": now.isoformat()}),
+    ]
+    assert _data_history_days(rs) == 10
+
+
+def test_display_modes_constant_lists_all_three_supported_values():
+    """Forcing function — adding a new display mode without updating the test
+    or removing one without updating the UI default breaks here first.
+
+    Sentinel ships ``stacked`` by default (operator directive — every row
+    always shows the three windowed values for a consistent column scan).
+    The other modes remain available to direct callers."""
+    from sentinel import DISPLAY_MODES, DISPLAY_MODE_DEFAULT
+
+    assert set(DISPLAY_MODES) == {"collapse-when-same", "stacked", "inline"}
+    assert DISPLAY_MODE_DEFAULT == "stacked"
+
+
 def test_format_status_banner_counts_alert_warning_healthy_metrics():
     """The banner aggregates the headline window's metric statuses into 3
     counts. Sentinel header shows 'N alerts · N warnings · N healthy' so the
@@ -184,8 +370,9 @@ def test_format_status_banner_counts_alert_warning_healthy_metrics():
     summary = _status_summary(DashboardModel(records))
     banner = format_status_banner(summary)
 
-    assert "SENTINEL" in banner
-    # Count strings appear (numbers vary as thresholds tune; the structure must hold)
+    # The "SENTINEL" prefix was dropped — the page header already names the
+    # dashboard. The counts header carries the structure now.
+    assert "status-counts" in banner
     assert "alerts" in banner.lower()
     assert "warnings" in banner.lower()
     assert "healthy" in banner.lower()
@@ -447,26 +634,36 @@ def test_chart_dataframe_includes_value_series_and_threshold_reference_lines():
     series_set = set(df["series"].unique())
     assert "actual" in series_set, "raw daily values rendered as 'actual' series"
     assert "3-day avg" in series_set, "rolling-average smoother must be drawn"
-    assert "healthy" in series_set, "healthy threshold reference line must be drawn"
-    assert "warning" in series_set, "warning threshold reference line must be drawn"
+    # No fixed threshold reference lines — status colouring on the trend
+    # itself signals health (operator directive). The threshold *values*
+    # appear in the chart caption.
+    assert "healthy" not in series_set
+    assert "warning" not in series_set
 
 
 def test_chart_dataframe_includes_prior_period_series_when_prior_model_supplied():
-    """When prior_model is passed, chart_dataframe adds a 'prior' series — the basis for the
-    'Show prior period' overlay in investigate mode (issue #30 spec)."""
-    from datetime import datetime, timezone
+    """When prior_model is passed and its dates (shifted forward by `days`)
+    fall in the visible range, chart_dataframe adds a 'prior' series — the
+    basis for the 'Show prior period' overlay in investigate mode."""
+    from datetime import datetime, timedelta, timezone
 
-    rec = lambda: InteractionRecord.model_validate({
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "session_id": "s", "turn_index": 0, "question": "q?", "event_type": "answered",
-        "branch": "GENERIC", "classification_confidence": 1.0,
-        "attempts": [{"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""}],
-        "retrieved_chunks": [],
-        "latency_ms": {"classifier": 0, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 0},
-        "knew_answer": True,
-    })
-    model = DashboardModel([rec()])
-    prior = DashboardModel([rec()])
+    def rec(days_ago: int) -> InteractionRecord:
+        ts = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+        return InteractionRecord.model_validate({
+            "timestamp": ts,
+            "session_id": f"s-{days_ago}", "turn_index": 0, "question": "q?",
+            "event_type": "answered", "branch": "GENERIC",
+            "classification_confidence": 1.0,
+            "attempts": [{"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""}],
+            "retrieved_chunks": [],
+            "latency_ms": {"classifier": 0, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 0},
+            "knew_answer": True,
+        })
+
+    # Current period: a record 1 day ago. Prior: a record 8 days ago — when
+    # shifted forward by `days=7` it lands at "1 day ago", inside the trim.
+    model = DashboardModel([rec(1)])
+    prior = DashboardModel([rec(8)])
     df = chart_dataframe(model, metric="gap_rate", days=7, prior_model=prior)
     assert "prior" in set(df["series"].unique())
 

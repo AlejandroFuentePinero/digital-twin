@@ -360,22 +360,63 @@ def test_contact_offer_rate_is_share_of_records_with_contact_offered_true():
     assert model.contact_offer_rate == 0.5
 
 
-def test_contact_conversion_rate_is_provided_over_offered_or_none():
-    """contact_conversion_rate = count(contact_provided) / count(contact_offered). None when
-    nothing offered (live: 1/11 = ~9% — contact-form-failure headline)."""
+def test_contact_conversion_rate_is_session_level_provided_over_offered():
+    """contact_conversion_rate = sessions_provided ÷ sessions_offered.
+
+    Session-level (not record-level) because the live pipeline writes
+    `contact_provided=True` on the InteractionRecord *after* the form
+    submit, so the same record never carries both flags. Record-level
+    intersection always returned 0% even when the form *was* converted —
+    that bug is what the session-level join fixes (see contact_log
+    docstring + DECISIONS.md)."""
+    # Four distinct sessions offered; one of them also has a record with
+    # contact_provided=True → 1/4 = 25%.
     model = DashboardModel(
         [
-            _r(contact_offered=True, contact_provided=True),
-            _r(contact_offered=True, contact_provided=False),
-            _r(contact_offered=True, contact_provided=False),
-            _r(contact_offered=True, contact_provided=False),
-            _r(contact_offered=False, contact_provided=False),
+            _r(session_id="s1", contact_offered=True, contact_provided=False),
+            _r(session_id="s1", contact_offered=False, contact_provided=True),
+            _r(session_id="s2", contact_offered=True, contact_provided=False),
+            _r(session_id="s3", contact_offered=True, contact_provided=False),
+            _r(session_id="s4", contact_offered=True, contact_provided=False),
         ]
     )
-    assert model.contact_conversion_rate == 0.25  # 1 of 4 offered
+    assert model.contact_conversion_rate == 0.25
 
     no_offers = DashboardModel([_r(contact_offered=False), _r(contact_offered=False)])
     assert no_offers.contact_conversion_rate is None
+
+
+def test_contact_conversion_rate_uses_provided_session_ids_cross_reference():
+    """When `provided_session_ids` is supplied (Sentinel reads it from
+    contacts.jsonl), conversion counts a session as converted if it appears
+    in EITHER the in-log signal OR the cross-reference. Loadbearing for the
+    live data — most submissions only show up in contacts.jsonl."""
+    # Three sessions offered; two appear in the cross-reference; in-log
+    # provided is empty (the realistic live shape).
+    model = DashboardModel(
+        [
+            _r(session_id="s1", contact_offered=True),
+            _r(session_id="s2", contact_offered=True),
+            _r(session_id="s3", contact_offered=True),
+        ],
+        provided_session_ids=frozenset({"s1", "s2"}),
+    )
+    assert model.contact_conversion_rate == 2 / 3
+
+
+def test_for_window_propagates_provided_session_ids_to_filtered_model():
+    """`for_window` rebuilds the model — must thread the cross-ref through
+    or the windowed views silently revert to the broken record-level signal."""
+    full = DashboardModel(
+        [
+            _r(session_id="s1", contact_offered=True),
+            _r(session_id="s2", contact_offered=True),
+        ],
+        provided_session_ids=frozenset({"s1"}),
+    )
+    windowed = full.for_window(days=30)
+    assert windowed.provided_session_ids == frozenset({"s1"})
+    assert windowed.contact_conversion_rate == 0.5
 
 
 def test_technical_tool_uptake_rate_is_tool_use_share_of_technical_turns():
