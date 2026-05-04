@@ -16,8 +16,19 @@ import gradio as gr
 import pandas as pd
 
 from branches import REGISTRY as BRANCH_REGISTRY
-from cluster_gaps import DEFAULT_OUT_PATH as CLUSTERS_DEFAULT_PATH, read_clusters
+from cluster_gaps import (
+    DEFAULT_ARCHIVE_DIR as CLUSTERS_ARCHIVE_DIR,
+    DEFAULT_OUT_PATH as CLUSTERS_DEFAULT_PATH,
+    read_cluster_history,
+    read_clusters,
+)
 from dashboard_model import METRIC_GETTERS, DashboardModel
+from flag_detector import (
+    Flag,
+    detect_gap_rate_jump,
+    detect_new_cluster,
+    detect_repeat_failure,
+)
 from summarize_failures import DEFAULT_SUMMARIES_DIR, read_summary
 from failure_feed import (
     FAILURE_MODES,
@@ -61,6 +72,17 @@ SENTINEL_CSS = """
 .wow-delta.improving { color: #4ade80; }
 .wow-delta.degrading { color: #f87171; }
 .wow-delta.stable    { color: #94a3b8; }
+
+.flag-card {
+    border-left: 3px solid #f87171;
+    padding: 8px 12px;
+    margin: 6px 0;
+    background: rgba(248, 113, 113, 0.06);
+    border-radius: 3px;
+}
+.flag-card .flag-headline { font-weight: 600; color: #f87171; }
+.flag-card .flag-detail   { font-size: 0.88em; color: #cbd5e1; margin-top: 2px; }
+.flag-card a.flag-link    { color: #f87171; text-decoration: underline; }
 """
 
 
@@ -475,6 +497,63 @@ def format_replay_comparison(result: ReplayResult) -> str:
     )
 
 
+# ---- Flags panel (issue #34) ------------------------------------------------
+
+
+# Anchor IDs map FlagDetector targets onto in-page sections so a flag's headline
+# link scrolls the operator straight to the relevant panel. Keep in sync with
+# the elem_id values on the section header markdowns in `build_app`.
+FLAG_TARGET_ANCHORS: dict[str, str] = {
+    "failure_feed": "failure-feed-section",
+    "gap_clusters": "gap-clusters-section",
+    "trend": "trend-explorer-section",
+}
+
+FLAGS_EMPTY_PLACEHOLDER = (
+    "_No anomalies detected — every detector returned no flags. Stable / quiet "
+    "weeks render no flags by design._"
+)
+
+
+def format_flags_panel(flags: list[Flag]) -> str:
+    """Render the Flags panel as one Markdown block.
+
+    Each flag becomes a `.flag-card` div with the headline as an anchor link to
+    its target panel. Empty `flags` → placeholder copy explaining quiet weeks.
+    """
+    if not flags:
+        return FLAGS_EMPTY_PLACEHOLDER
+    cards: list[str] = []
+    for flag in flags:
+        anchor = FLAG_TARGET_ANCHORS.get(flag.target, "")
+        href = f"#{anchor}" if anchor else "#"
+        headline = html.escape(flag.headline)
+        detail = html.escape(flag.detail)
+        cards.append(
+            "<div class='flag-card'>"
+            f"<div class='flag-headline'>{headline}</div>"
+            f"<div class='flag-detail'>{detail} "
+            f"<a class='flag-link' href='{href}'>Investigate ↗</a></div>"
+            "</div>"
+        )
+    return "\n".join(cards)
+
+
+def _build_flags(model: DashboardModel) -> list[Flag]:
+    """Run all three detectors against the live data + cached cluster files.
+
+    Pure orchestrator — no I/O outside the cluster file reads. Sentinel calls
+    this at page-load and on Refresh."""
+    return [
+        *detect_gap_rate_jump(model.records),
+        *detect_new_cluster(
+            read_clusters(CLUSTERS_DEFAULT_PATH),
+            read_cluster_history(CLUSTERS_ARCHIVE_DIR),
+        ),
+        *detect_repeat_failure(model.records),
+    ]
+
+
 # ---- Trend Explorer (issue #30) ---------------------------------------------
 
 # Display labels for each plottable metric (mirrors format_panel's row labels). Single
@@ -616,13 +695,16 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
             refresh_btn = gr.Button("↻ Refresh", variant="secondary", size="sm", scale=0)
         header_md = gr.Markdown(format_header(source, loaded_at))
 
+        gr.Markdown("## Flags")
+        flags_md = gr.Markdown(format_flags_panel(_build_flags(model)))
+
         with gr.Row():
             panels: list[gr.Markdown] = []
             for panel_md in _render_panels(model):
                 with gr.Column():
                     panels.append(gr.Markdown(panel_md))
 
-        gr.Markdown("---\n## Failure Feed")
+        gr.Markdown("---\n## Failure Feed", elem_id=FLAG_TARGET_ANCHORS["failure_feed"])
 
         with gr.Row():
             branch_dd = gr.Dropdown(
@@ -671,6 +753,7 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
             )
             return [
                 format_header(source, new_loaded_at),
+                format_flags_panel(_build_flags(new_model)),
                 *_render_panels(new_model),
                 _failure_table_rows(rows),
                 rows,
@@ -684,7 +767,7 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
             fn=_refresh,
             inputs=[branch_dd, mode_dd, window_dd, search_in],
             outputs=[
-                header_md, *panels,
+                header_md, flags_md, *panels,
                 failures_df, rows_state, drilldown_md,
                 selected_session_id, selected_record,
                 view_session_btn, replay_btn, replay_md,
@@ -806,7 +889,10 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
         )
 
         # ---- Trend Explorer (issue #30) ------------------------------------
-        gr.Markdown("---\n## Trend Explorer · last 30 days")
+        gr.Markdown(
+            "---\n## Trend Explorer · last 30 days",
+            elem_id=FLAG_TARGET_ANCHORS["trend"],
+        )
 
         selected_metric = gr.State(None)
 
@@ -909,7 +995,10 @@ def build_app(reader: LogReader | None = None) -> gr.Blocks:
         )
 
         # ---- Cluster panel (issue #32) -------------------------------------
-        gr.Markdown("---\n## Gap Clusters")
+        gr.Markdown(
+            "---\n## Gap Clusters",
+            elem_id=FLAG_TARGET_ANCHORS["gap_clusters"],
+        )
         cluster_md = gr.Markdown(format_cluster_panel(read_clusters(CLUSTERS_DEFAULT_PATH)))
 
         def _refresh_clusters():

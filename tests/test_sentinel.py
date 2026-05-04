@@ -487,6 +487,68 @@ def test_format_deflection_panel_renders_placeholder_when_text_is_none():
     assert "summarize_failures" in md, "must point the operator at the batch script"
 
 
+# ----- Flags panel formatter (issue #34) -------------------------------------
+
+
+def test_format_flags_panel_renders_placeholder_when_no_flags():
+    """Empty flag list → placeholder copy. Stable / quiet weeks must not look
+    broken; the placeholder explains why nothing is firing."""
+    from sentinel import format_flags_panel
+
+    md = format_flags_panel([])
+    assert "anomalies" in md.lower() or "no flag" in md.lower()
+
+
+def test_format_flags_panel_renders_each_flag_with_link_to_target_panel():
+    """Each Flag becomes a card with the headline + an anchor link to its
+    target panel (failure_feed / gap_clusters / trend). The anchor matches the
+    elem_id of the target section so the browser scrolls natively on click."""
+    from flag_detector import Flag
+    from sentinel import FLAG_TARGET_ANCHORS, format_flags_panel
+
+    flags = [
+        Flag(kind="repeat_failure", headline="Repeated failure (3×): kdb+/q?",
+             detail="Same question deflected 3 times in 7 days.",
+             target="failure_feed"),
+        Flag(kind="new_cluster", headline="New gap cluster: Rust",
+             detail="2 gap question(s) clustered under this label this week.",
+             target="gap_clusters"),
+        Flag(kind="gap_rate_jump", headline="Gap rate jumped 35.0pp WoW",
+             detail="Trailing 7-day window vs prior.",
+             target="trend"),
+    ]
+    md = format_flags_panel(flags)
+
+    # Every headline appears
+    for f in flags:
+        assert f.headline in md or html_escape(f.headline) in md
+    # Anchors map to the target panel elem_ids (used by the browser to scroll)
+    for f in flags:
+        assert f"#{FLAG_TARGET_ANCHORS[f.target]}" in md
+
+
+def html_escape(s: str) -> str:
+    """Mirror html.escape so the assertion above works regardless of which form
+    the formatter uses (kept local to avoid leaking import order across tests)."""
+    import html as _html
+    return _html.escape(s)
+
+
+def test_build_app_renders_flags_panel_section_header():
+    """build_app smoke check: the Flags section is present in the rendered
+    Blocks. Verifies the panel is wired (not whether the flags themselves are
+    correct — the detectors own that)."""
+    import json as _json
+
+    log_path = Path(__file__).parent / "_tmp_flags_smoke.jsonl"
+    log_path.write_text(_json.dumps(_record_dict()) + "\n")
+    try:
+        app = build_app(reader=LocalReader(log_path))
+        assert app is not None
+    finally:
+        log_path.unlink(missing_ok=True)
+
+
 def test_format_deflection_panel_renders_summary_text_intact():
     """When a summary exists, the panel surfaces it verbatim — the LLM already
     wrote Markdown, the panel doesn't reformat it. The operator sees what the

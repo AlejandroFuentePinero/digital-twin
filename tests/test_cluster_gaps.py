@@ -287,3 +287,61 @@ def test_run_batch_reads_log_file_and_writes_clustered_output_json(tmp_path):
         {"label": "AWS / cloud", "count": 2,
          "examples": ["Have you used AWS?", "AWS Lambda?"]},
     ]
+
+
+def test_run_batch_writes_dated_snapshot_into_archive_dir(tmp_path):
+    """Each batch writes a dated copy under archive_dir so
+    `flag_detector.detect_new_cluster` has a history of prior weekly cluster
+    files to compare against (without that, new_cluster always cold-starts)."""
+    from cluster_gaps import run_batch
+
+    log_path = tmp_path / "interactions.jsonl"
+    out_path = tmp_path / "gap_clusters.json"
+    archive_dir = tmp_path / "archive"
+
+    record = _record(question="Have you used AWS?", knew_answer=False)
+    log_path.write_text(record.model_dump_json() + "\n")
+
+    response_json = json.dumps({
+        "clusters": [{"label": "AWS / cloud", "count": 2,
+                      "examples": ["Have you used AWS?"]}]
+    })
+    with patch("cluster_gaps.completion", return_value=_completion_returning(response_json)):
+        run_batch(days=7, out_path=out_path, log_path=log_path,
+                  archive_dir=archive_dir)
+
+    snapshots = sorted(archive_dir.glob("gap_clusters_*.json"))
+    assert len(snapshots) == 1
+    assert json.loads(snapshots[0].read_text())["clusters"] == [
+        {"label": "AWS / cloud", "count": 2, "examples": ["Have you used AWS?"]},
+    ]
+
+
+def test_read_cluster_history_returns_every_archived_file_oldest_first(tmp_path):
+    """`detect_new_cluster` walks every prior file. The history loader must
+    surface them all, ordered so an operator scanning the list reads them in
+    chronological order."""
+    from cluster_gaps import Cluster, read_cluster_history, write_clusters
+
+    archive_dir = tmp_path / "archive"
+    write_clusters(
+        [Cluster(label="early", count=2, examples=["q1", "q2"])],
+        period_days=7,
+        out_path=archive_dir / "gap_clusters_2026-04-01.json",
+    )
+    write_clusters(
+        [Cluster(label="late", count=2, examples=["q1", "q2"])],
+        period_days=7,
+        out_path=archive_dir / "gap_clusters_2026-05-01.json",
+    )
+
+    history = read_cluster_history(archive_dir)
+    assert [h["clusters"][0]["label"] for h in history] == ["early", "late"]
+
+
+def test_read_cluster_history_returns_empty_list_when_archive_dir_missing(tmp_path):
+    """Cold-start: archive_dir doesn't exist yet → []. `detect_new_cluster`
+    consumes [] and stays silent (no false positives on cold start)."""
+    from cluster_gaps import read_cluster_history
+
+    assert read_cluster_history(tmp_path / "nope") == []

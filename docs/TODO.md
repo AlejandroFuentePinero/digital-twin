@@ -3,12 +3,12 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-04 (Session 36 — `#33` shipped; Phase 4 10/11 issues closed, only `#34` Flags + FlagDetector remains)
+**Last updated:** 2026-05-04 (Session 37 — `#34` shipped; **Phase 4 complete** — all 11 issues closed)
 **Current phase:** **Phase 4 in progress.** Slices 1 (`#28` LogReader) and 2 (`#29` Sentinel skeleton + Panel 1 v1) closed in `da77567` + `f2c1231` (local, push-protected). Suite 224 → 245 (+21). Phase 4 plan was restructured this session from "5 panels + 3-flag panel" into an 11-issue surface organised around the **9 failure modes Sentinel exists to detect**; 4 new issues filed (`#35` `#36` `#37` `#38`), 2 existing rewritten (`#30` `#31`). Senior-engineer audit surfaced four hidden gaps before TDD started: proxy-metric caveats (lands in `docs/SENTINEL.md` per `#36`), structural observability blind spot (no `git_sha` / `prompt_hash` for replay or deployment markers — filed as `#37` prereq), confident-failure detection gap (added to `#35`), and replay capability (filed as `#38`). Live-log inventory of `data/logs/interactions.jsonl` (85 records, 64 sessions) drove all metric definitions. See `DECISIONS.md` Session 28 for full rationale.
 
 **Phase 1 + Phase 2 + Phase 3 complete.**
 
-**Next: `#37`** — schema additions to `InteractionRecord` (`prompt_hash` / `model_id` / `git_sha` / `temperature`). Prerequisite for `#30` (Trend deployment markers) and `#38` (replay). Independent of `#35` and `#36` — those can ship in parallel.
+**Next: Phase 5** — break the live system. Phase 4's instrumentation surface is now complete; Phase 5 turns that lens on the live pipeline to find real regressions.
 
 ---
 
@@ -132,7 +132,7 @@ GitHub Issues are the source of truth for slice-level scope; this list is a chec
 - [x] `#38` — Replay: button in Failure Feed → re-run record through current pipeline → side-by-side diff.
 - [x] `#32` — `src/cluster_gaps.py` weekly LLM batch + Cluster panel.
 - [x] `#33` — `src/summarize_failures.py` weekly LLM batch (unacceptable / deflection / gap) + Deflection panel.
-- [ ] `#34` — Flags panel + `FlagDetector` (`gap_rate_jump` / `new_cluster` / `repeat_failure`).
+- [x] `#34` — Flags panel + `FlagDetector` (`gap_rate_jump` / `new_cluster` / `repeat_failure`).
 
 Sentinel reads precomputed cluster/summary files — no live LLM calls in the dashboard hot path.
 

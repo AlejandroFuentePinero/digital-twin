@@ -33,6 +33,12 @@ DEFAULT_OUT_PATH = (
     Path(__file__).parent.parent / "data" / "logs" / "gap_clusters.json"
 )
 
+# Dated weekly snapshots — `flag_detector.detect_new_cluster` consumes this
+# directory's history to spot cluster labels that are new this week.
+DEFAULT_ARCHIVE_DIR = (
+    Path(__file__).parent.parent / "data" / "logs" / "gap_clusters_archive"
+)
+
 # Cheap classifier-tier model — this is a one-shot batch over a small (≤ ~50)
 # question list with structured output, not a high-stakes generation. Mirrors
 # classifier.py's choice for the same reasoning.
@@ -135,17 +141,36 @@ def read_clusters(path: Path) -> dict | None:
     return json.loads(path.read_text())
 
 
+def read_cluster_history(
+    archive_dir: Path = DEFAULT_ARCHIVE_DIR,
+) -> list[dict]:
+    """Load every dated archive in `archive_dir`, ordered oldest-first.
+
+    `flag_detector.detect_new_cluster` reads this list as 'all prior weekly
+    cluster files'. Missing directory → empty list (cold-start safety)."""
+    archive_dir = Path(archive_dir)
+    if not archive_dir.exists():
+        return []
+    return [
+        json.loads(p.read_text())
+        for p in sorted(archive_dir.glob("gap_clusters_*.json"))
+    ]
+
+
 def run_batch(
     *,
     days: int,
     out_path: Path,
     log_path: Path | None = None,
+    archive_dir: Path | None = DEFAULT_ARCHIVE_DIR,
 ) -> Path:
     """Read the interaction log, extract recent gap questions, cluster them via
     the LLM, and write `gap_clusters.json`. Returns the output path so the CLI
     can print it.
 
     `log_path=None` defaults to the canonical interactions.jsonl via LocalReader.
+    `archive_dir` is the dated-snapshot directory consumed by
+    `flag_detector.detect_new_cluster`; pass ``None`` to skip archiving.
     """
     from log_reader import LocalReader
 
@@ -154,6 +179,10 @@ def run_batch(
     questions = extract_gap_questions(records, days=days)
     clusters = GapClusterer().cluster(questions)
     write_clusters(clusters, period_days=days, out_path=out_path)
+    if archive_dir is not None:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        archive_path = Path(archive_dir) / f"gap_clusters_{today}.json"
+        write_clusters(clusters, period_days=days, out_path=archive_path)
     return Path(out_path)
 
 

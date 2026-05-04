@@ -5,6 +5,68 @@
 
 ---
 
+## Session 37 (2026-05-04) — `#34` shipped: Flags panel + FlagDetector (Phase 4 complete)
+
+**Status:** [`#34`](https://github.com/AlejandroFuentePinero/digital-twin/issues/34) closed locally. Suite **368 → 388** (+20 tests). New module `src/flag_detector.py` with `Flag` dataclass + three pure detector functions (`detect_gap_rate_jump`, `detect_new_cluster`, `detect_repeat_failure`). `cluster_gaps.py` gains a `DEFAULT_ARCHIVE_DIR` + `read_cluster_history` helper + `run_batch` writes a dated snapshot per run so `detect_new_cluster` has historical material to compare against. Sentinel gains a Flags panel above Panel 1 (`format_flags_panel`) with one `.flag-card` per flag and an anchor link to the target panel (`failure_feed` / `gap_clusters` / `trend`); the three target section headers carry `elem_id`s so browser-native scroll handles the click. Refresh re-runs all three detectors. **Phase 4: 11 of 11 issues closed.**
+
+### What shipped — code
+
+| Commit | Scope |
+|---|---|
+| `<this-session>` | `#34` — new `src/flag_detector.py` (`Flag` frozen dataclass + `FLAG_GAP_RATE_JUMP_THRESHOLD=0.3` / `FLAG_REPEAT_FAILURE_COUNT=3` / `FLAG_REPEAT_FAILURE_DAYS=7` constants + `_trailing_window` / `_prior_window` helpers + the three `detect_*` pure functions). `cluster_gaps.py` adds `DEFAULT_ARCHIVE_DIR` + `read_cluster_history(archive_dir)` + `run_batch(..., archive_dir=DEFAULT_ARCHIVE_DIR)` writing a dated `gap_clusters_{YYYY-MM-DD}.json` snapshot. `sentinel.py` adds `FLAG_TARGET_ANCHORS` + `FLAGS_EMPTY_PLACEHOLDER` + `format_flags_panel(flags)` + `_build_flags(model)` + the panel section above Panel 1 + `elem_id`s on the three target section headers + Refresh hookup that re-renders flags. CSS adds `.flag-card` styling. `system_map` registers `flag_detector` under "Tooling"; `MAP.md` regenerated. +14 tests in new `test_flag_detector.py`, +3 in `test_cluster_gaps.py`, +3 in `test_sentinel.py`. |
+
+### TDD slices (3 waves, 14 detector tests + 6 wiring tests)
+
+- **Wave A — `detect_gap_rate_jump` (1 tracer + 3 follow-ups, 4 tests)**: tracer fires on a 40pp WoW jump (10% → 50%) with `target='trend'`; stable rates → no flag (0pp delta); empty record set → no flag; **single-week-only history → no flag** (cold-start guard — when `_prior_window(records)` is empty there's no baseline to compare against, so don't fire on fresh deployments).
+- **Wave B — `detect_new_cluster` (4 tests)**: emits one flag per new label absent from every prior file; missing current file (`None`) → `[]` (AC: must not crash); **cold-start no-prior history → `[]`** (would otherwise flag every label as 'new' on first run); every-label-overlaps-priors → `[]`.
+- **Wave C — `detect_repeat_failure` (6 tests)**: fires when same question deflected ≥3 times in 7d with `target='failure_feed'`; below threshold → no flag; outside-window occurrences excluded; **`refused` + `deflected` count together** (spec: "deflected/refused"); case-insensitive + whitespace-trimmed question key (visitors phrase the same question with different capitalisation); empty record set → no flag.
+- **Wave D — `cluster_gaps.py` archive (3 tests)**: `run_batch` writes a dated snapshot under `archive_dir`; `read_cluster_history` loads every archived file oldest-first; missing archive_dir → `[]` (cold-start safety propagates to `detect_new_cluster`).
+- **Wave E — Sentinel formatter + smoke (3 tests)**: empty flag list → placeholder copy; populated list → one `.flag-card` per flag with the headline + an anchor link matching the target panel's `elem_id`; `build_app` boots cleanly with the panel wired.
+
+### Live-log smoke
+
+`PYTHONPATH=src uv run python -c "..."` against the 85-record live log:
+
+- `_build_flags(DashboardModel(records))` → **0 flags** — exactly as predicted given the live data shape:
+  - `detect_gap_rate_jump`: 4-day data span fits inside the 7-day current window; `_prior_window` is empty → cold-start guard kicks in → no flag.
+  - `detect_new_cluster`: operator hasn't run `cluster_gaps.py` yet (`gap_clusters.json` absent + archive empty) → no flag.
+  - `detect_repeat_failure`: live log has 0 `event_type='deflected'` and 0 `event_type='refused'` records (Session 36 noted "deflection-rule is dormant in current live data") → no flag.
+- Panel renders the empty placeholder copy: "_No anomalies detected — every detector returned no flags. Stable / quiet weeks render no flags by design._"
+- `Sentinel.build_app()` boots cleanly with the new Flags panel above Panel 1.
+- Synthetic smoke (separate from the test suite) confirms each detector fires when conditions are met: 0% → 80% gap rate jump fires with `target='trend'`; new "Rust" label not in priors fires with `target='gap_clusters'`; 3 deflected `kdb+/q?` questions fire with `target='failure_feed'`.
+
+### Design choices
+
+- **`FLAG_GAP_RATE_JUMP_THRESHOLD=0.3` interpreted as absolute pp delta, not relative WoW.** The codebase's existing `wow_delta` convention treats fractions as percentage points (`magnitude = f"{abs(delta.delta) * 100:.1f}pp"` in `_format_delta_span`). Following that convention keeps the units coherent across Sentinel. A 30pp absolute jump is intentionally a high bar — flags are *anomalies*, not "is this metric moving in the right direction" (that's what the Trend Explorer is for).
+- **Single-week-only history → no `gap_rate_jump` flag.** Without a prior window to compare against, *any* current rate registers as a jump from a baseline that was never measured. The cold-start guard (return `[]` when `_prior_window(records)` is empty) prevents fresh deployments from flagging on a phantom baseline. The next week's run is the first that can flag.
+- **Cold-start (no prior cluster files) → no `new_cluster` flags.** Same reasoning as above: every label is trivially "new" when there's no historical baseline. The first cluster batch run establishes the baseline silently. Implementation: `if not prior_clusters: return []` — explicit short-circuit, not implicit-via-set-difference.
+- **`detect_new_cluster` is a *pure* function over dicts — no I/O.** The detector takes `current_clusters: dict | None` and `prior_clusters: list[dict]`, not paths. Sentinel does the file reads via `cluster_gaps.read_clusters` + `cluster_gaps.read_cluster_history`. Keeps the detector unit-testable without `tmp_path` plumbing and matches the "deep module of pure functions" intent in the issue spec.
+- **Cluster archive lives in `cluster_gaps.py`, not `flag_detector.py`.** The dated-snapshot writer is a property of the cluster batch (it owns the on-disk `gap_clusters.json` shape); `detect_new_cluster` is the consumer. Keeping the writer beside the existing `write_clusters` puts both file-format concerns in one module — adding the archive there was a 4-line addition vs. spinning up a new "cluster history" module.
+- **`detect_repeat_failure` matches questions case-insensitively + trimmed.** Visitors write "kdb+/q?", "KDB+/Q?", "  kdb+/q?  " — these are the same question to an operator. Using `_normalise(q) = q.strip().lower()` as the dict key avoids missing patterns just because of typing differences. The original-cased version is preserved for the headline (uses the first occurrence's casing — first-seen wins).
+- **`detect_repeat_failure` counts `deflected` + `refused`, excludes `gap`.** The issue spec is explicit: "the same question deflected/refused ≥ 3 times within 7 days." `gap` is handled by the `new_cluster` detector + the clustering batch — surfacing it again here would double-count the same questions across two flags. The `_REPEAT_FAILURE_EVENTS = {"deflected", "refused"}` set codifies this so a future event-type addition doesn't silently start firing duplicate flags.
+- **Flags panel placed above Panel 1, not as a side-bar.** Anomalies are the operator's "look here first" surface — they should be the first thing visible on page load. Below Panel 1 would be skipped during quick scans; in a side-bar would compete for vertical space with the panels' two-row card layout. Putting it above is the right info hierarchy.
+- **Flag click → browser-native anchor scroll, not a Gradio JS handler.** Each Flag's headline becomes an `<a href="#anchor">` link; the three target sections (`failure_feed`, `gap_clusters`, `trend`) carry matching `elem_id`s. Browser handles the scroll natively — no event handlers, no JS, no state to thread. Simpler and works with browser back-button history.
+- **`format_flags_panel` returns one `gr.Markdown` block, not three separate flag widgets.** Markdown lets the panel be a single render call (one Gradio component to refresh), and the per-card styling lives in `SENTINEL_CSS`. Three widgets would each need their own visibility-toggle state when no flags fire, which is a lot of plumbing for a UI that's empty by design most of the time.
+- **`_build_flags` does I/O (cluster file reads), even though the detectors are pure.** The Sentinel-side orchestrator has to read the cluster files from somewhere; pushing that into the page-load handler keeps the detector signatures minimal (one positional arg + kwargs). The pure/impure split lines up with module boundaries — `flag_detector.py` is pure, `sentinel.py` is the I/O layer.
+- **No tests on the Gradio panel wiring itself.** Per `TESTING.md` `sentinel.py` partial-exemption — pure formatter tested + `build_app` smoke + manual launch covers the wiring. Mocking `gr.Markdown` `elem_id` would couple tests to internal Gradio shape.
+
+### Verified
+
+- `uv run pytest -q` → **388 passed** (368 → 388; +14 in `test_flag_detector.py`, +3 in `test_cluster_gaps.py`, +3 in `test_sentinel.py`).
+- Live runtime: `PYTHONPATH=src uv run python -c "from sentinel import build_app; build_app()"` → boots cleanly against the 85-record live log; Flags panel renders the empty placeholder (no flags expected — see live-log smoke above).
+- Synthetic smoke: each detector fires on its target condition with the correct `target` panel.
+- `system_map` regenerated → `MAP.md` includes `flag_detector` under Tooling.
+
+### Outstanding
+
+- **Push the local commits** — Sessions 28+29+30+31+32+33+34+35+36 + this session's `#34` commit are local; `main` push is harness-protected.
+- **Strip `needs-triage`** from `#34` (this session).
+- **Anomaly annotations on Trend Explorer** (carry-over from Session 33) — `#34` is now closed; the deferred `chart_dataframe` annotation series is the remaining stub. Wire as a follow-up if/when the operator wants flag markers overlaid on the time-series chart.
+- **Run the cluster + summary batches once** to populate `data/logs/gap_clusters.json` + archive + `data/logs/summaries/` so the Cluster + Deflection + Flags panels render real data on the next launch.
+- **Phase 4 complete.** Next: **Phase 5** — break the live system. Use Sentinel as the lens to find actual regressions.
+
+---
+
 ## Session 36 (2026-05-04) — `#33` shipped: Failure summarisation batch + Deflection panel
 
 **Status:** [`#33`](https://github.com/AlejandroFuentePinero/digital-twin/issues/33) closed locally. Suite **354 → 368** (+14 tests). New module `src/summarize_failures.py` with `FailureSummarizer` deep module + `select_records_for_group` / `write_summary` / `latest_summary_path` / `read_summary` pure helpers + `run_batch` orchestrator + argparse CLI (`--days`, `--out-dir`). Sentinel gains a Deflection summary panel below the Cluster panel that reads the latest cached `data/logs/summaries/deflection_*.md` and pass-throughs the LLM-written Markdown verbatim; placeholder rendered when no summary exists. **Phase 4: 10 of 11 issues closed (#28 + #29 + #37 + #35 + #36 + #30 + #31 + #38 + #32 + #33); only `#34` (Flags + FlagDetector) remains** — and it's the synthesis layer, not a new batch. Side-task: TODO Phase 4 checklist re-synced to GitHub state — checkboxes for #37 / #35 / #36 / #30 / #31 / #38 had drifted out of sync over Sessions 28–35.

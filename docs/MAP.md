@@ -139,6 +139,7 @@ graph LR
     cluster_gaps["cluster_gaps.py"]:::tooling
     dashboard_model["dashboard_model.py"]:::tooling
     failure_feed["failure_feed.py"]:::tooling
+    flag_detector["flag_detector.py"]:::tooling
     metric_status["metric_status.py"]:::tooling
     module_health["module_health.py"]:::tooling
     replayer["replayer.py"]:::tooling
@@ -176,6 +177,8 @@ graph LR
   dashboard_model --> interaction_log
   failure_feed --> dashboard_model
   failure_feed --> interaction_log
+  flag_detector --> dashboard_model
+  flag_detector --> interaction_log
   guardrail --> rules
   log_reader --> interaction_log
   pipeline --> tool_loop
@@ -193,6 +196,7 @@ graph LR
   sentinel --> branches
   sentinel --> cluster_gaps
   sentinel --> dashboard_model
+  sentinel --> flag_detector
   sentinel --> summarize_failures
   sentinel --> failure_feed
   sentinel --> interaction_log
@@ -241,6 +245,7 @@ graph LR
 | `contact_log.py` | Contact-form record schema + JSONL writer/reader (#16). |
 | `dashboard_model.py` | Pure aggregations over interaction records — Sentinel's deep model (issue #29). |
 | `failure_feed.py` | Failure-feed pure logic — Sentinel's per-turn debugging surface (issue #31). |
+| `flag_detector.py` | Sentinel anomaly flags (issue #34). |
 | `generator.py` | Generator — wraps the answer LLM call. |
 | `guardrail.py` | Guardrail — branch-aware quality evaluator (ADR-0003). |
 | `ingest.py` | Ingest the digital twin knowledge base into ChromaDB. |
