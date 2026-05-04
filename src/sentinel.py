@@ -695,6 +695,15 @@ body, .gradio-container {
 .canary-row.sev-major { background: var(--alert-tint); }
 .canary-row.sev-minor { background: var(--warning-tint); }
 .canary-sev { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.canary-rebaseline-warning {
+    color: var(--text-secondary);
+    font-size: 0.88em;
+    background: var(--warning-tint);
+    border-left: 3px solid var(--warning);
+    padding: 10px 14px;
+    border-radius: 3px;
+    margin: 4px 0 10px;
+}
 
 /* Restraint: no shadows, no gradients, small radii everywhere */
 button { border-radius: 6px !important; }
@@ -2537,13 +2546,35 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                     initial_drift_flags, canary_corpus, show_all=False,
                 ))
 
-                with gr.Row():
-                    rebaseline_btn = gr.Button(
-                        "Re-baseline current run",
-                        variant="secondary",
-                        size="sm",
+                # Re-baseline tucked inside a collapsed accordion so accidental
+                # clicks need two deliberate actions (expand + click). Overwriting
+                # the frozen golden reference is silent and irreversible without
+                # a backup, so the friction is load-bearing — see LIMITATIONS::P12.
+                with gr.Accordion(
+                    "Advanced — re-baseline (overwrites the frozen reference)",
+                    open=False,
+                ):
+                    gr.Markdown(
+                        "<div class='canary-rebaseline-warning'>"
+                        "Promotes the <strong>latest canary run</strong> to the "
+                        "new frozen golden baseline. All future drift comparisons "
+                        "will run against this run.<br><br>"
+                        "<strong>Use this only after intentional changes</strong> "
+                        "(KB rewrite, prompt tightening, model upgrade) where you've "
+                        "reviewed the drift and accept the new behaviour as correct. "
+                        "Clicking this on an unintentional regression silently locks "
+                        "in the bug — see <code>LIMITATIONS::P12</code>."
+                        "</div>"
                     )
-                rebaseline_status_md = gr.Markdown("")
+                    with gr.Row():
+                        gr.Markdown("")  # left spacer pushes button right
+                        rebaseline_btn = gr.Button(
+                            "Re-baseline",
+                            variant="secondary",
+                            size="sm",
+                            scale=0,
+                        )
+                    rebaseline_status_md = gr.Markdown("")
 
             # ---- Failures tab ---------------------------------------------
             with gr.Tab("Failures", id=TAB_FAILURES):
