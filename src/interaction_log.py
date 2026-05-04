@@ -18,6 +18,12 @@ from pydantic import BaseModel, Field
 
 DEFAULT_LOG_PATH = Path(__file__).parent.parent / "data" / "logs" / "interactions.jsonl"
 
+# Single source of truth for the on-disk schema. Bumped to v4 in #42 when the
+# producer started emitting all four EventType values via event_classifier.
+# Both the pipeline writer and LogReader's smart-normalize key off this — a
+# future bump is a one-line change here.
+SCHEMA_VERSION = "4"
+
 EventType = Literal["answered", "gap", "deflected", "refused"]
 
 
@@ -29,7 +35,7 @@ def compute_prompt_hash(system: str, user: str) -> str:
 
 
 class InteractionRecord(BaseModel):
-    schema_version: str = "3"
+    schema_version: str = SCHEMA_VERSION
     timestamp: str
     session_id: str
     turn_index: int

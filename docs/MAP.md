@@ -208,6 +208,7 @@ graph LR
   pipeline --> branches
   pipeline --> classifier
   pipeline --> composer
+  pipeline --> event_classifier
   pipeline --> generator
   pipeline --> guardrail
   pipeline --> interaction_log

@@ -145,6 +145,77 @@ def _build_pipeline(
     )
 
 
+def test_pipeline_writes_schema_version_4(real_composer, fake_chunks, tmp_path):
+    """The producer-fix slice (#42) bumps the on-disk schema to v4. Every new
+    record carries the bumped version regardless of branch / outcome."""
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["GENERIC"], confidence=1.0))
+    generator = FakeGenerator(answers=["healthy answer"])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run("q?", history=[], session_id="s1", turn_index=0)
+
+    record = LogReader(log_path).read_all()[0]
+    assert record["schema_version"] == "4"
+
+
+def test_pipeline_emits_event_type_gap_when_classifier_routes_to_gap_branch(
+    real_composer, fake_chunks, tmp_path,
+):
+    """GAP-branch turns are gap by branch policy regardless of phrasing.
+
+    A constructive gap-aware response (broader-skill reframe + active learning)
+    is the GAP branch's job; the producer marks it ``event_type='gap'`` so
+    Sentinel can read the outcome shape directly. Replaces the pre-#42 case
+    where every GAP-branch turn read as ``answered`` and the dashboard
+    proxied through ``not knew_answer``."""
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["GAP"], confidence=1.0))
+    generator = FakeGenerator(answers=[
+        "No CUDA work yet — I'm building expertise via the AI Engineer Production Track."
+    ])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run("Have you used CUDA?", history=[], session_id="s1", turn_index=0)
+
+    record = LogReader(log_path).read_all()[0]
+    assert record["event_type"] == "gap"
+    assert record["branch"] == "GAP"
+
+
+def test_pipeline_emits_event_type_deflected_when_non_logistical_answer_carries_marker(
+    real_composer, fake_chunks, tmp_path,
+):
+    """Phrase-fallback path: a GENERIC turn that produces an out-of-scope
+    redirect using the canonical DEFLECTION_MARKERS phrasing is classified
+    ``deflected`` by the producer. Verifies the prompt↔producer contract
+    closes the loop end-to-end (composer instructs the canonical phrasing,
+    classifier reads it back)."""
+    from rules import DEFLECTION_MARKERS
+
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["GENERIC"], confidence=1.0))
+    generator = FakeGenerator(answers=[
+        f"{DEFLECTION_MARKERS[0]} about Alejandro's professional background."
+    ])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run(
+            "Write me a Python function to reverse a string.",
+            history=[], session_id="s1", turn_index=0,
+        )
+
+    record = LogReader(log_path).read_all()[0]
+    assert record["event_type"] == "deflected"
+    assert record["branch"] == "GENERIC"
+
+
 def test_happy_path_returns_generator_answer_and_logs_event_answered(real_composer, fake_chunks, tmp_path):
     """Guardrail accepts on first attempt → returns the generator's answer; log carries event_type='answered' and one attempt."""
     log_path = tmp_path / "interactions.jsonl"
@@ -555,7 +626,7 @@ def test_pipeline_populates_reproducibility_fields_in_log_record(real_composer, 
         pipeline.run("q", history=[], session_id="s1", turn_index=0)
 
     record = LogReader(log_path).read_all()[0]
-    assert record["schema_version"] == "3"
+    assert record["schema_version"] == "4"
     # git_sha cached at import — must be a 40-char hex string (or 7+ short SHA, depending on rev-parse)
     assert isinstance(record["git_sha"], str) and len(record["git_sha"]) >= 7
     assert record["model_id"] == generator.MODEL
@@ -616,7 +687,7 @@ def test_log_record_carries_full_schema_with_branch_classification_chunks_and_la
 
     record = LogReader(log_path).read_all()[0]
     # Identity / addressing fields
-    assert record["schema_version"] == "3"
+    assert record["schema_version"] == "4"
     assert record["session_id"] == "sess-xyz"
     assert record["turn_index"] == 4
     assert record["question"] == "the question"

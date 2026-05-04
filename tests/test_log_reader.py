@@ -130,9 +130,11 @@ def test_read_tolerates_records_missing_optional_fields(tmp_path):
     assert out[0].tool_calls == []
     assert out[0].contact_offered is False
     assert out[0].contact_provided is False
-    # Default schema_version is "2" post-issue-#37; legacy records that omit
-    # it inherit the new default. The 4 reproducibility fields default None.
-    assert out[0].schema_version == "3"
+    # A record that omits schema_version inherits the current default —
+    # bumped to v4 in #42 (producer-side classifier emits all four EventType
+    # values). Reader and writer share the SCHEMA_VERSION constant.
+    from interaction_log import SCHEMA_VERSION
+    assert out[0].schema_version == SCHEMA_VERSION
     assert out[0].classifier_labels == []
 
 

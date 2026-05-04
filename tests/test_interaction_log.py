@@ -45,7 +45,7 @@ def test_append_populates_default_fields_when_caller_omits_them(tmp_path):
     assert record["tool_calls"] == []
     assert record["contact_offered"] is False
     assert record["contact_provided"] is False
-    assert record["schema_version"] == "3"
+    assert record["schema_version"] == "4"
 
 
 def test_append_raises_on_missing_required_fields(tmp_path):
@@ -93,14 +93,22 @@ def test_read_all_returns_empty_list_when_log_does_not_exist(tmp_path):
     assert out == []
 
 
-def test_schema_version_defaults_to_v2_with_reproducibility_fields(tmp_path):
-    """A new record (no caller-provided schema fields) carries schema_version='2' and
-    the four reproducibility fields (git_sha, model_id, temperature, prompt_hash)
-    default to None — issue #37 schema bump."""
+def test_schema_version_defaults_to_current_with_reproducibility_fields(tmp_path):
+    """A new record (no caller-provided schema fields) carries the current
+    SCHEMA_VERSION and the four reproducibility fields (git_sha, model_id,
+    temperature, prompt_hash) default to None.
+
+    The schema is bumped to v4 in #42 (producer-side classifier emits all
+    four EventType values). Both writer and reader key off the
+    `interaction_log.SCHEMA_VERSION` constant.
+    """
+    from interaction_log import SCHEMA_VERSION
+
     log_path = tmp_path / "interactions.jsonl"
     LogWriter(log_path).append(_full_record())
     record = LogReader(log_path).read_all()[0]
-    assert record["schema_version"] == "3"
+    assert record["schema_version"] == SCHEMA_VERSION
+    assert SCHEMA_VERSION == "4", "current schema is v4 (#42 producer fix)"
     assert record["git_sha"] is None
     assert record["model_id"] is None
     assert record["temperature"] is None

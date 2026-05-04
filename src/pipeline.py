@@ -19,9 +19,10 @@ import tool_loop
 from branches import REGISTRY
 from classifier import Classifier
 from composer import PromptComposer
+from event_classifier import classify_event_type
 from generator import Generator, wrap_with_retry_feedback
 from guardrail import Guardrail
-from interaction_log import LogWriter, compute_prompt_hash
+from interaction_log import SCHEMA_VERSION, LogWriter, compute_prompt_hash
 from retrieval import fetch_context, format_context
 from rules import GAP_PHRASE
 from tools import ToolRegistry, build_fetch_project_readme_tool
@@ -199,14 +200,16 @@ class Pipeline:
         total_ms = int((time.perf_counter() - t_total) * 1000)
 
         # 5. Build + emit the enriched log record
-        event_type = "answered" if final_answer is not None else "refused"
-        # `knew_answer` reflects whether the KB had the info — checked against the *last* generated
-        # answer (not the canned refusal), so a refused turn whose attempts contained real info
-        # still scores knew_answer=True.
+        event_type = classify_event_type(branch_name, final_answer)
+        # `knew_answer` populated for v3-record consumer compat (failure_feed,
+        # cluster_gaps, summarize_failures still read it as of slice 1 of #42).
+        # New consumer code must read `event_type` instead. Removal of this
+        # write is scheduled for a future v5 schema bump once slices 2 and 3
+        # of the observability rework finish migrating consumers.
         knew_answer = bool(last_answer) and (GAP_PHRASE not in last_answer)
 
         self._log_writer.append({
-            "schema_version": "3",
+            "schema_version": SCHEMA_VERSION,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "session_id": session_id,
             "turn_index": turn_index,
