@@ -136,8 +136,10 @@ graph LR
 
   subgraph sg_tooling["Tooling"]
     direction TB
+    dashboard_model["dashboard_model.py"]:::tooling
     module_health["module_health.py"]:::tooling
     sample_chunks["sample_chunks.py"]:::tooling
+    sentinel["sentinel.py"]:::tooling
     system_map["system_map.py"]:::tooling
   end
 
@@ -164,6 +166,7 @@ graph LR
   composer --> branches
   composer --> profile
   composer --> rules
+  dashboard_model --> interaction_log
   guardrail --> rules
   log_reader --> interaction_log
   pipeline --> tool_loop
@@ -176,6 +179,8 @@ graph LR
   pipeline --> retrieval
   pipeline --> rules
   pipeline --> tools
+  sentinel --> dashboard_model
+  sentinel --> log_reader
   tools --> tool_loop
   app --> ext_Gradio__UI_
   classifier --> ext_OpenAI___Anthropic_API__via_LiteLLM_
@@ -188,6 +193,7 @@ graph LR
   retrieval --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   retrieval --> ext_OpenAI_API
   sample_chunks --> ext_ChromaDB
+  sentinel --> ext_Gradio__UI_
   tools --> ext_OpenAI___Anthropic_API__via_LiteLLM_
 
   style sg_frame fill:#eef2ff,stroke:#a5b4fc,stroke-width:1.5px,color:#4338ca
@@ -210,6 +216,7 @@ graph LR
 | `classifier.py` | Branch classifier (ADR-0003). |
 | `composer.py` | Prompt composer — assembles per-branch system prompts (ADR-0003). |
 | `contact_log.py` | Contact-form record schema + JSONL writer/reader (#16). |
+| `dashboard_model.py` | Pure aggregations over interaction records — Sentinel's deep model (issue #29). |
 | `generator.py` | Generator — wraps the answer LLM call. |
 | `guardrail.py` | Guardrail — branch-aware quality evaluator (ADR-0003). |
 | `ingest.py` | Ingest the digital twin knowledge base into ChromaDB. |
@@ -221,6 +228,7 @@ graph LR
 | `retrieval.py` | Retrieval helpers — embedding, ChromaDB query, merge, rewrite, rerank, format. |
 | `rules.py` | Shared rule fragments composed into generator and guardrail system prompts. |
 | `sample_chunks.py` | Sample and inspect chunks from the ChromaDB knowledge base. |
+| `sentinel.py` | Local Gradio dashboard over the canonical interaction log (Phase 4 / issue #29). |
 | `session_state.py` | Per-session state for #16's contact-flow. |
 | `system_map.py` | System map generator — walks src/ and emits docs/MAP.md. |
 | `tool_loop.py` | Generic bounded tool loop for the TECHNICAL branch (#18 / ADR-0003). |

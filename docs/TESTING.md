@@ -27,6 +27,8 @@ These files have no matching `test_*.py` because they have no testable behavior:
 
 `src/module_health.py` is a partial exemption: its pure helpers (`humanize`, `parse_report`) are covered in `tests/test_module_health.py`; the Gradio rendering, subprocess invocation, and `build_app()` wiring are not — they are tooling glue, verified by launching the dashboard.
 
+`src/sentinel.py` follows the same partial-exemption pattern: its pure formatters (`format_header`, `format_panel`) are covered in `tests/test_sentinel.py` alongside a `build_app()` smoke test (synthetic + live JSONL, no `.launch()`); the Gradio panel layout and refresh-button wiring are verified by running the dashboard locally.
+
 ## The dashboard
 
 Launched with `uv run python src/module_health.py` — auto-opens in the default browser.

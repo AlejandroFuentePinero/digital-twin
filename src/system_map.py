@@ -56,6 +56,8 @@ MODULE_CATEGORY: dict[str, str] = {
     "module_health": "Tooling",
     "system_map": "Tooling",
     "sample_chunks": "Tooling",
+    "sentinel": "Tooling",
+    "dashboard_model": "Tooling",
 }
 
 UNCATEGORIZED = "Uncategorized"
