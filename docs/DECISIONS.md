@@ -5,6 +5,80 @@
 
 ---
 
+## Session 43 (2026-05-05) — Canary baseline read → observability rework PRD (`#41`)
+
+**Status:** No code shipped. Planning session that produced PRD `#41` (the comprehensive observability rework) and closed PRD `#40` (the narrower canary-only recalibration) as superseded. Outcome: a 4-slice vertical-slicing plan covering producer fix + consumer cleanup + canary recalibration, locked behind an audit-first discipline.
+
+### The trigger — reading the canary baseline showed zero confirmed bugs
+
+The Session 42 canary baseline (`run-20260504-121937-9af6fb`) reported three drift signals: branch match 78.7% (11/50 misroutes at 0.873 mean confidence — "confidently wrong"), tool uptake on warranted 38.5% (8/13 tool-skips), gap rate 6% (5/8 should-have-gapped-but-answered). On surface, three concerning signals queued for Phase 5.
+
+Record-by-record review of all 24 flagged records produced a different read: **zero confirmed system errors.** Every flag mapped to a metric-design problem:
+
+- Tool skips on TECHNICAL: all 8 answers were correct + complete from KB chunks. The tool was redundant. The label `requires_tool=True` was over-broad — every named-project question is *eligible* for the tool, but most are answerable from the KB. Critical insight: **"What's your CUDA experience?" is a TECHNICAL question that is *also* a gap. No tool needed; the system correctly says it doesn't have CUDA experience.** The metric counted that correct outcome as a failure.
+- Branch misroutes (11/50): 4 are corpus-label errors (trivia mislabelled as `expected_branch=GAP` — but GAP is for skill absence, not personal-trivia); 4 are LOGISTICAL/GENERIC boundary fuzz where both routes produce correct answers; 1 is graceful TECHNICAL→deflect on absent skill (CUDA); 2 are replicate jitter.
+- Gap-misses (5/8): 0 fabrications. 4 are corpus-label errors (same trivia issue); 3 are GAP branch correctly producing constructive gap-aware answers (C006/C008/C009: kdb+/q, Rust, Go) that the logger's `event_type` classifier mis-tags as `answered`.
+
+**The system is healthy. The observability is not.**
+
+### The deeper finding — pipeline.py:202
+
+Drilling into the gap-miss case revealed a foundational bug:
+
+```python
+# src/pipeline.py:202
+event_type = "answered" if final_answer is not None else "refused"
+```
+
+The `EventType` union declares `Literal["answered", "gap", "deflected", "refused"]` — four values. The pipeline only ever writes two. `gap` and `deflected` are **never emitted by the producer**.
+
+Consumer code (`dashboard_model.py`, `failure_feed.py`, `cluster_gaps.py`, `summarize_failures.py`, `flag_detector.py`) was written assuming all 4 values would land. So the consumer layer is full of compensating workarounds:
+- `dashboard_model.gap_rate` keys on `event_type=='gap' OR not knew_answer` — the first branch never fires; the metric rides on `knew_answer` alone (a string-match proxy on the answer text).
+- `dashboard_model.deflection_rate` keys on `event_type=='deflected'` — always reads 0% on every run.
+- `_REPEAT_FAILURE_EVENTS = {"deflected", "refused"}` — `deflected` matches zero records, so the trip-wire only fires on hard refusals.
+- `cluster_gaps` clusters on `not knew_answer` — proxy stand-in.
+- `summarize_failures.deflected` filter returns `[]` every time.
+
+`SENTINEL.md` even documents this: "writer parity issue similar to gap_rate — `event_type=='deflected'` is set conservatively". That's not quite right either — it's not conservative, it's *never set*. The doc was generous about the bug while waiting for a fix that never landed.
+
+**The disease is system-wide: a 4-value enum populated only with 2 values, silently propagating incompleteness through every consumer.**
+
+### Decisions made
+
+**Keep the canary.** Considered removing it entirely (cognitive overhead, project simplicity). Rejected because: ~570 lines of working infrastructure, the only surface where quality regressions can be caught when prompts/KB/models change, drift detection without ground truth is impossible on live alone. The recalibration is a focused day's work, not a multi-week rework — the cognitive load came from my (Claude's) bundling of producer-side fix + canary work into a meta-PRD that overwhelmed the operator. With a clean producer-first slicing, canary recalibration is one slice.
+
+**Producer-first vs. tracer-bullet purity.** The `/to-issues` skill's tracer-bullet principle says "smallest possible change demonstrating full chain." That suggested splitting slice 1 into "branch-based emission first, phrase-based later." Rejected per operator directive: **"when wondering whether to do something complete or partially, go complete."** Slice 1 ships the entire producer story end-to-end (branch-based + phrase-based + composer prompt updates + schema bump + LogReader normalize) rather than fragmenting for purity.
+
+**Rule-based outcome derivation, not LLM judge.** Considered an LLM judge for canary outcome classification (~$0.075/run with `gpt-4.1-nano`). Rejected as default — judges introduce a model-evaluator dependency that becomes its own drift source (exactly the problem we're trying to solve). Rule-based first, judge as fallback only if rule-based proves brittle on the recalibrated baseline.
+
+**Strip historical canary records when slice 4 ships.** 226 canary records in `interactions.jsonl` (150 from the frozen baseline + 76 orphan from the failed first run). They were written by the buggy producer with stale `event_type` values. LogReader smart-normalize would recover the GAP_PHRASE-bearing ones, but the deflection-bearing ones can't be recovered (v3 prompts didn't enforce canonical phrases). Cleanest: strip all 226 when slice 4 lands, re-run the canary against fixed producer code for a clean v4 baseline. Per operator: "happy to remove old records, we can start fresh with the new architecture but again, we need to be careful and adapt everything else that uses the logs accordingly."
+
+**Audit-first discipline as a per-slice deliverable.** Operator directive: "we need to be careful about changes and review how changes can potentially have negative side effects on the codebase. it is also important we don't just do patches, because they often leave legacy 'rubbish' behind, if we are modifying anything, we create the infrastructure for it, not just patch." Each slice ships with a written audit document at `docs/audits/slice-<N>-<name>.md` listing field readers, metric/UI consumers, predicted behaviour change, fixtures requiring updates, and workarounds removed. The audit lands as part of the slice's PR; reviewers verify the change matches the audit.
+
+**Two deep modules extracted.** `event_classifier` (slice 1) and `canary_outcome` (slice 4) — pure functions, narrow interfaces, testable in isolation. Replaces inline classification logic. Mirrors the project's preference for testable units that don't require standing up the pipeline or canary runner.
+
+**`knew_answer` legacy treatment.** Keep populating on v4 records for v3-record compat with consumer code that hasn't been migrated. Stop reading anywhere by end of slice 3. Mark legacy in glossary with `**[Legacy as of v4]**` prefix. TODO note tracks dropping the write in a future v5 schema bump. No `DeprecationWarning` machinery — over-engineering for an internal-only field.
+
+**`DEFLECTION_MARKERS` as a constant, not a registry.** Naming collides textually with existing `rules.DEFLECTION` (a prompt rule body about BEHAVIOURAL story routing — different concept). Comment in `rules.py` calls out the distinction. Per operator: "if a third marker type ever lands, generalize then" — over-building a generic marker registry now is patch-style anticipation.
+
+**Priority over `#5` (HF Dataset migration).** The schema bump to v4 happens in this rework. `#5` resumes after with awareness of v4 schema — no changes required to its plan.
+
+### What got published
+
+- **PRD `#41`** — comprehensive observability rework, 4 vertical slices, audit-first discipline embedded.
+- **`#40` closed** as superseded — the canary-only recalibration scope was too narrow.
+
+### Outstanding (start of next session)
+
+- 4 child issues to be published from PRD `#41` (one per slice). Each ~150–200 words referencing PRD `#41`, with `needs-triage`. Slice 1 starts with its audit document.
+- **Phase 5** (break the live system) — paused. The canary baseline read replaced the adversarial probe as the diagnostic input; the producer-first rework subsumes the canary recalibration thread. Phase 5's content additions (KB / personal_stories / recruiter eval) wait until observability rework is complete.
+
+### Next session entry-point
+
+Read PRD `#41` for the canonical scope. Read this Session 43 entry for the *why* behind the choices the PRD makes. Pick up slice 1 by drafting the audit document at `docs/audits/slice-1-producer-fix.md` first, *then* implementing.
+
+---
+
 ## Session 42 (2026-05-04) — `#39` shipped: canary set + drift detector (Phase 5 prep)
 
 **Status:** Canary set + drift detector implemented end-to-end. Suite at **460 passing** (+44 net from Session 41's 416). 50-question corpus shipped at `data/canaries/corpus.json`, audited against the live KB. Sentinel gains a fourth tab (Canary) between Trends and Failures. Per operator directive, **canary runs are CLI-triggered manually** — no auto-refresh on Sentinel launch (cost + wall-clock at 50q×3replicates ≈ 30 min, ~$1.50/run).
