@@ -705,76 +705,19 @@ body, .gradio-container {
     margin: 4px 0 10px;
 }
 
-/* Three health blocks — Drift / Quality / Latency. Each is a compact
-   table with Metric | Current | Δ baseline | Trend (sparkline). */
-.canary-block {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 10px 14px;
-    margin: 8px 0;
+/* Canary health sections — same .section-block + .metric-row visual
+   language as the Metrics tab, retuned to 3 columns (Metric | Current |
+   Δ baseline) instead of the Metrics tab's label + 4 windowed values. */
+.canary-section { margin: 8px 0; }
+.metric-row.canary-row {
+    grid-template-columns: 2fr 1fr 1fr;
 }
-.canary-block-title {
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--text-secondary);
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 6px;
-    margin-bottom: 6px;
+.canary-row .metric-suffix {
+    margin-left: 8px;
+    font-style: italic;
 }
-.canary-block-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.9em;
-}
-.canary-block-table th {
-    text-align: left;
-    font-size: 0.74em;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-muted);
-    font-weight: 600;
-    padding: 4px 6px;
-    border-bottom: 1px solid var(--border);
-}
-.canary-block-table th:nth-child(2),
-.canary-block-table th:nth-child(3) { text-align: right; }
-.canary-block-table th:nth-child(4) { text-align: center; width: 140px; }
-.canary-block-row td {
-    padding: 5px 6px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.02);
-}
-.canary-block-row:last-child td { border-bottom: 0; }
-.canary-block-label {
-    color: var(--text-primary);
-}
-.canary-block-label em {
-    color: var(--text-muted);
-    font-style: normal;
-    font-size: 0.85em;
-    margin-left: 4px;
-}
-.canary-block-current {
-    text-align: right;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    color: var(--text-primary);
-    font-weight: 500;
-}
-.canary-block-delta {
-    text-align: right;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+.canary-row .canary-delta-cell .delta {
     font-size: 0.88em;
-}
-.canary-block-spark {
-    text-align: center;
-    width: 140px;
-}
-.canary-block-spark .spark { height: 22px; vertical-align: middle; }
-.canary-block-spark .spark-empty {
-    color: var(--text-muted);
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 /* Stratified summary chips */
@@ -1977,27 +1920,6 @@ def format_canary_drift_summary(
     )
 
 
-def render_sparkline_html(
-    values: list[float | None],
-    baseline: float | None,
-) -> str:
-    """Render a sparkline as a base64-encoded PNG <img> tag. Returns a `—`
-    placeholder when there's nothing to draw (≤1 valid value)."""
-    fig = render_sparkline(values, baseline)
-    if fig is None:
-        return "<span class='spark-empty'>—</span>"
-    import base64
-    from io import BytesIO
-
-    buf = BytesIO()
-    fig.savefig(
-        buf, format="png", bbox_inches="tight", pad_inches=0.05,
-        facecolor=fig.get_facecolor(),
-    )
-    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
-    return f"<img class='spark' src='data:image/png;base64,{encoded}' alt='trend' />"
-
-
 def _delta_cell(current: float | None, baseline: float | None,
                 *, as_pct: bool = True, lower_is_better: bool = True) -> str:
     """`Δ baseline` cell — colour-coded delta. `lower_is_better=True` for
@@ -2015,46 +1937,47 @@ def _delta_cell(current: float | None, baseline: float | None,
     return f"<span class='{cls}'>{body}</span>"
 
 
-def _block_row(
-    label: str, current_str: str, delta_html: str, sparkline_html: str,
-) -> str:
-    return (
-        "<tr class='canary-block-row'>"
-        f"<td class='canary-block-label'>{label}</td>"
-        f"<td class='canary-block-current'>{current_str}</td>"
-        f"<td class='canary-block-delta'>{delta_html}</td>"
-        f"<td class='canary-block-spark'>{sparkline_html}</td>"
-        "</tr>"
+def _delta_ms(current: float | None, baseline: float | None) -> str:
+    if current is None or baseline is None:
+        return "<span class='delta'>—</span>"
+    delta = current - baseline
+    if abs(delta) < 1:
+        return "<span class='delta stable'>=</span>"
+    cls = "delta degrading" if delta > 0 else "delta improving"
+    sign = "+" if delta > 0 else ""
+    return f"<span class='{cls}'>{sign}{delta / 1000:+.2f}s</span>"
+
+
+def _canary_metric_row(label: str, current_html: str, delta_html: str,
+                       *, suffix: str = "") -> str:
+    """Mirror of the Metrics tab `.metric-row` shape — same grid, same
+    colour palette, same row heights — but with 2 right-aligned cells
+    (Current | Δ baseline) instead of 4 windowed values."""
+    suffix_html = (
+        f"<span class='metric-suffix'>{suffix}</span>" if suffix else ""
     )
-
-
-def _block_table(title: str, rows_html: str) -> str:
     return (
-        f"<div class='canary-block'>"
-        f"<div class='canary-block-title'>{title}</div>"
-        "<table class='canary-block-table'>"
-        "<thead><tr>"
-        "<th>Metric</th><th>Current</th><th>Δ baseline</th><th>Trend</th>"
-        "</tr></thead>"
-        f"<tbody>{rows_html}</tbody></table>"
+        "<div class='metric-row canary-row'>"
+        f"<div class='metric-label'>{label}{suffix_html}</div>"
+        f"<div class='metric-value'>{current_html}</div>"
+        f"<div class='metric-value canary-delta-cell'>{delta_html}</div>"
         "</div>"
     )
 
 
-def _canary_history_for_metric(
-    all_records: list[InteractionRecord],
-    metric_fn,
-    *,
-    last_n: int = CANARY_SPARK_WINDOW,
-) -> list[float | None]:
-    """Per-run trail of `metric_fn(DashboardModel(records))` values. Used for
-    metrics that aren't in METRIC_GETTERS (e.g. corpus-dependent ones, or
-    derived metrics like first_attempt_pass_rate)."""
-    runs = _canary_runs_grouped(all_records)[-last_n:]
-    return [
-        metric_fn(DashboardModel(rs, include_canary=True, only_canary=True))
-        for _, rs in runs
-    ]
+def _canary_section(title: str, rows_html: str) -> str:
+    """Mirror of the Metrics tab `.section-block` container."""
+    return (
+        "<div class='section-block canary-section'>"
+        f"<div class='section-title'>{title}</div>"
+        "<div class='metric-row header canary-row'>"
+        "<div class='col-header'>Metric</div>"
+        "<div class='col-header numeric'>Current</div>"
+        "<div class='col-header numeric'>Δ baseline</div>"
+        "</div>"
+        f"{rows_html}"
+        "</div>"
+    )
 
 
 def format_canary_health_blocks(
@@ -2064,10 +1987,15 @@ def format_canary_health_blocks(
     corpus,
     flags: list[CanaryDriftFlag],
 ) -> str:
-    """Three thematic health blocks (Drift / Quality / Latency) per the
-    issue #39 spec. Each row carries `Metric | Current | Δ baseline | Trend
-    (12-run sparkline)`. Cold-start safe — all cells degrade to `—` when
-    history is too thin to compute."""
+    """Three health sections (Drift / Quality / Latency) following the
+    Metrics tab visual language. Each row: `Metric | Current | Δ baseline`.
+
+    Trend column dropped for v1 — sparklines need ≥2 historical canary runs
+    to be meaningful, and they will return as a follow-up once the operator
+    has accumulated a few weeks of canary history.
+
+    Cold-start safe — when `baseline_records` is empty, all delta cells
+    degrade to `—` instead of crashing."""
     if not latest_run_records:
         return ""
 
@@ -2079,42 +2007,31 @@ def format_canary_health_blocks(
     ) if baseline_records else None
 
     def _baseline(fn):
-        if baseline_model is None:
-            return None
-        return fn(baseline_model)
+        return fn(baseline_model) if baseline_model is not None else None
 
     def _baseline_with_corpus(fn):
-        if baseline_model is None:
-            return None
-        return fn(baseline_model, corpus)
+        return fn(baseline_model, corpus) if baseline_model is not None else None
 
-    # ---- Block 1: Drift ----------------------------------------------------
     from collections import Counter
-    kind_counts = Counter(f.kind for f in flags)
     severity_counts = Counter(f.severity for f in flags)
 
+    # ---- Drift ------------------------------------------------------------
     drift_rows = (
-        _block_row(
-            "Total drift flags",
-            str(len(flags)),
-            "<span class='delta'>—</span>",  # no historical comparison; current run defines it
-            "<span class='spark-empty'>—</span>",
-        )
-        + _block_row(
-            "Major drift",
-            str(severity_counts.get("major", 0)),
+        _canary_metric_row(
+            "Total drift flags", str(len(flags)),
             "<span class='delta'>—</span>",
-            "<span class='spark-empty'>—</span>",
         )
-        + _block_row(
-            "Minor drift",
-            str(severity_counts.get("minor", 0)),
+        + _canary_metric_row(
+            "Major drift", str(severity_counts.get("major", 0)),
             "<span class='delta'>—</span>",
-            "<span class='spark-empty'>—</span>",
+        )
+        + _canary_metric_row(
+            "Minor drift", str(severity_counts.get("minor", 0)),
+            "<span class='delta'>—</span>",
         )
     )
 
-    # ---- Block 2: Quality --------------------------------------------------
+    # ---- Quality ----------------------------------------------------------
     pass_rate = (
         1 - latest_model.guardrail_rejection_rate
         if latest_model.records else None
@@ -2123,84 +2040,55 @@ def format_canary_health_blocks(
         1 - baseline_model.guardrail_rejection_rate
         if baseline_model and baseline_model.records else None
     )
-    pass_history = _canary_history_for_metric(
-        all_records,
-        lambda m: 1 - m.guardrail_rejection_rate if m.records else None,
-    )
-
     branch_match = latest_model.branch_match_rate(corpus)
     tool_uptake = latest_model.tool_uptake_on_warranted(corpus)
-    tool_uptake_history = _canary_history_for_metric(
-        all_records,
-        lambda m: m.tool_uptake_on_warranted(corpus),
-    )
-    branch_match_history = _canary_history_for_metric(
-        all_records,
-        lambda m: m.branch_match_rate(corpus),
-    )
 
     quality_rows = (
-        _block_row(
-            "First-attempt pass rate",
-            _fmt_pct(pass_rate),
+        _canary_metric_row(
+            "First-attempt pass rate", _fmt_pct(pass_rate),
             _delta_cell(pass_rate, pass_rate_baseline, lower_is_better=False),
-            render_sparkline_html(pass_history, pass_rate_baseline),
         )
-        + _block_row(
-            "Gap rate",
-            _fmt_pct(latest_model.gap_rate),
+        + _canary_metric_row(
+            "Gap rate", _fmt_pct(latest_model.gap_rate),
             _delta_cell(
                 latest_model.gap_rate, _baseline(lambda m: m.gap_rate),
             ),
-            render_sparkline_html(
-                canary_metric_history(all_records, "gap_rate"),
-                _baseline(lambda m: m.gap_rate),
-            ),
         )
-        + _block_row(
-            "Refusal rate",
-            _fmt_pct(latest_model.refusal_rate),
+        + _canary_metric_row(
+            "Refusal rate", _fmt_pct(latest_model.refusal_rate),
             _delta_cell(
-                latest_model.refusal_rate, _baseline(lambda m: m.refusal_rate),
-            ),
-            render_sparkline_html(
-                canary_metric_history(all_records, "refusal_rate"),
+                latest_model.refusal_rate,
                 _baseline(lambda m: m.refusal_rate),
             ),
         )
-        + _block_row(
-            "Branch match rate <em>(canary-only)</em>",
-            _fmt_pct(branch_match),
+        + _canary_metric_row(
+            "Branch match rate", _fmt_pct(branch_match),
             _delta_cell(
                 branch_match,
                 _baseline_with_corpus(lambda m, c: m.branch_match_rate(c)),
                 lower_is_better=False,
             ),
-            render_sparkline_html(
-                branch_match_history,
-                _baseline_with_corpus(lambda m, c: m.branch_match_rate(c)),
-            ),
+            suffix="canary-only",
         )
-        + _block_row(
+        + _canary_metric_row(
             "Mean classification confidence",
             _fmt_num(latest_model.mean_classification_confidence, ndigits=3),
-            "<span class='delta'>—</span>",
-            "<span class='spark-empty'>—</span>",
+            _delta_cell(
+                latest_model.mean_classification_confidence,
+                _baseline(lambda m: m.mean_classification_confidence),
+                as_pct=False, lower_is_better=False,
+            ),
         )
-        + _block_row(
-            "Tool uptake on warranted <em>(clean denominator)</em>",
-            _fmt_pct(tool_uptake),
+        + _canary_metric_row(
+            "Tool uptake on warranted", _fmt_pct(tool_uptake),
             _delta_cell(
                 tool_uptake,
                 _baseline_with_corpus(lambda m, c: m.tool_uptake_on_warranted(c)),
                 lower_is_better=False,
             ),
-            render_sparkline_html(
-                tool_uptake_history,
-                _baseline_with_corpus(lambda m, c: m.tool_uptake_on_warranted(c)),
-            ),
+            suffix="clean denominator",
         )
-        + _block_row(
+        + _canary_metric_row(
             "Tool call success rate",
             _fmt_pct(latest_model.tool_call_success_rate),
             _delta_cell(
@@ -2208,25 +2096,14 @@ def format_canary_health_blocks(
                 _baseline(lambda m: m.tool_call_success_rate),
                 lower_is_better=False,
             ),
-            "<span class='spark-empty'>—</span>",
         )
     )
 
-    # ---- Block 3: Latency --------------------------------------------------
+    # ---- Latency ----------------------------------------------------------
     def _stage_p95(model, stage):
         return model.latency_percentiles(stage).get(95)
 
-    def _delta_ms(current, baseline):
-        if current is None or baseline is None:
-            return "<span class='delta'>—</span>"
-        delta = current - baseline
-        if abs(delta) < 1:
-            return "<span class='delta stable'>=</span>"
-        cls = "delta degrading" if delta > 0 else "delta improving"
-        sign = "+" if delta > 0 else ""
-        return f"<span class='{cls}'>{sign}{delta:.0f}ms</span>"
-
-    latency_rows_data = [
+    latency_stages = [
         ("Total p95", "total"),
         ("Classifier p95", "classifier"),
         ("Retrieval p95", "retrieval"),
@@ -2234,26 +2111,20 @@ def format_canary_health_blocks(
         ("Guardrail p95", "guardrail"),
     ]
     latency_rows = ""
-    for label, stage in latency_rows_data:
+    for label, stage in latency_stages:
         cur = _stage_p95(latest_model, stage)
         base = (
             _stage_p95(baseline_model, stage)
             if baseline_model and baseline_model.records else None
         )
-        history = _canary_history_for_metric(
-            all_records, lambda m, s=stage: _stage_p95(m, s),
-        )
-        latency_rows += _block_row(
-            label,
-            _fmt_seconds(cur),
-            _delta_ms(cur, base),
-            render_sparkline_html(history, base),
+        latency_rows += _canary_metric_row(
+            label, _fmt_seconds(cur), _delta_ms(cur, base),
         )
 
     return (
-        _block_table("Drift", drift_rows)
-        + _block_table("Quality", quality_rows)
-        + _block_table("Latency", latency_rows)
+        _canary_section("Drift", drift_rows)
+        + _canary_section("Quality", quality_rows)
+        + _canary_section("Latency", latency_rows)
     )
 
 
