@@ -125,6 +125,7 @@ graph LR
     direction TB
     contact_log["contact_log.py"]:::logging
     interaction_log["interaction_log.py"]:::logging
+    log_reader["log_reader.py"]:::logging
     session_state["session_state.py"]:::logging
   end
 
@@ -164,6 +165,7 @@ graph LR
   composer --> profile
   composer --> rules
   guardrail --> rules
+  log_reader --> interaction_log
   pipeline --> tool_loop
   pipeline --> branches
   pipeline --> classifier
@@ -212,6 +214,7 @@ graph LR
 | `guardrail.py` | Guardrail — branch-aware quality evaluator (ADR-0003). |
 | `ingest.py` | Ingest the digital twin knowledge base into ChromaDB. |
 | `interaction_log.py` | Enriched per-turn interaction log (ADR-0002 / issue #13 step 7). |
+| `log_reader.py` | Sentinel-facing typed reader over the canonical interaction log (issue #28). |
 | `module_health.py` | Local Gradio dashboard showing pass/fail status of digital-twin tests. |
 | `pipeline.py` | Per-turn orchestrator (ADR-0003). |
 | `profile.py` | Always-on profile loader (the Frame, per ADR-0001 / ADR-0003). |
