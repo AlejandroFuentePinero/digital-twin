@@ -24,7 +24,7 @@ REGISTRY: dict[str, BranchSpec] = {
         profile_sections=["identity", "narrative_summary", "transfer_principles"],
         final_k=6,
         tools=[],
-        branch_rules=["concise_disclosure"],
+        branch_rules=["concise_disclosure", "deflection_instructions"],
     ),
     "GAP": BranchSpec(
         name="GAP",
@@ -38,14 +38,14 @@ REGISTRY: dict[str, BranchSpec] = {
         profile_sections=["identity", "logistics"],
         final_k=6,
         tools=[],
-        branch_rules=["concise_disclosure"],
+        branch_rules=["concise_disclosure", "deflection_instructions"],
     ),
     "BEHAVIOURAL": BranchSpec(
         name="BEHAVIOURAL",
         profile_sections=["identity", "personal_stories"],
         final_k=6,
         tools=[],
-        branch_rules=["deflection", "concise_disclosure"],
+        branch_rules=["deflection", "concise_disclosure", "deflection_instructions"],
     ),
     "TECHNICAL": BranchSpec(
         name="TECHNICAL",

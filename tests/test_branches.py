@@ -33,7 +33,7 @@ def test_generic_branch_matches_locked_spec():
     assert generic.profile_sections == ["identity", "narrative_summary", "transfer_principles"]
     assert generic.final_k == 6
     assert generic.tools == []
-    assert generic.branch_rules == ["concise_disclosure"]
+    assert generic.branch_rules == ["concise_disclosure", "deflection_instructions"]
 
 
 def test_gap_branch_matches_locked_spec():
@@ -60,7 +60,7 @@ def test_logistical_branch_matches_locked_spec():
     assert logistical.profile_sections == ["identity", "logistics"]
     assert logistical.final_k == 6
     assert logistical.tools == []
-    assert logistical.branch_rules == ["concise_disclosure"]
+    assert logistical.branch_rules == ["concise_disclosure", "deflection_instructions"]
 
 
 def test_behavioural_branch_matches_locked_spec():
@@ -78,7 +78,7 @@ def test_behavioural_branch_matches_locked_spec():
     assert behavioural.profile_sections == ["identity", "personal_stories"]
     assert behavioural.final_k == 6
     assert behavioural.tools == []
-    assert behavioural.branch_rules == ["deflection", "concise_disclosure"]
+    assert behavioural.branch_rules == ["deflection", "concise_disclosure", "deflection_instructions"]
 
 
 def test_behavioural_branch_composer_loads_personal_stories_and_deflection_rule(fixture_profile):

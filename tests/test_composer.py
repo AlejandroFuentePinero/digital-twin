@@ -3,7 +3,7 @@ import pytest
 from branches import REGISTRY, BranchSpec
 from composer import PromptComposer
 from profile import ProfileLoader
-from rules import RULES, UNIVERSAL
+from rules import DEFLECTION_MARKERS, RULES, UNIVERSAL
 
 
 @pytest.fixture
@@ -16,7 +16,8 @@ def fixture_profile(tmp_path):
         "## transfer_principles\nTRANSFER-MARKER body.\n\n"
         "## gap_inventory\nGAP-MARKER body — should not leak into GENERIC.\n\n"
         "## active_learning\nACTIVE-LEARNING-MARKER body.\n\n"
-        "## logistics\nLOGISTICS-MARKER body — should not leak into GENERIC or GAP.\n"
+        "## logistics\nLOGISTICS-MARKER body — should not leak into GENERIC or GAP.\n\n"
+        "## personal_stories\nPERSONAL-STORIES-MARKER body.\n"
     )
     return ProfileLoader(p)
 
@@ -134,3 +135,25 @@ def test_logistical_branch_loads_logistics_section_and_excludes_others(fixture_p
     assert "TRANSFER-MARKER" not in prompt, "transfer_principles belongs to GENERIC, must not leak"
     assert "GAP-MARKER" not in prompt, "gap_inventory belongs to GAP, must not leak"
     assert "ACTIVE-LEARNING-MARKER" not in prompt, "active_learning belongs to GAP, must not leak"
+
+
+@pytest.mark.parametrize("branch", ["LOGISTICAL", "BEHAVIOURAL", "GENERIC"])
+def test_deflecting_branches_carry_a_canonical_deflection_marker_literal(branch, fixture_profile):
+    """Forcing function for the prompt↔producer contract (#42 / PRD #41).
+
+    The producer-side `event_classifier` reads `DEFLECTION_MARKERS` and
+    classifies any non-GAP / non-LOGISTICAL turn whose answer contains one
+    of these markers as ``event_type='deflected'``. For that to work, the
+    LOGISTICAL/BEHAVIOURAL/GENERIC composer prompts must instruct the model
+    to use the canonical phrasing — otherwise the producer rule has no
+    consistent signal to read.
+
+    A future prompt edit that drops the canonical phrasing fails this test
+    before it ships.
+    """
+    composer = PromptComposer(fixture_profile, REGISTRY)
+    prompt = composer.compose([branch], "generator")
+    assert any(marker in prompt for marker in DEFLECTION_MARKERS), (
+        f"branch={branch} prompt is missing every DEFLECTION_MARKERS literal — "
+        "the prompt↔producer contract has drifted"
+    )

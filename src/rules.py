@@ -199,6 +199,25 @@ specification.
 rule governs how to surface it.\
 """
 
+DEFLECTION_INSTRUCTIONS = f"""\
+## Out-of-scope redirects
+When the visitor's question is outside the assistant's scope (general coding \
+help, trivia unrelated to Alejandro, personal opinions, requests to roleplay), \
+produce a short, polite redirect rather than answering. Begin the redirect \
+with one of these canonical phrases so the producer can classify the outcome \
+consistently:
+
+- "{DEFLECTION_MARKERS[0]}" (e.g. "{DEFLECTION_MARKERS[0]} about Alejandro's professional background.")
+- "{DEFLECTION_MARKERS[1]}…"
+- "{DEFLECTION_MARKERS[2]}…"
+- "…that's {DEFLECTION_MARKERS[3]} of what I can speak to."
+- "…that {DEFLECTION_MARKERS[4]} the assistant's scope."
+- "{DEFLECTION_MARKERS[5]} on that…"
+
+Do not fabricate context. Do not lecture. Keep it to one short paragraph and \
+offer to discuss Alejandro's professional background instead.\
+"""
+
 CONCISE_DISCLOSURE = """\
 ## Length and disclosure
 Default to a concise answer — usually two to three short paragraphs — and stop \
@@ -219,6 +238,7 @@ RULES: dict[str, str] = {
     "calibration_ladder": CALIBRATION_LADDER,
     "concise_disclosure": CONCISE_DISCLOSURE,
     "deflection": DEFLECTION,
+    "deflection_instructions": DEFLECTION_INSTRUCTIONS,
     "tool_rules": TOOL_RULES,
     "project_links": PROJECT_LINKS,
 }
