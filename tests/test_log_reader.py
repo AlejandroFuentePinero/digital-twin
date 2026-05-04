@@ -130,5 +130,28 @@ def test_read_tolerates_records_missing_optional_fields(tmp_path):
     assert out[0].tool_calls == []
     assert out[0].contact_offered is False
     assert out[0].contact_provided is False
-    assert out[0].schema_version == "1"
+    # Default schema_version is "2" post-issue-#37; legacy records that omit
+    # it inherit the new default. The 4 reproducibility fields default None.
+    assert out[0].schema_version == "2"
     assert out[0].classifier_labels == []
+
+
+def test_read_tolerates_v1_records_lacking_reproducibility_fields(tmp_path):
+    """Legacy v1 records (the existing 85+ live records pre-issue-#37) lack git_sha,
+    model_id, temperature, and prompt_hash. LocalReader must still parse them with
+    None defaults — schema-skew tolerance per issue #37 acceptance criteria."""
+    log_path = tmp_path / "interactions.jsonl"
+    legacy_v1 = _record() | {"schema_version": "1"}
+    # The four new fields are absent on v1 records — never written.
+    for key in ("git_sha", "model_id", "temperature", "prompt_hash"):
+        legacy_v1.pop(key, None)
+    _write_jsonl(log_path, [legacy_v1])
+
+    out = LocalReader(log_path).read()
+
+    assert len(out) == 1
+    assert out[0].schema_version == "1", "explicit v1 stamp preserved"
+    assert out[0].git_sha is None
+    assert out[0].model_id is None
+    assert out[0].temperature is None
+    assert out[0].prompt_hash is None

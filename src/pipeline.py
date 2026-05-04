@@ -10,6 +10,7 @@ run once per turn (retry = re-generate-only — chunks are not re-fetched).
 
 from __future__ import annotations
 
+import subprocess
 import time
 from datetime import datetime, timezone
 from typing import Callable
@@ -20,7 +21,7 @@ from classifier import Classifier
 from composer import PromptComposer
 from generator import Generator, wrap_with_retry_feedback
 from guardrail import Guardrail
-from interaction_log import LogWriter
+from interaction_log import LogWriter, compute_prompt_hash
 from retrieval import fetch_context, format_context
 from rules import GAP_PHRASE
 from tools import ToolRegistry, build_fetch_project_readme_tool
@@ -30,6 +31,20 @@ CANNED_REFUSAL = (
     "I'm sorry, I wasn't able to give you a satisfactory answer. "
     "Please reach out to Alejandro directly at alejandrofuentepinero@gmail.com."
 )
+
+
+def _resolve_git_sha() -> str | None:
+    """Capture the current commit at module import. Returns None if git is
+    unavailable or the working tree isn't a repo (e.g. installed from wheel)."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+GIT_SHA: str | None = _resolve_git_sha()
 
 
 class Pipeline:
@@ -84,6 +99,11 @@ class Pipeline:
         # 3. Compose system prompts (one per role, both branch-aware)
         sys_prompt_gen = self._composer.compose(branches, "generator", retrieved_context=context)
         sys_prompt_judge = self._composer.compose(branches, "guardrail", retrieved_context=context)
+
+        # Fingerprint the first-attempt prompt — retries reuse the same
+        # structural prompt with feedback appended, so hashing once captures
+        # the "this was the question + rules + chunks" identity (issue #37).
+        prompt_hash = compute_prompt_hash(sys_prompt_gen, question)
 
         # 4. Generate + evaluate, retry loop
         # For branches with tools (today: TECHNICAL), generation goes through ToolLoop
@@ -186,7 +206,7 @@ class Pipeline:
         knew_answer = bool(last_answer) and (GAP_PHRASE not in last_answer)
 
         self._log_writer.append({
-            "schema_version": "1",
+            "schema_version": "2",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "session_id": session_id,
             "turn_index": turn_index,
@@ -214,6 +234,10 @@ class Pipeline:
             "knew_answer": knew_answer,
             "contact_offered": contact_offered,
             "contact_provided": contact_provided,
+            "git_sha": GIT_SHA,
+            "model_id": getattr(self._generator, "MODEL", None),
+            "temperature": getattr(self._generator, "TEMPERATURE", None),
+            "prompt_hash": prompt_hash,
         })
 
         return final_answer if final_answer is not None else CANNED_REFUSAL

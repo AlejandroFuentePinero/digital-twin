@@ -13,6 +13,7 @@ from litellm import completion
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 MODEL = "openai/gpt-4.1"
+TEMPERATURE = 1.0
 
 _wait = wait_exponential(multiplier=1, min=10, max=120)
 _stop = stop_after_attempt(5)
@@ -34,6 +35,7 @@ def wrap_with_retry_feedback(system_prompt: str, previous_attempt: dict | None) 
 
 class Generator:
     MODEL = MODEL
+    TEMPERATURE = TEMPERATURE
 
     @retry(wait=_wait, stop=_stop)
     def generate(
@@ -49,5 +51,5 @@ class Generator:
             + history
             + [{"role": "user", "content": question}]
         )
-        response = completion(model=self.MODEL, messages=messages)
+        response = completion(model=self.MODEL, messages=messages, temperature=self.TEMPERATURE)
         return response.choices[0].message.content

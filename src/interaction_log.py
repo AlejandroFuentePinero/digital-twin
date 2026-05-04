@@ -9,6 +9,7 @@ storage layer in Phase 6 without changing this module's public surface.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Literal
@@ -20,8 +21,15 @@ DEFAULT_LOG_PATH = Path(__file__).parent.parent / "data" / "logs" / "interaction
 EventType = Literal["answered", "gap", "deflected", "refused"]
 
 
+def compute_prompt_hash(system: str, user: str) -> str:
+    """SHA-256[:12] over system+user. Distinguishes 'same question, different
+    rule set' at log level without storing the full prompt — the prompt is
+    reconstructable from `git_sha` + `composer.py` + branch + chunks."""
+    return hashlib.sha256((system + user).encode()).hexdigest()[:12]
+
+
 class InteractionRecord(BaseModel):
-    schema_version: str = "1"
+    schema_version: str = "2"
     timestamp: str
     session_id: str
     turn_index: int
@@ -37,6 +45,14 @@ class InteractionRecord(BaseModel):
     knew_answer: bool
     contact_offered: bool = False
     contact_provided: bool = False
+    # Reproducibility fields (issue #37). Optional + None-defaulted so legacy
+    # v1 records still parse. git_sha/model_id/temperature/prompt_hash together
+    # let trend shifts be correlated with code/model/prompt changes and let a
+    # failed turn be replayed under its original conditions.
+    git_sha: str | None = None
+    model_id: str | None = None
+    temperature: float | None = None
+    prompt_hash: str | None = None
 
 
 class LogWriter:

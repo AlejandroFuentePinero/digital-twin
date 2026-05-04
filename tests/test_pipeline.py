@@ -31,6 +31,9 @@ class FakeClassifier:
 
 
 class FakeGenerator:
+    MODEL = "openai/gpt-4.1"
+    TEMPERATURE = 0.7
+
     def __init__(self, answers: list[str]):
         self.answers = list(answers)
         self.calls: list[dict] = []
@@ -535,6 +538,71 @@ def test_pipeline_contact_state_defaults_to_false_for_existing_call_sites(real_c
     assert record["contact_provided"] is False
 
 
+def test_pipeline_populates_reproducibility_fields_in_log_record(real_composer, fake_chunks, tmp_path):
+    """Pipeline.run() writes git_sha, model_id, temperature, prompt_hash to the log record (issue #37).
+
+    These four fields together let trend shifts be correlated with code/model/prompt changes,
+    and let a failed turn be replayed under its original conditions. None-valued before #37
+    on legacy v1 records; populated for every new write.
+    """
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["GENERIC"], confidence=1.0))
+    generator = FakeGenerator(answers=["A"])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run("q", history=[], session_id="s1", turn_index=0)
+
+    record = LogReader(log_path).read_all()[0]
+    assert record["schema_version"] == "2"
+    # git_sha cached at import — must be a 40-char hex string (or 7+ short SHA, depending on rev-parse)
+    assert isinstance(record["git_sha"], str) and len(record["git_sha"]) >= 7
+    assert record["model_id"] == generator.MODEL
+    assert record["temperature"] == generator.TEMPERATURE
+    # prompt_hash is 12-char hex
+    assert isinstance(record["prompt_hash"], str) and len(record["prompt_hash"]) == 12
+    assert all(c in "0123456789abcdef" for c in record["prompt_hash"])
+
+
+def test_pipeline_prompt_hash_is_deterministic_across_runs_with_identical_inputs(real_composer, fake_chunks, tmp_path):
+    """Two runs of the same question through the same branch produce the same prompt_hash —
+    locks the deterministic-fingerprint guarantee from issue #37 acceptance criteria."""
+    log_path = tmp_path / "interactions.jsonl"
+
+    def _run_once():
+        classifier = FakeClassifier(ClassifierResult(labels=["GENERIC"], confidence=1.0))
+        generator = FakeGenerator(answers=["A"])
+        guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+        pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+        with patch("pipeline.fetch_context", return_value=fake_chunks):
+            pipeline.run("identical question", history=[], session_id="s1", turn_index=0)
+
+    _run_once()
+    _run_once()
+    records = LogReader(log_path).read_all()
+    assert records[0]["prompt_hash"] is not None
+    assert records[0]["prompt_hash"] == records[1]["prompt_hash"]
+
+
+def test_pipeline_git_sha_cached_once_at_module_import_not_per_turn(real_composer, fake_chunks, tmp_path, monkeypatch):
+    """Per #37 acceptance criteria: git_sha must be captured at module import and reused —
+    no per-turn subprocess invocation. We verify by reading pipeline.GIT_SHA directly and
+    asserting the log record uses that exact value."""
+    import pipeline as pipeline_mod
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["GENERIC"], confidence=1.0))
+    generator = FakeGenerator(answers=["A"])
+    guardrail = FakeGuardrail(evaluations=[Evaluation(is_acceptable=True, feedback="ok")])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        pipeline.run("q", history=[], session_id="s1", turn_index=0)
+
+    record = LogReader(log_path).read_all()[0]
+    assert record["git_sha"] == pipeline_mod.GIT_SHA, "log must use the module-cached GIT_SHA, not a fresh subprocess call"
+
+
 def test_log_record_carries_full_schema_with_branch_classification_chunks_and_latencies(real_composer, fake_chunks, tmp_path):
     """Every required schema field appears in the log record and carries plausible values."""
     log_path = tmp_path / "interactions.jsonl"
@@ -548,7 +616,7 @@ def test_log_record_carries_full_schema_with_branch_classification_chunks_and_la
 
     record = LogReader(log_path).read_all()[0]
     # Identity / addressing fields
-    assert record["schema_version"] == "1"
+    assert record["schema_version"] == "2"
     assert record["session_id"] == "sess-xyz"
     assert record["turn_index"] == 4
     assert record["question"] == "the question"

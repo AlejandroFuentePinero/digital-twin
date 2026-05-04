@@ -1,6 +1,6 @@
 import pytest
 
-from interaction_log import LogReader, LogWriter
+from interaction_log import LogReader, LogWriter, compute_prompt_hash
 
 
 def _full_record(timestamp: str = "2026-05-01T12:00:00+00:00") -> dict:
@@ -35,7 +35,7 @@ def test_append_and_read_all_round_trip(tmp_path):
 
 
 def test_append_populates_default_fields_when_caller_omits_them(tmp_path):
-    """tool_calls=[], contact_offered=False, contact_provided=False, schema_version='1' are present even when caller didn't set them."""
+    """tool_calls=[], contact_offered=False, contact_provided=False, schema_version='2' are present even when caller didn't set them."""
     log_path = tmp_path / "interactions.jsonl"
     minimal = _full_record()
     for key in ("tool_calls", "contact_offered", "contact_provided", "schema_version"):
@@ -45,7 +45,7 @@ def test_append_populates_default_fields_when_caller_omits_them(tmp_path):
     assert record["tool_calls"] == []
     assert record["contact_offered"] is False
     assert record["contact_provided"] is False
-    assert record["schema_version"] == "1"
+    assert record["schema_version"] == "2"
 
 
 def test_append_raises_on_missing_required_fields(tmp_path):
@@ -91,3 +91,47 @@ def test_read_all_returns_empty_list_when_log_does_not_exist(tmp_path):
     """LogReader on a fresh path with no log file yet returns [] instead of raising."""
     out = LogReader(tmp_path / "does_not_exist.jsonl").read_all()
     assert out == []
+
+
+def test_schema_version_defaults_to_v2_with_reproducibility_fields(tmp_path):
+    """A new record (no caller-provided schema fields) carries schema_version='2' and
+    the four reproducibility fields (git_sha, model_id, temperature, prompt_hash)
+    default to None — issue #37 schema bump."""
+    log_path = tmp_path / "interactions.jsonl"
+    LogWriter(log_path).append(_full_record())
+    record = LogReader(log_path).read_all()[0]
+    assert record["schema_version"] == "2"
+    assert record["git_sha"] is None
+    assert record["model_id"] is None
+    assert record["temperature"] is None
+    assert record["prompt_hash"] is None
+
+
+def test_compute_prompt_hash_is_deterministic_and_12_hex_chars():
+    """compute_prompt_hash(system, user) returns a 12-char hex SHA-256 prefix.
+    Same inputs → same hash; any change in either → different hash. Core
+    reproducibility guarantee for issue #37: 'same question, different rule
+    set' is distinguishable at log level."""
+    h1 = compute_prompt_hash("system A", "user A")
+    h2 = compute_prompt_hash("system A", "user A")
+    assert h1 == h2, "identical inputs must produce identical hashes"
+    assert len(h1) == 12 and all(c in "0123456789abcdef" for c in h1)
+    assert compute_prompt_hash("system B", "user A") != h1, "system change must change hash"
+    assert compute_prompt_hash("system A", "user B") != h1, "user change must change hash"
+
+
+def test_record_round_trips_reproducibility_fields_when_caller_populates_them(tmp_path):
+    """git_sha, model_id, temperature, prompt_hash round-trip through writer/reader."""
+    log_path = tmp_path / "interactions.jsonl"
+    record = _full_record() | {
+        "git_sha": "deadbeef1234",
+        "model_id": "openai/gpt-4.1",
+        "temperature": 0.7,
+        "prompt_hash": "abcdef012345",
+    }
+    LogWriter(log_path).append(record)
+    out = LogReader(log_path).read_all()[0]
+    assert out["git_sha"] == "deadbeef1234"
+    assert out["model_id"] == "openai/gpt-4.1"
+    assert out["temperature"] == 0.7
+    assert out["prompt_hash"] == "abcdef012345"

@@ -5,6 +5,46 @@
 
 ---
 
+## Session 29 (2026-05-04) — `#37` shipped: InteractionRecord schema v1 → v2 (reproducibility fields)
+
+**Status:** [`#37`](https://github.com/AlejandroFuentePinero/digital-twin/issues/37) (InteractionRecord schema additions) closed locally — Phase 4 prerequisite cleared. Suite **245 → 252** (+7 tests). Unblocks `#30` (deployment markers in Trend Explorer) and `#38` (replay-from-record). Next on the Phase 4 path: `#35` (Panel 1 v2 — 14 metrics across 5 thematic blocks).
+
+### What shipped — code
+
+| Commit | Scope |
+|---|---|
+| `<this-session>` | `#37` — `InteractionRecord` schema bump v1 → v2 with 4 optional reproducibility fields (`git_sha`, `model_id`, `temperature`, `prompt_hash`); `compute_prompt_hash` helper; `pipeline.py` writer wiring (cached `GIT_SHA` at module import; `prompt_hash` over first-attempt composed prompt; `model_id`/`temperature` read from generator class attrs); `Generator.TEMPERATURE = 1.0` made explicit and passed to `litellm.completion`; +7 tests across `test_interaction_log.py` / `test_log_reader.py` / `test_pipeline.py`; 2 pre-existing schema-version pins updated v1 → v2. |
+
+### TDD slices (3 vertical)
+
+1. **Schema bump** — `InteractionRecord` gains 4 optional `None`-defaulted fields; default `schema_version="2"`. Round-trip + omitted-fields tests in `test_interaction_log.py`.
+2. **`compute_prompt_hash` helper** — SHA-256[:12] over `system + user`. Deterministic + 12-hex-char + change-sensitivity test.
+3. **Pipeline populate** — `Pipeline.run()` writes all 4 fields; `GIT_SHA` cached at module import (no per-turn subprocess); `prompt_hash` deterministic across runs of identical inputs. Three tests in `test_pipeline.py` (populate, determinism, module-cache).
+
+Plus a v1-skew test in `test_log_reader.py` confirming legacy records lacking the 4 fields parse with `None` defaults — schema-skew tolerance the issue's AC required and `LocalReader` already provides.
+
+### Design choices
+
+- **`Generator.TEMPERATURE = 1.0`** made explicit (matches OpenAI's documented gpt-4.x default) and passed to `litellm.completion`. Previously implicit. Reproducibility hinges on this being pinned, not API-default-drifty.
+- **`prompt_hash` computed once on first-attempt prompt only**, per the issue's spec ("subsequent retries use the same prompt structurally — just different feedback context"). The hash captures the *question + rules + chunks* identity; retry feedback is derivative.
+- **`GIT_SHA` resolved at module import** via `subprocess.check_output(["git", "rev-parse", "HEAD"])` with graceful `None` on failure (non-repo / git-missing). Test asserts the log uses `pipeline.GIT_SHA` exactly — locks the no-per-turn-subprocess guarantee.
+- **`model_id` and `temperature` read from `self._generator.MODEL` / `.TEMPERATURE`** with `getattr(..., None)` defensive fallback. Pipeline doesn't depend on a Generator-specific protocol; any class that exposes those attrs works (the FakeGenerator in tests gets them too).
+- **Two pre-existing `schema_version=="1"` test pins updated, not deleted.** They were correct assertions about *the default value* — now the default is `"2"`, so the assertions move with the schema. Deleting them would have lost the "default-applies-when-omitted" coverage.
+
+### Verified
+
+- `uv run pytest -q` → **252 passed** (245 → 252; +4 in `test_interaction_log.py`, +1 in `test_log_reader.py`, +3 in `test_pipeline.py`; -2 unchanged after pin updates).
+- Live log smoke: `LocalReader().read()` on the live 85-record `interactions.jsonl` parses cleanly under v2 schema; first record stamps `schema_version="1"`, `git_sha=None`, `prompt_hash=None` — schema-skew tolerance verified end-to-end.
+- `system_map.py` regenerated; no graph or glossary changes (additive optional fields don't reshape module structure).
+
+### Outstanding
+
+- **Push the local commits** — `da77567` + `f2c1231` (Session 28) + this session's `#37` commit are local; `main` push is harness-protected.
+- **Strip `needs-triage`** from `#37` (this session) and from the still-open `#35` `#36` `#38` `#30` `#31` (Session 28 outstanding carries over).
+- **Next: `#35` Panel 1 v2** — 14 metrics across 5 thematic blocks (Outcome / Routing / Engagement / Tool use / Latency). Now unblocked since the schema fields it would have needed for trend / failure context are present.
+
+---
+
 ## Session 28 (2026-05-04) — Phase 4 slices 1+2 shipped; Phase 4 plan restructured around the 9 failure modes Sentinel must detect
 
 **Status:** [`#28`](https://github.com/AlejandroFuentePinero/digital-twin/issues/28) (LogReader) closed in `da77567` (local), [`#29`](https://github.com/AlejandroFuentePinero/digital-twin/issues/29) (Sentinel skeleton + Panel 1 v1) closed in `f2c1231` (local) — both push-protected on `main`, awaiting manual push. Suite **224 → 245** (+21 tests). The original PLAN.md "5 panels + 3-flag panel" Phase 4 scope was **restructured into an 11-issue surface organised around the 9 failure modes Sentinel exists to detect**; 4 new issues filed (`#35` `#36` `#37` `#38`), 2 existing issues rewritten (`#30` `#31`).
