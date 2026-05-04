@@ -276,42 +276,90 @@ The `fetch_project_readme` tool fires on the model's discretion — `tool_rules`
 
 ---
 
-### P11 — Citation scope-creep in temporal/publication answers
+### O6 — Classifier routes specific-paper questions to GENERIC, losing TECHNICAL tool access
 
-**Status:** Observed (v4 eval, Session 27 / #2).
+**Status:** Observed (v5 eval, Session 27 / #2).
 
-The v4 eval surfaced a regression in the `temporal` answer-quality category: accuracy dropped 4.53 → 3.87 vs v3, completeness 4.40 → 4.00. Autopsy of the four failures (`Chusquea phenology`, `Nature Climate Change "Mountains magnify"`, `GCB physiological stress`, `PLOS One rainforest birds`) decomposed roughly:
+Three v5 acc<4 failures share the shape: question explicitly names a publication (`What is the title of Alejandro's 2026 paper in Nature Climate Change?`, `What is the title of Alejandro's 2021 paper in Ecography?`, `How many supporting projects are in the LLM Engineering Lab, excluding the flagship?`) but the classifier returned low confidence (0.4–0.6) and the system fell back to GENERIC. GENERIC has no `fetch_project_readme` tool access, so the system can't pull the canonical readme to recover the title or specific count — it has to rely on whatever the KB chunks happen to surface, which often misses the verbatim title.
 
-- **~30% judge-side**: same-content Chusquea attribution scored acc=5 in v3 and acc=1 in v4 — judge non-determinism. The two GCB / NCC papers are post-2024 and the judge (gpt-4.1) explicitly cites *"as of June 2024, no such paper exists"* — judge knowledge-cutoff false positive on real KB content.
-- **~70% system-side (this entry)**: where v3's generator answered terse — *"The PLOS One paper on long-term changes in rainforest bird populations was published in 2021."* — v4's generator now reaches for citation-shape detail: *"Williams S. & de la Fuente A. (2021). PLOS One 16(12): e0254307. DOI: …"*. Volume/issue/article numbers and DOIs are **not in the retrieved KB chunks**, so when the model includes them they're fabricated, and the judge punishes (correctly) the fabrication risk.
-
-The Phase 2 branch composer assembles a richer system prompt (multiple `profile.md` sections + retrieved context + role framing) than v3's monolithic prompt, which appears to nudge the generator toward "let me also be helpful with the citation." For temporal/publication questions specifically, that helpfulness manifests as fabricating verifiable-shape details.
+The semantic shape — "give me a fact about a specific named publication / project" — should arguably trigger TECHNICAL, but current classifier prompt phrasing leaves these in the borderline zone where the 0.5 confidence threshold floors them at GENERIC.
 
 **Why this is logged but not patched here:**
 
-- v4 is a measurement run per the PRD — no tuning lands in #2.
-- Sample size is 4 questions out of 15 in the temporal category; the failure is real but the right fix needs the smoke-test corroboration (whether real recruiters trigger the same shape) rather than reactive prompt edits.
-- The fix is mechanical (rule wording) — easy to ship in a follow-up issue.
+- Issue #2's scope is measurement, not classifier tuning.
+- The fix is a classifier-prompt tweak — adding a clear example for "what is the title of paper X" / "name a specific detail of project Y" — and ideally tracked in its own classifier-iteration issue with TDD coverage.
+- Lowering the 0.5 confidence threshold across the board is *not* the right fix — it would let genuinely-confused borderline cases route to wrong specific branches more often. Targeted prompt tightening is safer.
 
 **Trip-wires (any one promotes priority):**
 
-1. R3 smoke-test surfaces the same fabrication shape on a recruiter probe (e.g., asking "when was your X paper published?" and getting a fabricated DOI).
-2. v5 eval (after any system change) shows the temporal regression persisting or widening.
-3. Sentinel (Phase 4) flags a high rate of `attempts > 1` failures on temporal-shape questions where the guardrail rejects fabricated citations.
+1. v6 (post-classifier-tuning) eval shows specific-paper questions still routing GENERIC.
+2. Sentinel (Phase 4) flags `category="title fetch" AND branch="GENERIC" AND attempts > 1` as a recurring pattern in production logs.
+3. R3 or future smoke-test surfaces a recruiter probe asking for a paper title and getting a generic deflection.
 
 **Action when a trip-wire fires:**
 
-- Add a `citation_discipline` rule to `rules.py` and load it in GENERIC + TECHNICAL branches: *"For 'when was X published?' questions, give the year and journal only — do not include volume, issue, page numbers, DOI, or full citation unless the user explicitly asks. The KB does not always carry these details and inventing them counts as fabrication."*
-- TDD the rule: pin the negative case (no DOI when not asked) and a positive case (DOI surfaces when asked).
-- Re-run eval (just the temporal slice via `--retrieval-only` first, then full).
+- Add an explicit example to `classifier.SYSTEM_PROMPT` for the "name-a-specific-fact-about-paper-X" shape under the TECHNICAL branch description.
+- Pin a `tests/test_classifier.py` case for this question shape returning TECHNICAL with confidence ≥ 0.7.
+- Re-run eval; expect lift on the 3 affected questions plus any sibling shapes.
 
-**Companion observability:** Sentinel can surface this as `category=temporal AND len(retrieved_chunks_with_doi) == 0 AND answer_contains_doi(generated)` — a boolean signal for fabricated-citation suspicion. Phase 4 work.
+**Companion observability:** Sentinel can surface this as `category=direct_fact AND branch=GENERIC AND classification_confidence < 0.5 AND question_mentions_paper_or_project()` — a boolean signal for misroute-to-fallback patterns. Phase 4 work.
 
-**Companion to:** the judge-cutoff caveat in the EVAL_BLINDSPOT section. Both feed into "v3 → v4 comparability" reading: a temporal accuracy drop is partly noise (judge), partly real (scope creep), and the cross-tab + per-question feedback strings are the source of truth, not the headline number.
+---
+
+### O7 — TECHNICAL number-misread despite correct readme content
+
+**Status:** Observed (v5 eval, Session 27 / #2).
+
+Two TECHNICAL-routed v5 failures (high classifier confidence 0.9, model has tool access) still answer with the wrong specific number despite the readme carrying the correct figure:
+
+- **JIE postings**: model answered `3,892` (the AI-JIE published Data Scientist subset figure, found in `ai_jie.md`) when the question was about JIE's training corpus (`6,100+`, now explicit in `job_intelligence_engine.md`'s Scale section). Either the model fetched the wrong key, fetched both and trusted AI-JIE's number, or found the AI-JIE figure in retrieval and ignored the JIE readme.
+- **Price Predictor model count**: readme now lists 12 model families enumerated explicitly (4 baselines as separate rows: Constant, Linear, Random Forest, XGBoost; then MLP, ResNet, GPT-4.1-nano zero-shot, GPT-4.1-nano fine-tuned, Llama-3.2-3B base, Llama-3.2-3B QLoRA, GPT-5.1+RAG, Ensemble). Model still answered `8` by collapsing zero-shot+fine-tuned and base+QLoRA pairs into single entries.
+
+These are not "readme content" failures — the content is correct and accessible. They're **model-reading failures**: tool-returned content is read sloppily under the same scope-creep instinct the citation rule addressed for paper metadata, but applied here to project numbers.
+
+**Why this is logged but not patched here:**
+
+- Issue #2's scope is measurement.
+- The fix is a `tool_rules` tightening (e.g., *"When the visitor asks for a specific number from the project — count, score, dataset size — quote the readme verbatim and do not consolidate enumerated entries"*).
+- A defensive measure could also be at guardrail level: numerical-completeness rule extended to flag answers that contain numbers absent from retrieved/tool context.
+
+**Trip-wires (any one promotes priority):**
+
+1. v6 (post-tool-rules-tightening) eval shows JIE/Price-Predictor or sibling number questions still failing.
+2. Sentinel flags `branch=TECHNICAL AND tool_calls > 0 AND answer_contains_number_not_in_tool_content()` — fabricated-or-collapsed-number signal.
+3. R3 surfaces a recruiter probe ("how many products / postings / models?") getting the wrong specific count.
+
+**Action when a trip-wire fires:**
+
+- Tighten `tool_rules` with a verbatim-number-quote clause + an example case.
+- Add a `tests/test_tools.py` (or new `test_pipeline.py`) case verifying the model output contains a number from the fetched readme when one is asked for.
+- Re-run eval.
+
+**Companion to:** O5 (classifier confidence variance) and the resolved citation-discipline pattern (R2). Same family of failure mode — "model embellishes when it shouldn't" — but applied to numerical quoting from tool-returned content rather than paper-metadata fabrication.
 
 ---
 
 ## Resolved
+
+### R2 — Citation scope-creep in temporal/publication answers (v4 → v5)
+
+**Surfaced:** v4 eval (Session 27 / #2) — `temporal` answer-quality category dropped acc 4.53 → 3.87 vs v3, completeness 4.40 → 4.00.
+
+**Bug:** Two distinct causes interacting:
+1. **System-side scope creep.** The Phase 2 branch composer assembles a richer system prompt than v3's monolithic prompt. For temporal/publication questions, the generator started reaching for citation-shape detail (volume, issue, page numbers, full DOIs) that wasn't in retrieved KB chunks — and fabricating it. v3 answered terse; v4 answered verbose with manufactured metadata. Affected `Chusquea phenology`, `PLOS One rainforest birds`, parts of `Nature Climate Change "Mountains magnify"`.
+2. **Judge-side knowledge-cutoff false positives.** Judge (gpt-4.1, ~mid-2024 cutoff) explicitly cited *"as of June 2024, no such paper exists"* when the system correctly identified post-2024 papers. Real KB content was being scored acc=1 because the judge couldn't independently verify it. Affected `GCB physiological stress` (May 2025), `NCC Mountains magnify` (Feb 2026).
+
+**Fix (commit `e82529a`):**
+- **`src/rules.py` PROJECT_LINKS extended** with citation discipline (universal rule, all branches): *"For publication citations specifically, give journal + year and always include a direct link to the publication. Do not include volume, issue, page numbers, or DOI strings — the link directs the reader to those details if they need them, and adding them in prose invites fabrication when the retrieved context does not carry them."*
+- **`eval/run_eval.py` _JUDGE_SYSTEM_PROMPT extended** with cutoff caveat + reference-as-ground-truth anchor: *"The reference answer is the ground truth for this evaluation. Some content may be more recent than your training cutoff. When the generated answer aligns with the reference, do not penalise it for content you cannot independently verify against your training data — defer to the reference. Only flag a factual error when the generated answer contradicts the reference, invents details absent from both the question and the reference, or asserts a fact you can confidently verify is wrong."*
+- Eval test references for 6 temporal-publication questions stripped to year-only (matching the new readme-citation discipline).
+- 3 paper readme H1 titles replaced with actual paper titles (Ecography, NCC, PLOS One) to align with eval references.
+
+**Tests:** `test_project_links_includes_citation_discipline_for_publications`, `test_judge_prompt_acknowledges_post_cutoff_content`. 224/224 passing.
+
+**Validation (v5):** temporal answer accuracy lifted **3.87 → 4.93 (+1.06)**; completeness 4.00 → 4.93 (+0.93). Overall acc 4.56 → 4.81 (+0.25). No regression elsewhere; gap rate 0.0% → 0.7% reflects *desired* increased honesty (system now refuses to fabricate paper titles when not in retrieved context, rather than producing a wrong paraphrase).
+
+---
 
 ### R1 — Guardrail blindness to tool-returned content (#18 smoke-test bug)
 

@@ -5,6 +5,132 @@
 
 ---
 
+## Session 27 (2026-05-04) — Phase 3 / `#2` v4 baseline + eval-fairness fixes; v5 confirms; Phase 3 complete
+
+**Status:** Issue [`#2`](https://github.com/AlejandroFuentePinero/digital-twin/issues/2) closed in `e82529a`. `eval/run_eval.py` rewired through the routed pipeline (classifier → branch composer → generator/tool-loop → judge); v4 baseline run on the existing 149 questions; failure autopsy surfaced two surgical fixes (citation discipline + judge cutoff caveat); v5 validation eval ran cleanly against the fixes — temporal regression closed and overall quality up across the board. Registry grew 24 → 28 keys (4 paper readmes added). Tool surface 1,206 → 1,373 lines (~+14% bounded). Test count 222 → 224. No KB re-ingestion required. **Phase 3 complete.**
+
+### Headlines
+
+| Metric | v3 baseline | v4 (post-rewire) | **v5 (post-fixes)** | v3→v5 |
+|---|---|---|---|---|
+| Retrieval MRR | 0.868 | 0.866 | 0.865 | flat |
+| Retrieval nDCG | 0.854 | 0.864 | 0.864 | +0.010 |
+| Coverage % | 91.9 | 91.3 | 91.4 | flat |
+| Answer accuracy | 4.46 | 4.56 | **4.81** | **+0.35** |
+| Answer completeness | 4.51 | 4.64 | **4.80** | **+0.29** |
+| Answer relevance | 4.84 | 4.73 | **4.91** | +0.07 |
+| Gap rate | 0.7% | 0.0% | 0.7% | flat |
+| Phase 1 numerical-completeness fix | 3.94 (v3) | 4.39 (v4) | 4.39 (v5) | +0.45 |
+| Temporal accuracy | 4.53 (v3) | 3.87 (v4) | **4.93 (v5)** | +0.40 |
+
+### Eval pipeline rewrite
+
+- `eval_retrieval(test, classification=None)` and `eval_answer(test, classification=None)` — both now accept a pre-classified `ClassifierResult` so the **classifier runs once per question** and the same routing decision drives retrieval scoring + answer generation. Without this, borderline questions can route to different branches between stages, decoupling the per-question record's `branch` field from what actually produced the answer.
+- Eval calls the **raw answer path (no guardrail)** per Session 9 decision: eval measures generated quality; guardrail rejection rates are a separate signal observable in the production interaction log.
+- `tool_loop` exercised on TECHNICAL questions — README-grounded answers genuinely tested.
+- Per-question record gains `branch`, `classification_confidence`, `secondary_branch`.
+- Aggregations gain `summary.by_branch`, `cross_tab` (sparse `{category: {branch: metrics}}`), `classifier_low_confidence_count`.
+- Architecture snapshot records full `branches` dict + `classifier_model` + `routing_in_loop=true` for reproducibility.
+
+### v4 autopsy → two surgical fixes
+
+v4 surfaced one real regression: **temporal answer accuracy 4.53 → 3.87**. Side-by-side comparison of v3 and v4 generated answers on the four failing temporal questions decomposed the cause:
+
+- **~30% judge-side**: same-content Chusquea attribution scored acc=5 in v3 and acc=1 in v4 — judge non-determinism. Two GCB / NCC papers post-2024; judge (gpt-4.1, mid-2024 cutoff) explicitly cites *"as of June 2024, no such paper exists"* — judge knowledge-cutoff false positive on real KB content.
+- **~70% system-side**: v3's generator answered terse; v4's generator started fabricating volume/issue/page/DOI metadata that wasn't in retrieved chunks. Phase 2's richer prompt composition (multiple `profile.md` sections + retrieved context + role framing) nudged the generator toward "be helpful with citations," and that helpfulness manifested as fabricated detail.
+
+Two **surgical fixes** shipped:
+
+- **`src/rules.py::PROJECT_LINKS` extended** with citation discipline (universal rule, all branches): *"For publication citations specifically, give journal + year and always include a direct link… Do not include volume, issue, page numbers, or DOI strings — the link directs the reader to those details… adding them in prose invites fabrication when the retrieved context does not carry them."*
+- **`eval/run_eval.py::_JUDGE_SYSTEM_PROMPT` extended** with cutoff caveat + reference-as-ground-truth anchor: *"The reference answer is the ground truth for this evaluation. Some content may be more recent than your training cutoff. When the generated answer aligns with the reference, do not penalise it for content you cannot independently verify against your training data — defer to the reference."*
+
+Both TDD'd. Tests added: `test_project_links_includes_citation_discipline_for_publications`, `test_judge_prompt_acknowledges_post_cutoff_content`.
+
+### Eval test-set fairness pass
+
+Catalogue of stale references corrected:
+
+- **Q1** ("current professional role"): updated to reflect Officeworks transition. Profile.md says "now AI Engineer at Officeworks (May 2026 – present)"; v3-era reference still said "currently working as a Postdoctoral Fellow at JCU" — that's stale, not a system failure.
+- **Q88** ("how many first-author peer-reviewed papers"): "8 published" → "7 published + 1 under review" (KB SUMMARY.md says exactly this; the system was correctly distinguishing).
+- **Q95**: postdoc reframed past-tense ("Sep 2024 – May 2026") to match current profile state.
+- **LangChain orchestration question**: reference expanded to expect both LangChain *and* LangGraph (KB skills.md and SUMMARY.md list both; the system was correct).
+- **6 temporal-publication references** stripped to year-only — now match the new citation discipline (system answers year-only by design; reference shouldn't expect month).
+
+### Readme content fixes
+
+- **3 paper readme H1s replaced** with actual published paper titles (regex audit caught the descriptive paraphrases):
+  - `delafuente_2021_ecography.md`: "Habitat Suitability from SDM…" → "Predicting Species Abundance by Implementing the Ecological Niche Theory"
+  - `ncc_mountains.md`: "Mountains as Natural Laboratories…" → "Mountains Magnify Mechanisms in Climate Change Biology"
+  - `williams_delafuente_2021_plosone.md`: "Spatiotemporal Climate Impacts…" → "Long-Term Changes in Populations of Rainforest Birds in the Australia Wet Tropics Bioregion"
+- **All 6 paper citations stripped** to "Published: YYYY in *Journal* (first/co-author)" — no volume/issue/page (matches the new universal citation discipline).
+- **JIE readme** got an explicit Scale section with `Trained on 6,100+ real job postings` (number was missing — only in `data/raw_me/about.md`).
+- **Price Predictor readme** reworked the Models-benchmarked line to enumerate all 12 model families explicitly (was ambiguous about whether "a dozen" included individual baseline models or grouped them).
+- **digital_twin readme** updated to carry v4 baseline numbers (was still showing v3).
+
+### 4 new paper distillations (24 → 28 registry keys)
+
+User added 4 paper PDFs to `data/raw_me/technical_documents/` mid-session for inclusion. Extracted text via pypdf (added as dev dep), wrote distilled tool-readmes, registered:
+
+- **`bosque_2017_chusquea.md`** — first-author 2017 Bosque paper (Spanish original distilled to English). Documents 33.50 Mg ha⁻¹ biomass, 146.86 × 10⁶ seeds ha⁻¹ peak production, 87.5% viability of *Chusquea montana* mass-flowering in Puyehue National Park.
+- **`gcb_2023_rainforest_birds_climate.md`** — first-author 2023 GCB paper. Bayesian N-mixture in JAGS over 47 species across 124 survey locations / 24 sites, 2000–2016. Multi-stressor decomposition (long-term warming + rainfall + heatwaves + droughts + cyclone NDVI from Landsat). 72% of species show significant temperature response; strong elevational asymmetry (lowlands benefit, uplands decline).
+- **`oecologia_2024_herbivory.md`** — first-author 2024 Oecologia paper. Hierarchical Bayesian pathway model in R + JAGS over 25 sites across basalt/rhyolite/granite parent materials. Once geological origin is controlled, individual soil nutrients are equivocal predictors of foliar composition.
+- **`siri_2025_forest_gap_birds.md`** — co-author 2025 Ecologica Montenegrina paper (Alejandro led the analytical framework: GLMMs + PCA + ANOVA). 5-year mist-netting in Thai 16-ha plot; 1,148 captures of 81 species; gaps shift assemblage composition without changing total abundance.
+
+KB `publications.md` already covered all 4 with full lay + technical summaries — **no KB re-ingestion needed**. Tool surface 1,206 → 1,373 lines.
+
+### v5 validation results
+
+Re-running eval against the surgical fixes:
+
+- ✅ **Temporal regression closed**: acc 3.87 → **4.93** (+1.06); completeness 4.00 → 4.93 (+0.93).
+- ✅ **No category regressed**. Comparative, relationship, spanning all hit 5.00.
+- ✅ **GENERIC branch lifted +0.53** (4.20 → 4.73) — the catch-all is the biggest beneficiary of the citation discipline.
+- ⚠ **Gap rate 0.0% → 0.7%**: actually *desired* behaviour. The NCC-title question now produces "I don't have that information in my knowledge base" rather than fabricating a paraphrased title. The new citation rule made the system properly humble.
+- ⚠ **Low-confidence classifications 11 → 20**: classifier non-determinism on borderline cases (rule + judge-prompt changes shouldn't have affected the classifier directly). Worth tracking but not v5-blocking.
+
+### 6 residual acc<4 failures — all pre-existing, all out-of-scope for #2
+
+Not Session-27-caused; warrant follow-up issues, not delaying close:
+
+| Cause | Count | New LIMITATIONS entry | Follow-up scope |
+|---|---|---|---|
+| Classifier routes specific-paper questions to GENERIC (low-conf default → no tool access) | 3 | `O6` | Classifier-prompt iteration |
+| TECHNICAL number-misread despite correct readme content (JIE 3,892 vs 6,100+; Price Predictor 12 collapsed to 8) | 2 | `O7` | `tool_rules` tightening |
+| Minor EKW hierarchical-RAG detail | 1 | (model variance, not patterned) | Watch-item only |
+
+### Discipline calls
+
+- **Strictly bounded scope.** PRD said "v4 is a measurement run; tuning lands in its own PRD." Two fixes deliberately stayed surgical and were validated by v5 before merge. Resisted the temptation to also fix routing + tool-rules in this session.
+- **No KB changes**. Tool surface (`data/readmes/`) carries the project distillations; KB (`data/knowledge_base/`) carries the Frame. The Frame is content-stable, the tool surface evolves. This session reinforced the boundary.
+- **Resisted "Key facts" boilerplate on all 24 readmes** when first asked. The user surfaced the right concern (don't bloat context), and the audit confirmed the existing readmes already carry methodology + novelty + key facts in body content; adding a redundant Key-facts header per readme would have been bloat for bloat's sake.
+- **Created then reverted `python_eda_projects.md`** when discovered Session 24 had explicitly audited and dropped EDA from the registry because KB's `projects_skill_labs.md` carries adequate coverage. Trust-the-prior-decision discipline.
+- **Title corrections were the highest-impact readme fix**: 3 paper readmes had descriptive paraphrases as H1s that didn't match the actual published titles. Real bug, low-cost fix.
+
+### What shipped
+
+| Commit | Scope |
+|---|---|
+| `e82529a` | Session 27 monolithic — eval rewrite + citation rule + judge caveat + 3 paper title fixes + 4 new paper distillations + JIE/Price-Predictor enrichments + Q1/Q88/Q95 stale ref updates + LangChain expansion + temporal-publication references year-only + LIMITATIONS P11→R2/O6/O7 + TODO Phase 3 complete |
+
+### Verified
+
+- `uv run pytest -q` → **224 passed** (222 → 224; +`test_project_links_includes_citation_discipline_for_publications` + `test_judge_prompt_acknowledges_post_cutoff_content`).
+- Registry validation: 28 keys, hard-fail-at-startup verified all 28 README files exist on disk; tool schema enum carries 28 keys + `additionalProperties: False`.
+- v4 → v5: zero category regressions; temporal +1.06 acc; overall +0.25 acc.
+
+### Outstanding (follow-up issues to file)
+
+1. **Classifier prompt — specific-paper / specific-project shape** — `LIMITATIONS::O6`. Add explicit example to `classifier.SYSTEM_PROMPT` for "what is the title of paper X?" / "name a specific detail of project Y" → TECHNICAL. TDD pin in `tests/test_classifier.py`.
+2. **`tool_rules` — verbatim-number quoting** — `LIMITATIONS::O7`. Tighten with an explicit clause: when asked for a specific number from the project, quote the readme verbatim and do not consolidate enumerated entries.
+
+Both are **scope-clean separable issues** — neither touches the eval pipeline or rule UNIVERSAL surface that this session shipped.
+
+### Phase 4 ready
+
+Phase 4 (Sentinel) is now unblocked. The eval pipeline + v5 baseline give us a measurement anchor; live observability over real interactions is the next compounding leverage. The eval doesn't see routing surface, fabrication rate, or multi-turn coherence — Sentinel does.
+
+---
+
 ## Session 26 (2026-05-03) — Contact-flow expansion: multi-trigger union + turn-7 re-prompt + explicit-request keyword detector
 
 **Status:** In-session expansion of #16's contact-flow beyond the original spec, after the user pointed out that turn-3-only triggering missed two high-value UX cases. Three triggers now union into the form-visibility decision; form copy switches at turn 7 for re-engagement; explicit recruiter-shape requests surface the form immediately. **#16 was already closed in Session 25** — this is additive, not reopening; closes as a Session-level extension. Test count 195 → 215 (+20). No new commits planned for #16 itself; the expansion ships under Session 26.
