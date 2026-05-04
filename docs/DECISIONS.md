@@ -5,6 +5,72 @@
 
 ---
 
+## Session 39 (2026-05-04) — Sentinel UX hardening: Midnight Mono + severity-driven layout + 7 follow-up bug-fix passes
+
+**Status:** Three full UX iterations + 4 follow-up bundles on top of Session 38's restructure. Suite **402 passing**. 8 commits since the Phase 4 closeout: `1ef06c2` Midnight Mono + status banner + single-header sections, `911e85c` iteration-3 spec (severity sort + chart cards + design tokens), `6a872f1` 7 visual bug fixes (latency HTML escape regression, chart titles markdown leak, threshold caption colour, chart blur, per-mode colours, session-view focus, brighter section headers), `ab42eac` 90d window + drop unused suffix column + chart DPI bump (100 → 200), `4a571b5` per-flag clickable destination links (`→ Failures` / `→ Trends`), `d0b1454` drop tool-uptake threshold (false-warning at 60%) + add tool_call_count volume metric.
+
+### Headline outcome
+
+The dashboard's three-tab structure (Metrics → Trends → Failures) now ships with a Midnight Mono visual system, single-header severity-sorted metric overview, matplotlib-rendered status-coloured trend charts, severity-sorted failure feed with per-mode colours, and a friendly-language status banner that drops the "SENTINEL" prefix and renders all three severity groups always-expanded. Every operator-reported issue from the screenshot reviews has been resolved (latency HTML rendering, chart titles, per-mode colour collision, gray-on-black, session-view focus, missing 90d window, chart blur, false tool-uptake warning).
+
+### What shipped — by iteration
+
+**Iteration 2 (`1ef06c2`)** — Midnight Mono palette via CSS custom properties (`bg-base #0a0a0a`, `bg-surface #171717`, `text-primary #fafafa`, `healthy #4ade80`, etc.); status banner above every tab (`SENTINEL · N alerts · N warnings · N healthy`); single-header per thematic section (`Outcome` / `Routing` / `Engagement` / `Tool use` / `Latency` once each, not three times); per-row inline 3-windowed values (`9.4% / 9.4% / 9.4%`) with divergence highlighting; failure feed gains inline expansion via `gr.Accordion` (replaces detached drilldown panel); inline threshold caption replaces chart legend.
+
+**Iteration 3 (`911e85c`)** — Failure feed severity sort (alert → warning → muted, then by recency); 3px severity stripe per row; friendly per-mode labels (`unknown answer (knew_answer=false)` etc.) closing the discoverability gap; result-count summary (`15 failures · 1 refused · 1 retry exhausted · ...`); Gap Clusters → 2-column responsive card grid; eyebrow + title + mono metadata page header; ghost Refresh button; latency p50 muted / p95 primary; per-section card wrappers dropped (whitespace separates instead); `"May 3"` date format; centred-card empty state for Deflection summary.
+
+**Bug-fix pass 1 (`6a872f1`)** — Seven concrete fixes from operator screenshot review:
+1. Latency cells were rendering literal `<span class='latency-p50'>...</span>` text — `_value_cell` was double-escaping HTML. Drop the `html.escape` (formatters in this module produce trusted internal-data strings).
+2. Chart titles showed literal `**Retry-exhaustion rate:**` — markdown was getting passed through unparsed inside the `<div class='chart-header'>` wrapper. Convert `format_trend_header` to emit `<b>` directly.
+3. Threshold caption was uniform muted gray — split into multiple `fig.text` calls so `healthy` renders green and `warning` amber inline (matches the chart's status colour).
+4. Charts had lots of black space — figsize too narrow (6.4in → 10in); chart-card padding tightened; plot facecolor matched to bg-surface-2.
+5. Failure modes shared 3 colours — refused + retry-exhausted both red, gap gray-on-black. Per-mode palette: refused `#f87171`, retry-exhausted `#fb923c`, rejected-then-recovered `#fbbf24`, gap `#60a5fa`. Sort rank refined to 4 distinct positions.
+6. "View full session" / "Back to feed" left the operator scrolled wherever they were. Wrap feed in a `feed_view: gr.Column` that hides when session view is active; `scroll_to_output=True` on both buttons; prominent `.session-view-header` card with eyebrow + first-turn question + meta line.
+7. Section headers too dim — `text-secondary @ 500` → `text-primary @ 700`, 15px, 32px top margin, 1px bottom-border.
+
+**Bug-fix pass 2 (`ab42eac`)** — Two more from the next screenshot:
+1. Extra unused trailing column in metric grid + lines not aligning — the grid was `1.6fr repeat(3, 1fr) 1fr` where the trailing `1fr` was the now-unused suffix slot (after iteration-3 dropped the toggle and made stacked the default). Drop the suffix column. For collapse-when-same callers, append the "· same across windows" hint inline to the value cell. Plus: add 90d window so operators read short → long across the row (7d / 30d / 90d / Global). Header cells derived from the WINDOWS constant.
+2. Trend chart blur on zoom — matplotlib was rendering at `dpi=100` (1000×220 PNG) then the browser scaled it. Bump to `dpi=200` (2000×440) so charts stay sharp.
+
+**Per-flag clickable links (`4a571b5`)** — Restored the `→ Failures` / `→ Trends` ghost-link affordance per flag. Different from the earlier removed version: labels by destination tab not by kind (no more duplicate-label problem when 2 flags of the same kind fire); ghost styling (transparent, no border, muted text → primary on hover); per-slot `gr.Row` containers with row-visibility toggled together on Refresh.
+
+**Tool uptake fix + count (`d0b1454`)** — `technical_tool_uptake_rate` was firing as warning at 60% but operator pointed out the metric definition is conceptually noisy (`all TECHNICAL` denominator includes turns that don't need a tool call). Drop the threshold; metric becomes orientation-only (value still shown, no badge). Add `tool_call_count` (volume) to pair with the rate metrics.
+
+### Live numbers right now (85-record log)
+
+- **Status banner** (7d window): 2 alerts (Misclassified questions, Conversation depth) · 3 warnings (Refused to answer, Slow responses, Tool usage was warning before fix → now orientation) · 5 healthy.
+- **Metric overview**: 4-column grid (label + 7d + 30d + 90d + Global). All values agree across windows since data span is 4 days; flips to inline `· same across windows` collapse only in non-default modes.
+- **Trend charts**: matplotlib SVG-quality at 200 DPI (2000×440 pixel renders). Status colour drives both the line and scatter markers (gap_rate green @ 8.5% healthy, low-confidence green, confident-failure red @ 15.3% alert).
+- **Failure feed**: 15 failures · 1 refused (red ribbon) · 1 retry exhausted (orange) · 5 rejected then recovered (amber) · 8 unknown answer (blue). Severity-sorted top to bottom.
+- **Flags**: 0 firing on live data (4-day span, no prior week for gap_rate_jump; no cluster archive priors yet for new_cluster; 0 deflected/refused records for repeat_failure). When firing, each card carries a `→ Failures` or `→ Trends` ghost link.
+- **Tool use**: 8 tool_call_count · 60% uptake (orientation, no badge) · 100% success rate.
+
+### Design choices
+
+- **Auto-refresh on launch**: cluster + summary batches run when their cached file is missing or older than 7 days. Loud "Batch failed: ..." banner on LLM failure rather than silent stale cache (silent stale data is exactly what Sentinel exists to prevent).
+- **Matplotlib over `gr.LinePlot`**: switched the trend renderer because Gradio's LinePlot has no way to make point markers visibly larger than the line itself (operator wanted points distinct from line so they could see "where data exists"). Using `matplotlib.figure.Figure` directly (not `plt.subplots()`) so figures don't accumulate in the pyplot global registry.
+- **Failure feed accordions over a Dataframe**: gives true inline expansion (operator-driven). Per-row `elem_classes=["feed-row", f"sev-{mode}"]` so each row gets its mode-specific 3px left stripe via CSS. Pre-allocated MAX_FEED_ROWS=30 slots with visibility toggled on filter change.
+- **Per-flag ghost links over removed-buttons**: original `Investigate · {kind}` buttons created duplicate labels when multiple flags of the same kind fired. The new `→ {destination}` labels read the *target tab*, not the flag kind — every label is meaningful even when 3 same-kind flags fire (they all read `→ Failures`, which is fine — clicking any of them goes to the same place).
+- **Tool uptake demoted, not removed**: dropping the threshold is more honest than tuning it down. The metric definition is fundamentally proxy-noisy (LIMITATIONS::P8). The value still renders (60%) so the operator can see it; the badge just doesn't false-alarm. Future fix: refine the denominator to only count TECHNICAL turns whose question names a specific project from the 28-key registry.
+- **Trend chart trim + monitoring-since**: chart_dataframe trims to `[first_real_data − 2d, last_data]` so the x-axis doesn't carry empty space when the log spans only a few days. Monitoring-since annotation in the chart caption tells the operator how far back the data goes without needing them to interpret the axis.
+- **Friendly banner labels (banner-only)**: `Confident-failure rate (≥0.8 & failed)` → `Misclassified questions`; `Total latency p95` → `Slow responses`; etc. The metric grid keeps the technical names (operators learn them quickly and they're shorter for the column scan); the banner gets the plain language so it reads to anyone.
+- **Session view focus via `gr.Column` toggle + `scroll_to_output=True`**: avoids JS injection; uses Gradio's native scroll affordance. The session-view header eyebrow + first-turn question makes "you're looking at session X" obvious.
+
+### Verified
+
+- `uv run pytest -q` → **402 passed**.
+- `system_map` regenerated → `MAP.md` no longer references the deleted `replayer.py`; `flag_detector` registered under Tooling.
+- Live boot via `PYTHONPATH=src uv run python src/sentinel.py` (autorefresh disabled in tests, on in production) — 3-tab dashboard renders as designed.
+
+### Outstanding
+
+- **Push the 24 local commits** — `main` push remains harness-protected.
+- **Refine `technical_tool_uptake_rate` denominator** (LIMITATIONS::P8) — only count TECHNICAL turns whose question names a project from the 28-key registry. Deferred this session; would need a project-name detection helper + threshold restoration.
+- **Run cluster + summary batches once in a fresh process** to populate `data/logs/gap_clusters.json` + `data/logs/summaries/deflection_*.md` so the panels render real LLM-written content on the next launch (the auto-refresh inside `build_app` does this on launch when cached file is stale, but operator may want to see the output once outside Sentinel).
+- **Phase 5** (break the live system) — Phase 4 instrumentation is complete; next session can use Sentinel as the lens to find real regressions.
+
+---
+
 ## Session 38 (2026-05-04) — Sentinel UX redesign: 3 tabs + box-in-box + auto-refresh + chart cleanup
 
 **Status:** Sentinel restructured per operator feedback. Suite **388 → 386** (net −2 — 4 Replay tests + 6 anchor/format tests removed; 8 new tests for auto-refresh helpers + flag-target-tab + reshaped chart). New top-level layout: `gr.Tabs` with **Metrics** (default) → **Trends** → **Failures**, ordered broad → specific. Cluster + Deflection panels move under Failures (attribution surfaces over the same failure population). Cluster + summary batches now auto-run on launch when their cached file is missing or older than 7 days, with loud `⚠ Batch failed: …` banner on LLM error. **Replay (#38) removed entirely** — module + tests + UI hookup.

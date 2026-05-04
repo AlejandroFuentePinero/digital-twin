@@ -193,6 +193,7 @@ graph LR
   sentinel --> branches
   sentinel --> cluster_gaps
   sentinel --> summarize_failures
+  sentinel --> contact_log
   sentinel --> dashboard_model
   sentinel --> flag_detector
   sentinel --> failure_feed

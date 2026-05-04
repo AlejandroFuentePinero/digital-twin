@@ -82,6 +82,13 @@ When a metric goes red, the matching **runbook** at the bottom of this doc tells
 - **What it proxies:** orientation only. Big shifts (e.g. TECHNICAL collapsing from 11% → 2%) suggest classifier drift; check `low_confidence_rate` and `confident_failure_rate` for confirmation.
 - **No threshold** — the "right" mix depends on traffic shape, not system health.
 
+#### `mean_classification_confidence`
+
+- **Definition:** `mean(record.classification_confidence for record in records)`. None on empty.
+- **What it measures:** average classifier confidence across the window.
+- **What it proxies:** classifier health. Direct read; pairs with the rate-style `low_confidence_rate` and `confident_failure_rate`.
+- **No threshold** — orientation. The thresholded `low_confidence_rate` and `confident_failure_rate` carry the alerting; this is for context.
+
 #### `low_confidence_rate(threshold=0.7)`
 
 - **Definition:** `count(classification_confidence < 0.7) / total`.
@@ -116,6 +123,13 @@ When a metric goes red, the matching **runbook** at the bottom of this doc tells
 - **What it proxies:** volume orientation only.
 - **No threshold.**
 
+#### `mean_turns_per_session`
+
+- **Definition:** `total_records / unique_sessions` — equivalent to `mean(Counter(session_id).values())`.
+- **What it measures:** average questions per session.
+- **What it proxies:** engagement. Plain-language companion to the median; both are useful but the mean is more sensitive to "one deeply-engaged session" outliers.
+- **No threshold** — orientation. The thresholded median (`turns_per_session_median`) carries the alerting.
+
 #### `turns_per_session_median`
 
 - **Definition:** `median(Counter(session_id).values())`.
@@ -124,12 +138,9 @@ When a metric goes red, the matching **runbook** at the bottom of this doc tells
 - **Thresholds:** healthy ≥ 2.0, warning ≥ 1.5, alert below. *Source:* informed guess; tune once we have a baseline of "good" sessions.
 - **Confidence:** noisy at low N. Pair with `contact_conversion_rate` before judging.
 
-#### `dropoff_by_turn`
+#### `dropoff_by_turn` (Session 39 removed from dashboard)
 
-- **Definition:** `Counter(turn_index)`.
-- **What it measures:** how many records exist at each `turn_index` across all sessions.
-- **What it proxies:** the per-turn shape behind the median. A steep drop t0 → t1 (e.g. 56 → 12) means most users leave after their first answer.
-- **No threshold** — orientation; the curve shape is the signal.
+- Was `Counter(turn_index)` formatted as `t0:56 · t1:12 · t2:5`. Operator wanted just the most-common drop-off turn rendered, not the full per-turn table. **Removed from the metric overview** and replaced with `mean_turns_per_session` above. The underlying property still exists on `DashboardModel.dropoff_by_turn` for direct callers.
 
 #### `contact_offer_rate`
 
@@ -143,20 +154,25 @@ When a metric goes red, the matching **runbook** at the bottom of this doc tells
 - **Definition:** `count(contact_provided == True) / count(contact_offered == True)`.
 - **What it measures:** the fraction of offers that converted to a submission.
 - **What it proxies:** form effectiveness. Rising → the offer copy / placement is working.
-- **Proxy caveats:** **systematically under-counts.** `contact_provided` is set on the InteractionRecord *after* the form was submitted, so a submission on the last turn of a session never gets counted (no subsequent turn to flip the flag). True conversion should cross-reference `data/logs/contacts.jsonl` joined on `session_id`. Treat the dashboard number as a lower bound until the cross-reference query lands.
+- **Proxy caveats (resolved Session 39):** the live writer sets `contact_provided=True` on the InteractionRecord *after* the form submit, so the same record never carries both `contact_offered=True` AND `contact_provided=True` — record-level intersection always returned 0%. **Now session-level + cross-referenced** with `contacts.jsonl` via `contact_log.read_provided_session_ids()` threaded into `DashboardModel.provided_session_ids`. A session counts as converted when *either* an in-log record carries `contact_provided=True` OR the session_id appears in `contacts.jsonl`. Live data: now reads correctly (50% / 3-of-6 sessions converted) instead of the broken 0%.
 - **Thresholds:** healthy ≥ 10%, warning ≥ 5%, alert below. *Source:* informed guess; revisit once N > 20 offers.
 - **Confidence:** **LOW at N < 20.** Render as `X/N (insufficient)` until volume rises.
 
 ### Tool use block
+
+#### `tool_call_count`
+
+- **Definition:** `sum(len(record.tool_calls) for record in records)` — total invocations across the window.
+- **What it measures:** raw volume of `fetch_project_readme` calls. Pairs with the rate-style uptake + success metrics for at-a-glance read.
+- **No threshold** — orientation. Volume context: a sudden drop is more useful read against the rate metrics.
 
 #### `technical_tool_uptake_rate`
 
 - **Definition:** `count(branch == "TECHNICAL" AND tool_calls != []) / count(branch == "TECHNICAL")`.
 - **What it measures:** the fraction of TECHNICAL turns that actually invoked `fetch_project_readme`.
 - **What it proxies:** whether the tool surface is being used as designed (LIMITATIONS::P8).
-- **Proxy caveats:** denominator is "all TECHNICAL," not "TECHNICAL warranting tool." Some TECHNICAL questions are answerable from the KB alone — those legitimately don't trigger a tool call. The metric undercounts "warranted uptake" and overcounts the denominator.
-- **Thresholds:** healthy ≥ 70%, warning ≥ 50%, alert below. *Source:* informed guess; live baseline 66.7% (warning).
-- **Confidence:** moderate; the denominator caveat is real but the trend is meaningful.
+- **Proxy caveats:** denominator is "all TECHNICAL," not "TECHNICAL warranting tool." Some TECHNICAL questions are answerable from the KB alone — meta-questions about the system, generic skills questions, follow-ups whose context is in scope. The metric undercounts "warranted uptake" and overcounts the denominator.
+- **No threshold (Session 39 demotion).** Was previously `healthy ≥ 70%, warning ≥ 50%`. Operator pointed out the metric definition is conceptually noisy — `all TECHNICAL` includes turns that legitimately don't need a tool call, producing false warnings at "normal" uptake levels (60% live). Demoted to orientation: the rate still renders for the operator, but no badge / no warning. A future fix would refine the denominator to count only TECHNICAL turns whose question names a specific project from `data/readmes/registry.json` (28-key registry-driven heuristic).
 
 #### `tool_call_success_rate`
 
