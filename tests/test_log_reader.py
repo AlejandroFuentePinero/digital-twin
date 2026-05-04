@@ -181,3 +181,83 @@ def test_read_tolerates_pre_issue_39_records_lacking_canary_fields(tmp_path):
     assert out[0].run_id is None
     assert out[0].replicate_index is None
     assert out[0].schema_version == "2", "explicit v2 stamp preserved"
+
+
+# ---------------------------------------------------------------------------
+# Smart-normalize: pre-v4 records carrying GAP_PHRASE read as event_type='gap'
+# ---------------------------------------------------------------------------
+
+
+def _record_with_answer(schema_version: str, answer: str, event_type: str = "answered") -> dict:
+    return _record() | {
+        "schema_version": schema_version,
+        "event_type": event_type,
+        "attempts": [
+            {"answer": answer, "is_acceptable": True, "guardrail_feedback": ""},
+        ],
+    }
+
+
+@pytest.mark.parametrize("schema_version", ["1", "2", "3"])
+def test_read_smart_normalizes_pre_v4_record_with_gap_phrase_to_event_type_gap(
+    schema_version, tmp_path
+):
+    """Pre-v4 records were written by the buggy producer (only answered/refused
+    emitted). Where the canonical GAP_PHRASE is present in the last accepted
+    answer, the read-time event_type is upgraded to 'gap' so live tabs see
+    the real outcome shape without backfilling on disk.
+
+    The rule keys on `schema_version != SCHEMA_VERSION`, not on a hard-coded
+    "3" — the audit generalized the PRD's v3-only rule because GAP_PHRASE has
+    been canonical across all schema versions and 8+ historical v1 records
+    contain it.
+    """
+    from rules import GAP_PHRASE
+
+    log_path = tmp_path / "interactions.jsonl"
+    answer = f"That's a great question. {GAP_PHRASE} Happy to discuss adjacent work."
+    legacy = _record_with_answer(schema_version, answer)
+    _write_jsonl(log_path, [legacy])
+
+    out = LocalReader(log_path).read()
+
+    assert out[0].event_type == "gap", (
+        f"v{schema_version} record carrying GAP_PHRASE must read as event_type='gap'"
+    )
+    assert out[0].schema_version == schema_version, "on-disk schema_version preserved"
+
+
+def test_read_does_not_apply_deflection_markers_to_pre_v4_records(tmp_path):
+    """Pre-v4 prompts didn't carry the DEFLECTION_MARKERS contract — the model
+    wasn't instructed to begin redirects with the canonical phrasing. We
+    therefore can't retroactively classify a pre-v4 marker-bearing answer as
+    'deflected' without false positives. Smart-normalize is GAP_PHRASE-only.
+    """
+    from rules import DEFLECTION_MARKERS
+
+    log_path = tmp_path / "interactions.jsonl"
+    answer = f"{DEFLECTION_MARKERS[0]} about Alejandro's work."
+    legacy = _record_with_answer("1", answer, event_type="answered")
+    _write_jsonl(log_path, [legacy])
+
+    out = LocalReader(log_path).read()
+
+    assert out[0].event_type == "answered", (
+        "DEFLECTION_MARKERS must not be retro-applied — pre-v4 prompts didn't enforce them"
+    )
+
+
+def test_read_passes_v4_records_through_without_normalize(tmp_path):
+    """v4 records carry the real producer-emitted event_type — the read path
+    must trust them and not second-guess. Even if the answer text contains
+    GAP_PHRASE (e.g. quoted in a discussion), the on-disk event_type wins."""
+    from rules import GAP_PHRASE
+
+    log_path = tmp_path / "interactions.jsonl"
+    answer = f"I once said \"{GAP_PHRASE}\" to a recruiter — then explained."
+    record = _record_with_answer("4", answer, event_type="answered")
+    _write_jsonl(log_path, [record])
+
+    out = LocalReader(log_path).read()
+
+    assert out[0].event_type == "answered", "v4 records must not be smart-normalized"

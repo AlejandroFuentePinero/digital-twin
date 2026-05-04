@@ -204,6 +204,7 @@ graph LR
   flag_detector --> interaction_log
   guardrail --> rules
   log_reader --> interaction_log
+  log_reader --> rules
   pipeline --> tool_loop
   pipeline --> branches
   pipeline --> classifier
