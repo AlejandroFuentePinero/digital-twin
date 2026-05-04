@@ -5,6 +5,55 @@
 
 ---
 
+## Session 31 (2026-05-04) — `#36` shipped: thresholds + WoW deltas + `docs/SENTINEL.md`
+
+**Status:** [`#36`](https://github.com/AlejandroFuentePinero/digital-twin/issues/36) (observability amplifier) closed locally. Suite **273 → 298** (+25 tests). New module `src/metric_status.py`. Sentinel's Health Overview now self-describes — every thresholded metric renders a colour-coded badge and (where a prior exists) a WoW arrow, and `docs/SENTINEL.md` carries the proxy-caveat / runbook reference the dashboard explicitly defers to. **Phase 4 first-glance triage surface complete.** Next on the path: `#30` (Trend Explorer with deployment markers, now unblocked since `#37`'s `git_sha` field is in the schema) ∥ `#31` (Failure Feed).
+
+### What shipped — code
+
+| Commit | Scope |
+|---|---|
+| `<this-session>` | `#36` — new `src/metric_status.py` (Threshold dataclass + THRESHOLDS table for 11 metrics + `metric_status`/`wow_delta` pure functions). `dashboard_model.for_prior_window(days)` for WoW comparison windows. `sentinel.format_panel` accepts `prior_model`; thresholded rows render inline badges + WoW arrows; orientation rows bare. `SENTINEL_CSS` mirrors `module_health`'s status-pill pattern. `_render_panels` helper centralises window+prior pairing. `metric_status` registered under "Tooling" in `system_map`. **`docs/SENTINEL.md` (~300 lines)** — four required sections (per-metric reference / trace runbooks / engagement caveats / operational caveats) with one-line per-metric specs spanning definition, what-it-measures vs what-it-proxies, proxy caveats, threshold sources, and low-N confidence notes. +20 tests in new `test_metric_status.py`, +4 in `test_sentinel.py`, +2 in `test_dashboard_model.py`. |
+
+### TDD slices
+
+- **Wave A — `metric_status` (1 slice, 10 tests)**: lower-is-better band classification + higher-is-better inversion + orientation None + unknown-name None + None-input None. Single small pure function; the issue's threshold table was the spec; one impl pass took all 10 tests green.
+- **Wave B — `wow_delta` (1 slice, 8 tests)**: lower-is-better up=degrading / down=improving; higher-is-better inversion; stable/horizontal arrow; None on missing prior; orientation skip; per-metric unit. WoWDelta dataclass + computation pulling polarity off the same Threshold table.
+- **Wave C — UI integration (4 slices)**: `for_prior_window` on `DashboardModel`; `format_panel(prior_model=...)` accepts current+prior; badges render inline for thresholded metrics; deltas render only when prior provided; orientation metrics render bare. Tests assert HTML span class presence (badge/no-badge per metric category) and arrow glyph presence.
+- **Wave D — `docs/SENTINEL.md`**: written as one document not test-driven, but a forcing-function test (`test_every_thresholded_metric_is_documented_in_sentinel_md`) asserts every key in THRESHOLDS appears verbatim in the doc — catches "added a metric, forgot to document it" drift on future changes.
+
+### Design choices
+
+- **`metric_status.py` as a separate module, not folded into `dashboard_model.py`.** The dashboard model is a pure aggregation surface; thresholds are policy. Splitting them lets future tuning (e.g. per-tenant thresholds, dynamic thresholds learned from the rolling window) land without touching aggregation. Mirror to ADR-0003's "Frame vs Substance" thinking applied at the metric layer.
+- **`Threshold` dataclass with `higher_is_better` flag, not separate "lower"/"higher" tables.** Polarity is per-metric, not per-band. Keeping it as a single field lets `wow_delta` interpret arrows uniformly without branching on which table to look in.
+- **Threshold table values inline-sourced.** Each entry's choice is justified in `docs/SENTINEL.md` against either the eval R2 baseline, the live-log inventory (Session 28), or an "informed guess" (flagged for re-tuning). No mystery numbers.
+- **WoWDelta carries unit, direction, arrow, and raw delta — not just one of those.** Lets `_format_delta_span` switch on unit ("pp" vs "ms") for display formatting and on direction ("improving" / "degrading" / "stable") for colour class, all from one immutable object. Cleaner than threading three return values through the formatter.
+- **`for_prior_window(days=None)` returns empty model, not None.** Matches `for_window(days=None)` returns self — both let callers avoid `if days is None` branching at the call site. Empty prior model means "no records to compare against"; rate metrics naturally return 0.0 (or None for denominator-zero ones), and the existing per-metric None-handling in `wow_delta` cleans up the rest.
+- **Smoke against live log shows all 7d deltas as ↑** — because the live log only spans 4 days (2026-05-01 → 05-03), the prior 7d window is empty. Mathematically correct (current - 0 = current); the doc's "low-N confidence" caveat is the right place to set the user's expectations until enough history accumulates. Resisted adding a "skip deltas if prior is empty" branch — would mask the low-N case rather than surface it.
+- **Forcing-function test instead of doc-content tests.** Tempted to test that each metric's per-metric section has 4 sub-bullets in a specific order. Rejected: brittle, breaks on every doc reorganise. The "every metric named in code is referenced in docs" check is enough to catch drift without coupling tests to prose structure.
+- **Inline HTML in markdown for badges.** Gradio's `gr.Markdown` renders raw HTML; reusing `module_health.py`'s `<span class="status-pill {key}">` pattern (with the same translucent-fill / bright-text colour treatment) keeps the visual language consistent across the two local dashboards. CSS lives in `SENTINEL_CSS`, passed to `gr.Blocks(css=...)`.
+- **Per-stage latency not all thresholded.** Only `latency_p95_total` carries a threshold; per-stage rows are read together as a diagnostic ("which stage drove the total?"). A per-stage threshold would add 4 redundant alerts when total alerts; a per-stage drill is what the operator needs once total fires, not a separate alarm to investigate.
+
+### Verified
+
+- `uv run pytest -q` → **298 passed** (273 → 298; +20 metric_status, +4 sentinel, +2 dashboard_model — minus the +1 doc forcing-function which counts inside metric_status).
+- Live runtime: `PYTHONPATH=src uv run python -c "from sentinel import build_app; app = build_app()"` → boots cleanly.
+- Live smoke (Session 28's 85 records, all ≤ 4 days old):
+  - `gap_rate=9.4%` → **healthy** (just under 10% boundary).
+  - `refusal_rate=1.2%` → **warning** (above 1%).
+  - `guardrail_rejection_rate=10.6%` → **healthy**.
+  - `low_confidence_rate=5.9%` → **healthy**; `confident_failure_rate=15.3%` → **alert** (the headline misroute signal Session 28 surfaced — well above the 7% warning).
+  - `technical_tool_uptake=66.7%` → **warning** (in 50–70% band per LIMITATIONS::P8 baseline).
+  - `turns_per_session_median=1.0` → **alert** (below 1.5 warning); `contact_conversion_rate=0.0%` → **alert**. Both flagged with engagement-caveats interpretation in the doc — alert state ≠ automatic problem given low-N + recruiter-leaves-after-answer pattern.
+
+### Outstanding
+
+- **Push the local commits** — Sessions 28+29+30 + this session's `#36` commit are local; `main` push is harness-protected.
+- **Strip `needs-triage`** from `#36` (this session) and from carry-over `#38` `#30` `#31`.
+- **Next: `#30` (Trend Explorer with deployment markers) ∥ `#31` (Failure Feed)** — both unblocked. `#30` reads `git_sha` from `#37`'s schema additions; `#31` reads typed records via `LocalReader` from `#28`. Either can ship next; user choice.
+
+---
+
 ## Session 30 (2026-05-04) — `#35` shipped: Health Overview v2 (14 metrics, 5 thematic blocks, Global window)
 
 **Status:** [`#35`](https://github.com/AlejandroFuentePinero/digital-twin/issues/35) (Panel 1 v2) closed locally. Suite **252 → 273** (+21 tests). Phase 4 progress: Sentinel's Health Overview now covers all 9 failure modes and 3 orientation signals — first-glance triage surface complete pre-thresholds. Next on the path: `#36` (thresholds + WoW deltas + `docs/SENTINEL.md` proxy caveats / runbooks).

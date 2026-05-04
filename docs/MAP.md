@@ -137,6 +137,7 @@ graph LR
   subgraph sg_tooling["Tooling"]
     direction TB
     dashboard_model["dashboard_model.py"]:::tooling
+    metric_status["metric_status.py"]:::tooling
     module_health["module_health.py"]:::tooling
     sample_chunks["sample_chunks.py"]:::tooling
     sentinel["sentinel.py"]:::tooling
@@ -181,6 +182,7 @@ graph LR
   pipeline --> tools
   sentinel --> dashboard_model
   sentinel --> log_reader
+  sentinel --> metric_status
   tools --> tool_loop
   app --> ext_Gradio__UI_
   classifier --> ext_OpenAI___Anthropic_API__via_LiteLLM_
@@ -222,6 +224,7 @@ graph LR
 | `ingest.py` | Ingest the digital twin knowledge base into ChromaDB. |
 | `interaction_log.py` | Enriched per-turn interaction log (ADR-0002 / issue #13 step 7). |
 | `log_reader.py` | Sentinel-facing typed reader over the canonical interaction log (issue #28). |
+| `metric_status.py` | Per-metric thresholds + week-over-week deltas — Sentinel's observability |
 | `module_health.py` | Local Gradio dashboard showing pass/fail status of digital-twin tests. |
 | `pipeline.py` | Per-turn orchestrator (ADR-0003). |
 | `profile.py` | Always-on profile loader (the Frame, per ADR-0001 / ADR-0003). |

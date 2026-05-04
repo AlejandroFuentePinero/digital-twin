@@ -161,6 +161,32 @@ def test_latency_percentiles_with_single_record_return_that_value():
     assert model.latency_p95 == 1234
 
 
+def test_for_prior_window_returns_records_in_the_immediately_preceding_window():
+    """for_prior_window(days=N) returns records timestamped between (now - 2N) and (now - N)
+    days ago — exactly the window before the one for_window(days=N) covers. Drives WoW deltas.
+    Per issue #36."""
+    now = datetime.now(timezone.utc)
+    too_old = _record(timestamp=(now - timedelta(days=20)).isoformat(), turn_index=0)        # outside (older than 14d)
+    in_prior = _record(timestamp=(now - timedelta(days=10)).isoformat(), turn_index=1)       # 7-14 days ago — IN prior
+    in_prior_2 = _record(timestamp=(now - timedelta(days=12)).isoformat(), turn_index=2)     # also IN prior
+    in_current = _record(timestamp=(now - timedelta(days=3)).isoformat(), turn_index=3)      # in current 7d — NOT prior
+    model = DashboardModel([too_old, in_prior, in_prior_2, in_current])
+
+    prior = model.for_prior_window(days=7)
+    assert isinstance(prior, DashboardModel)
+    assert {r.turn_index for r in prior.records} == {1, 2}
+
+
+def test_for_prior_window_with_days_none_returns_empty_dashboard():
+    """for_prior_window(days=None) — no prior for the Global window. Returns an empty model
+    so consumers can ask for deltas uniformly without special-casing 'Global'."""
+    now = datetime.now(timezone.utc)
+    model = DashboardModel([_record(timestamp=now.isoformat())])
+    prior = model.for_prior_window(days=None)
+    assert isinstance(prior, DashboardModel)
+    assert prior.total_interactions == 0
+
+
 def test_for_window_filters_records_to_last_n_days():
     """for_window(days=N) returns a new DashboardModel containing only records within the last N days."""
     now = datetime.now(timezone.utc)

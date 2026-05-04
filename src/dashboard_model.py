@@ -173,3 +173,19 @@ class DashboardModel:
             return self
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         return DashboardModel([r for r in self.records if r.timestamp >= cutoff])
+
+    def for_prior_window(self, days: int | None) -> "DashboardModel":
+        """Records from the window immediately preceding `for_window(days)`.
+
+        for_prior_window(7) → records timestamped between (now - 14d) and
+        (now - 7d). Drives week-over-week deltas in Sentinel (issue #36).
+        Returns an empty model for `days=None` (Global has no prior).
+        """
+        if days is None:
+            return DashboardModel([])
+        now = datetime.now(timezone.utc)
+        prior_start = (now - timedelta(days=2 * days)).isoformat()
+        prior_end = (now - timedelta(days=days)).isoformat()
+        return DashboardModel(
+            [r for r in self.records if prior_start <= r.timestamp < prior_end]
+        )

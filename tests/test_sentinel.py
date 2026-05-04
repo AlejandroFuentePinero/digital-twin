@@ -91,6 +91,78 @@ def test_format_panel_renders_none_metrics_as_em_dash():
     assert "—" in panel, "missing data should render as the em-dash placeholder"
 
 
+def test_format_panel_renders_badge_for_thresholded_metric():
+    """A thresholded metric (e.g. gap_rate) renders an inline status pill.
+    Per issue #36: use the existing status-pill CSS pattern from module_health."""
+    from interaction_log import InteractionRecord
+
+    # Build a model where gap_rate is in the alert band (>15%) — three of four records gap.
+    bad_record = _record_dict()
+    bad_record["knew_answer"] = False
+    records = [
+        InteractionRecord.model_validate(bad_record),
+        InteractionRecord.model_validate(bad_record),
+        InteractionRecord.model_validate(bad_record),
+        InteractionRecord.model_validate(_record_dict()),
+    ]
+    panel = format_panel("Global", DashboardModel(records))
+
+    # Badge HTML appears next to the gap rate row; the alert class is present
+    assert "status-pill" in panel
+    assert "alert" in panel  # gap_rate at 75% is well above 15% warning band
+
+
+def test_format_panel_does_not_render_badge_for_orientation_metrics():
+    """Orientation metrics (unique_sessions, branch_distribution, multi_label_rate, total)
+    have no threshold and must not get a badge — false alarms ruin the dashboard."""
+    from interaction_log import InteractionRecord
+
+    records = [InteractionRecord.model_validate(_record_dict())]
+    panel = format_panel("Global", DashboardModel(records))
+
+    # Find the unique-sessions line and assert it has no status-pill on it
+    lines = panel.splitlines()
+    sessions_line = next(line for line in lines if "Unique sessions" in line)
+    assert "status-pill" not in sessions_line, (
+        "Unique sessions is volume orientation — no badge"
+    )
+    branches_line = next(line for line in lines if "Branch distribution" in line)
+    assert "status-pill" not in branches_line
+
+
+def test_format_panel_renders_wow_delta_when_prior_model_provided():
+    """When a prior-window model is passed, thresholded metrics render an inline WoW arrow + delta."""
+    from interaction_log import InteractionRecord
+
+    bad = _record_dict()
+    bad["knew_answer"] = False
+    current = DashboardModel([InteractionRecord.model_validate(bad)] * 4)        # 100% gap
+    prior = DashboardModel([InteractionRecord.model_validate(_record_dict())] * 4)  # 0% gap
+
+    panel = format_panel("7d", current, prior_model=prior)
+
+    # WoW arrow appears + 'pp' unit visible somewhere on the gap rate line
+    lines = panel.splitlines()
+    gap_line = next(line for line in lines if "Gap rate" in line)
+    assert "↑" in gap_line, "rising gap rate must show ↑"
+    assert "pp" in gap_line, "delta unit appears in line"
+
+
+def test_format_panel_omits_wow_delta_when_prior_model_is_none():
+    """No prior model (e.g. Global window) → no delta rendered. Badges still appear."""
+    from interaction_log import InteractionRecord
+
+    bad = _record_dict()
+    bad["knew_answer"] = False
+    current = DashboardModel([InteractionRecord.model_validate(bad)] * 4)
+
+    panel = format_panel("Global", current, prior_model=None)
+
+    # Badge present, but no WoW arrows
+    assert "status-pill" in panel
+    assert "↑" not in panel and "↓" not in panel
+
+
 def test_global_window_appears_in_window_set_and_today_does_not():
     """Per issue #35: WINDOWS = [(Global, None), (30d, 30), (7d, 7)] — Today removed
     (low signal in low-traffic regime), Global added (first-glance all-time picture)."""
