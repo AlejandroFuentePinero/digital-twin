@@ -287,20 +287,22 @@ The semantic shape — "give me a fact about a specific named publication / proj
 **Why this is logged but not patched here:**
 
 - Issue #2's scope is measurement, not classifier tuning.
-- The fix is a classifier-prompt tweak — adding a clear example for "what is the title of paper X" / "name a specific detail of project Y" — and ideally tracked in its own classifier-iteration issue with TDD coverage.
-- Lowering the 0.5 confidence threshold across the board is *not* the right fix — it would let genuinely-confused borderline cases route to wrong specific branches more often. Targeted prompt tightening is safer.
+- A reactive classifier-prompt tweak (adding "what is the title of paper X" / "name a specific detail of project Y" as positive examples) was scoped in #27 and **deliberately rejected on 2026-05-04** — it is prescriptive overfitting to three eval cases, not a structural fix. Direct violation of `feedback_accept_uncertainty_over_constraint`.
+- A defensive universal-rule promotion (promoting `deflection` and `calibration_ladder` to `UNIVERSAL`) was also scoped in #27 and **deliberately rejected on 2026-05-04** — it contradicts `P7`'s explicit architectural rationale (none of P7's trip-wires have fired), `DEFLECTION`'s body is coupled to `## personal_stories` machinery and is incoherent in branches that don't carry that section, and `CALIBRATION_LADDER`'s body targets skill-shape probes specifically.
+- Lowering the 0.5 confidence threshold across the board is *not* the right fix — it would let genuinely-confused borderline cases route to wrong specific branches more often.
+- Honest reframing: a paper title is a factual lookup about a publication, not a "deep technical question about projects, methods, or code" by the current TECHNICAL branch definition. The classifier is correctly uncertain; GENERIC + retrieval is the right home. The bottleneck (if any) is KB-side — whether `publications.md` chunks surface canonical titles verbatim and rank-surface for title-shape queries — not classifier-side.
 
 **Trip-wires (any one promotes priority):**
 
-1. v6 (post-classifier-tuning) eval shows specific-paper questions still routing GENERIC.
-2. Sentinel (Phase 4) flags `category="title fetch" AND branch="GENERIC" AND attempts > 1` as a recurring pattern in production logs.
-3. R3 or future smoke-test surfaces a recruiter probe asking for a paper title and getting a generic deflection.
+1. Sentinel (Phase 4) flags `category="title fetch" AND branch="GENERIC" AND attempts > 1` as a recurring pattern in production logs over a meaningful sample.
+2. R3 or future smoke-test surfaces a recruiter probe asking for a paper title and getting a generic deflection — repeated shape, not a single instance.
+3. A future eval round shows the failure shape *expanding* (e.g. 3 → 6 specific-publication failures, or sibling shapes emerging where the system fabricates rather than emits the gap phrase).
 
 **Action when a trip-wire fires:**
 
-- Add an explicit example to `classifier.SYSTEM_PROMPT` for the "name-a-specific-fact-about-paper-X" shape under the TECHNICAL branch description.
-- Pin a `tests/test_classifier.py` case for this question shape returning TECHNICAL with confidence ≥ 0.7.
-- Re-run eval; expect lift on the 3 affected questions plus any sibling shapes.
+- First investigate KB-side: are the canonical titles present verbatim in `publications.md` chunks, and do those chunks rank-surface for the failing question shapes? Rerank-test before any classifier change.
+- Only if KB-side investigation is clean, revisit classifier scope — but as a structural redefinition of TECHNICAL's boundary (does it cover factual-lookup-about-named-publication?), not as example stuffing.
+- If misroute defense is still wanted at that point, the right factoring per `P7` is splitting `DEFLECTION` into a portable `offer_contact` half rather than promoting the whole rule.
 
 **Companion observability:** Sentinel can surface this as `category=direct_fact AND branch=GENERIC AND classification_confidence < 0.5 AND question_mentions_paper_or_project()` — a boolean signal for misroute-to-fallback patterns. Phase 4 work.
 
