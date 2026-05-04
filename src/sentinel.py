@@ -349,6 +349,23 @@ body, .gradio-container {
 .flag-card .flag-headline { font-weight: 500; color: var(--alert); }
 .flag-card .flag-detail   { font-size: 0.88em; color: var(--text-secondary); margin-top: 2px; }
 
+/* Per-flag row: card on the left, ghost destination link on the right.
+   Tight gap so the link reads as part of the card, not floating chrome. */
+.flag-row { gap: 0 !important; align-items: stretch !important; }
+.flag-link button {
+    background: transparent !important;
+    border: none !important;
+    color: var(--text-secondary) !important;
+    font-size: 12px !important;
+    padding: 0 14px !important;
+    height: 100% !important;
+    text-align: right !important;
+    white-space: nowrap;
+}
+.flag-link button:hover {
+    color: var(--text-primary) !important;
+}
+
 /* ---- Refresh banner (LLM batch failure) ---- */
 .refresh-banner {
     border: 1px solid var(--warning);
@@ -1321,24 +1338,36 @@ FLAGS_EMPTY_PLACEHOLDER = (
     "weeks render no flags by design._"
 )
 
+# Human-readable destination labels for flag click handlers — operator sees
+# "→ Failures" not "→ failure_feed". Maps the FlagDetector targets onto
+# the actual tab names (failure_feed and gap_clusters both live on Failures).
+_FLAG_TARGET_LABEL: dict[str, str] = {
+    "failure_feed": "Failures",
+    "gap_clusters": "Failures",
+    "trend": "Trends",
+}
+
+
+def format_flag_card(flag: Flag) -> str:
+    """One flag card's HTML. Used by `build_app` to populate the per-flag
+    slot rows."""
+    headline = html.escape(flag.headline)
+    detail = html.escape(flag.detail)
+    return (
+        "<div class='flag-card'>"
+        f"<div class='flag-headline'>{headline}</div>"
+        f"<div class='flag-detail'>{detail}</div>"
+        "</div>"
+    )
+
 
 def format_flags_summary(flags: list[Flag]) -> str:
-    """HTML cards for each flag's headline + detail. The Investigate buttons
-    are separate gr.Button instances built in build_app — this string is
-    pure prose, no anchor links."""
+    """All flag cards joined into one HTML block. Kept for the empty-state
+    rendering + as a back-compat surface for callers that only want the
+    visual cards (no click handlers)."""
     if not flags:
         return FLAGS_EMPTY_PLACEHOLDER
-    cards: list[str] = []
-    for flag in flags:
-        headline = html.escape(flag.headline)
-        detail = html.escape(flag.detail)
-        cards.append(
-            "<div class='flag-card'>"
-            f"<div class='flag-headline'>{headline}</div>"
-            f"<div class='flag-detail'>{detail}</div>"
-            "</div>"
-        )
-    return "\n".join(cards)
+    return "\n".join(format_flag_card(f) for f in flags)
 
 
 def _build_flags(model: DashboardModel) -> list[Flag]:
@@ -1813,10 +1842,46 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
         with gr.Tabs() as tabs:
             # ---- Metrics tab ----------------------------------------------
             with gr.Tab("Metrics", id=TAB_METRICS):
-                gr.Markdown("## Flags")
-                flags_md = gr.Markdown(format_flags_summary(_build_flags(model)))
+                gr.Markdown("<div class='section-header'>Flags</div>")
+                # Empty-state markdown shows when no flags fire.
+                initial_flags = _build_flags(model)
+                flags_empty_md = gr.Markdown(
+                    "" if initial_flags else FLAGS_EMPTY_PLACEHOLDER
+                )
+                # Pre-allocated per-flag slots: card markdown + ghost
+                # destination link side by side. Slots beyond the active flag
+                # count render hidden.
+                flag_rows: list[gr.Row] = []
+                flag_card_mds: list[gr.Markdown] = []
+                flag_link_btns: list[gr.Button] = []
+                for i in range(MAX_FLAGS_RENDERED):
+                    if i < len(initial_flags):
+                        f = initial_flags[i]
+                        card_html = format_flag_card(f)
+                        link_label = f"→ {_FLAG_TARGET_LABEL.get(f.target, 'Investigate')}"
+                        slot_visible = True
+                    else:
+                        card_html = ""
+                        link_label = ""
+                        slot_visible = False
+                    with gr.Row(elem_classes=["flag-row"], visible=slot_visible) as row:
+                        flag_card_mds.append(gr.Markdown(card_html))
+                        with gr.Column(scale=0, elem_classes=["flag-link"]):
+                            flag_link_btns.append(
+                                gr.Button(link_label, size="sm")
+                            )
+                    flag_rows.append(row)
+                # Per-slot target tab state — read by the click handlers to
+                # know where to jump.
+                flag_target_state = gr.State(
+                    [
+                        FLAG_TARGET_TAB.get(initial_flags[i].target, TAB_METRICS)
+                        if i < len(initial_flags) else ""
+                        for i in range(MAX_FLAGS_RENDERED)
+                    ]
+                )
 
-                gr.Markdown("## Health overview")
+                gr.Markdown("<div class='section-header'>Health overview</div>")
                 metrics_md = gr.Markdown(
                     format_metrics_overview(models, priors, DISPLAY_MODE_DEFAULT)
                 )
@@ -1995,11 +2060,42 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
             feed_summary_html = format_feed_summary(
                 failure_rows, failure_mode_counts(records),
             )
+
+            # Per-flag slot updates: row visible only when its slot has a
+            # flag; card markdown holds the card HTML; link button shows
+            # destination ("→ Failures") with the matching tab id queued in
+            # flag_target_state for the click handler to read.
+            row_updates: list = []
+            card_updates: list = []
+            link_updates: list = []
+            target_state: list[str] = []
+            for i in range(MAX_FLAGS_RENDERED):
+                if i < len(flags):
+                    f = flags[i]
+                    row_updates.append(gr.update(visible=True))
+                    card_updates.append(format_flag_card(f))
+                    link_updates.append(gr.update(
+                        visible=True,
+                        value=f"→ {_FLAG_TARGET_LABEL.get(f.target, 'Investigate')}",
+                    ))
+                    target_state.append(FLAG_TARGET_TAB.get(f.target, TAB_METRICS))
+                else:
+                    row_updates.append(gr.update(visible=False))
+                    card_updates.append("")
+                    link_updates.append(gr.update(visible=False, value=""))
+                    target_state.append("")
+
+            flags_empty_html = "" if flags else FLAGS_EMPTY_PLACEHOLDER
+
             return [
                 f"<div class='page-meta'>{format_header(source, new_loaded_at)}</div>",
                 _autorefresh_banner([cluster_msg, summary_msg]),
                 format_status_banner(_status_summary(headline)),
-                format_flags_summary(flags),
+                flags_empty_html,
+                *row_updates,
+                *card_updates,
+                *link_updates,
+                target_state,
                 format_metrics_overview(new_models, new_priors, DISPLAY_MODE_DEFAULT),
                 feed_summary_html,
                 empty_html,
@@ -2015,7 +2111,11 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
             inputs=[branch_dd, mode_dd, window_dd, search_in],
             outputs=[
                 header_md, banner_md, status_md,
-                flags_md,
+                flags_empty_md,
+                *flag_rows,
+                *flag_card_mds,
+                *flag_link_btns,
+                flag_target_state,
                 metrics_md,
                 feed_summary_md,
                 feed_empty_md,
@@ -2025,6 +2125,23 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 cluster_md, deflection_md,
             ],
         )
+
+        # Per-flag click → switch to the target tab. Each button reads the
+        # current flag_target_state (a list of N tab ids) at its slot index.
+        def _make_flag_click(slot_index: int):
+            def _handler(targets):
+                target = targets[slot_index] if slot_index < len(targets) else ""
+                if not target:
+                    return gr.update()
+                return gr.Tabs(selected=target)
+            return _handler
+
+        for i, btn in enumerate(flag_link_btns):
+            btn.click(
+                fn=_make_flag_click(i),
+                inputs=[flag_target_state],
+                outputs=[tabs],
+            )
 
         # Failure feed filter changes → re-populate accordions + summary
         def _refresh_feed(branch, mode, window_label, search):
