@@ -50,7 +50,7 @@ flowchart TD
   TOOL -.->|"tool-fetched content<br/>recomposed into judge prompt<br/>so guardrail sees what model grounded in<br/>(LIMITATIONS::R1)"| JUDGE
   GEN --> JUDGE["Guardrail — Claude Sonnet 4.6<br/>same composed prompt + answer<br/>distinct model family"]:::llm
   JUDGE --> ACCEPT{"is_acceptable?"}:::decision
-  ACCEPT -->|yes| LOG["InteractionLog append (JSONL)<br/>branch, classifier_labels, attempts,<br/>retrieved_chunks, tool_calls (with attempt_index),<br/>latency_ms, contact_offered, contact_provided"]:::sideEffect
+  ACCEPT -->|yes| LOG["InteractionLog append (JSONL, schema v3)<br/>branch, classifier_labels, attempts,<br/>retrieved_chunks, tool_calls (with attempt_index),<br/>latency_ms, contact_offered, contact_provided,<br/>is_canary, run_id, replicate_index"]:::sideEffect
   ACCEPT -->|"no — rejection feedback<br/>wraps into next system prompt"| RETRY{"attempts &lt; MAX_ATTEMPTS = 3?"}:::decision
   RETRY -->|yes| GEN
   RETRY -->|no| REFUSE["CANNED_REFUSAL<br/>polite decline + contact email"]:::refusal
@@ -70,6 +70,14 @@ flowchart TD
   STATE -.->|"should_show_contact_form()<br/>= turn≥3 OR gap OR explicit, AND NOT contact_provided"| FORM
   FORM -->|"on submit"| CONTACTS["ContactLog append<br/>data/logs/contacts.jsonl<br/>session_id (join key) + email + name + note"]:::sideEffect
   FORM -.->|"latches contact_provided=True<br/>(form hides forever for this session)"| STATE
+
+  %% Canary side-channel (#39) — runs via CLI, not auto-refresh.
+  %% _CanaryLogWriter wraps LogWriter to inject is_canary/run_id/replicate_index.
+  %% Records land in the same interactions.jsonl as live records; DashboardModel
+  %% filters them out by default (include_canary=False) so live tabs are unaffected.
+  CANARY[/"canary_runner.py CLI<br/>50 questions × 3 replicates<br/>--freeze-baseline → baseline.json"/]:::io
+  CANARY -.->|"each replicate calls<br/>pipeline.run() through<br/>_CanaryLogWriter wrapper"| GEN
+  CANARY -.->|"is_canary=True,<br/>shared run_id, replicate_index"| LOG
 ```
 
 ## Module graph
@@ -137,6 +145,10 @@ graph LR
 
   subgraph sg_tooling["Tooling"]
     direction TB
+    canary_baseline["canary_baseline.py"]:::tooling
+    canary_corpus["canary_corpus.py"]:::tooling
+    canary_drift["canary_drift.py"]:::tooling
+    canary_runner["canary_runner.py"]:::tooling
     cluster_gaps["cluster_gaps.py"]:::tooling
     dashboard_model["dashboard_model.py"]:::tooling
     failure_feed["failure_feed.py"]:::tooling
@@ -169,6 +181,14 @@ graph LR
   app --> rules
   app --> session_state
   app --> tools
+  canary_baseline --> interaction_log
+  canary_corpus --> branches
+  canary_corpus --> interaction_log
+  canary_drift --> canary_corpus
+  canary_drift --> interaction_log
+  canary_runner --> canary_baseline
+  canary_runner --> canary_corpus
+  canary_runner --> interaction_log
   cluster_gaps --> failure_feed
   cluster_gaps --> interaction_log
   composer --> branches
@@ -193,7 +213,11 @@ graph LR
   pipeline --> tools
   sentinel --> branches
   sentinel --> cluster_gaps
+  sentinel --> canary_runner
   sentinel --> summarize_failures
+  sentinel --> canary_baseline
+  sentinel --> canary_corpus
+  sentinel --> canary_drift
   sentinel --> contact_log
   sentinel --> dashboard_model
   sentinel --> flag_detector
@@ -238,6 +262,10 @@ graph LR
 |---|---|
 | `app.py` | Gradio chat interface for the digital twin. |
 | `branches.py` | Branch registry for classify-then-route orchestration (ADR-0003). |
+| `canary_baseline.py` | Canary baseline pointer — frozen golden run_id (issue #39). |
+| `canary_corpus.py` | Canary corpus — pure data inventory (issue #39). |
+| `canary_drift.py` | Canary drift detector — pure functions over canary records (issue #39). |
+| `canary_runner.py` | Canary runner — replays the corpus through the current Pipeline (issue #39). |
 | `classifier.py` | Branch classifier (ADR-0003). |
 | `cluster_gaps.py` | Gap-clustering batch (issue #32). |
 | `composer.py` | Prompt composer — assembles per-branch system prompts (ADR-0003). |

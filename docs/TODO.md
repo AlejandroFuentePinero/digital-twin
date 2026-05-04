@@ -3,16 +3,12 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-04 (Session 41 — Trends bar-chart redesign + UX polish + over-engineering audit; canary PRD #39 stays the locked next move)
-**Current phase:** **Phase 4 complete** (all 11 issues closed). **Phase 4.5 polish complete** across Sessions 40-41. Suite at **416 passing**.
-
-**Honest audit at end of Session 41:** dashboard polish past diminishing returns for current data volume (~30 records/day). The live aggregate metrics are statistically too noisy on most surfaces; the actual blind spot is **specific-question quality regressions** which canary (#39) addresses. **Stop dashboard polish; build canary; run Phase 5; tune from what Phase 5 surfaces.** See DECISIONS.md Session 41 for the full audit.
-
-**Phase 1 + Phase 2 + Phase 3 complete.**
+**Last updated:** 2026-05-04 (Session 42 — `#39` implementation complete; baseline establishment deferred on Anthropic credit exhaustion)
+**Current phase:** **Phase 4.5 + canary (#39) implementation complete; baseline pending.** Suite at **460 passing**.
 
 **Locked next-step order:**
-1. **Build canary set + drift detector** — Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39). The dashboard cannot catch regressions on specific recruiter questions without it; aggregate metrics on long-tail traffic will trail real regressions by weeks.
-2. **Run Phase 5** (break the live system) against canary + dashboard. Use what surfaces to inform any further dashboard work.
+1. **Establish canary benchmark** — re-run `uv run python src/canary_runner.py --freeze-baseline` once Anthropic credits are restored. The first attempt (Session 42) crashed at question 26/50 on `400 Bad Request — credit balance too low`; 76 orphan records sit under `run_id=run-20260504-115055-336112`, `baseline.json` was never written. **Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39) stays open** until this step completes. See `LIMITATIONS::P14` for the partial-batch failure mode + recovery procedure.
+2. **Run Phase 5** (break the live system) against canary + dashboard. **Blocked on step 1.** Plan: deliberately introduce regressions in the pipeline; check whether the canary catches what the dashboard misses, and what the dashboard catches that canary doesn't. Iterate dashboard + canary corpus from real failure signals — not from polish instinct.
 3. **Iterate dashboard from Phase 5 findings**, not from polish instinct.
 
 ---
@@ -164,6 +160,26 @@ Two-session arc: Session 40 added 5 load-bearing metric surfaces + published the
 - [x] **Time-period column headers** bigger + less faded.
 - [x] **Severity-tinted backgrounds** on every metric row (warning amber, healthy green, orientation gray) — same density as alert rows; only ribbon colour + bg hue differ.
 - [x] **Honest over-engineering audit** — operator-triggered evaluation. Outcome: stop dashboard polish, build canary, run Phase 5, iterate from real failures. See DECISIONS.md Session 41.
+
+### Phase 4.5 canary (Session 42 — `#39` shipped)
+
+50-question canary corpus + 5-drift-kind detector + Sentinel Canary tab. Closes the specific-question-regression blind spot identified in the Session 41 audit.
+
+- [x] **Schema bump v2 → v3** on `InteractionRecord`: `is_canary`, `replicate_index`, `run_id` (all default to live-record shape so legacy v1/v2 records still parse).
+- [x] **`DashboardModel` filtering** — `include_canary` / `only_canary` flags filter at construction. Default-off so live tabs never see canary records. New canary-only methods: `branch_match_rate(corpus)` + `tool_uptake_on_warranted(corpus)` (clean denominator fix for `LIMITATIONS::P8`).
+- [x] **`src/canary_corpus.py`** — `CanaryQuestion` + `load_canaries()` with branch-validation as a forcing function.
+- [x] **`data/canaries/corpus.json`** — 50 curated questions audited line-by-line against profile.md + KB + READMEs. Mixes pass-aimed / gap-aimed / calibration-aimed / refusal-aimed probes across all 5 branches.
+- [x] **`src/canary_baseline.py`** — pointer storage at `data/canaries/baseline.json` (`freeze_baseline` / `read_baseline` / `resolve_baseline_records`). Cold-start safe (missing/stale pointer degrades to `None` / `[]`).
+- [x] **`src/canary_drift.py`** — pure detector. 5 drift kinds × 2 severity tiers (branch_changed major, event_type_changed major, retry_depth_changed minor/major at 1↔3+, chunk_set_changed minor [Jaccard 0.4-0.7), major <0.4, latency_p95_regression minor >25%, major >50%). Stratified summary by branch + category.
+- [x] **`src/canary_runner.py`** — CLI orchestrator + `_CanaryLogWriter` injecting `is_canary` / `run_id` / `replicate_index`. Pipeline-factory injection seam for tests. Flags: `--replicates`, `--corpus`, `--freeze-baseline`.
+- [x] **Sentinel Canary tab** between Trends and Failures: drift summary banner (benchmark + latest-run dates with sha attribution), drift flag cards (severity-styled), per-question drift table (drifting-only with toggle), Re-baseline button.
+- [x] **Auto-refresh deliberately not wired.** `ensure_fresh_canaries` exists as a helper but `build_app` does not call it on launch. Operator triggers the batch via CLI on their cadence (50q × 3 replicates ≈ 30 min, ~$1.50/run). Memory pinned: `feedback_canary_manual_run.md`.
+
+**Deferred from Phase 4.5 canary, re-open if Phase 5 surfaces demand:**
+
+- Inline sparkline tables for the 3 health blocks on the Canary tab. `render_sparkline` helper exists; the matplotlib-PNG-base64-in-table renderer is the missing piece. Low priority until the operator has seen real drift signals and decides whether sparklines are load-bearing.
+- LLM-as-judge `answer_drifted` flag kind — defer until keyword matching against `expected_keywords` proves too brittle in practice.
+- Cost tracking on canary runs (`tokens_in`, `tokens_out`, USD) — parallel concern, separate ticket.
 
 ### Explicitly punted as YAGNI (reopen if signal demands)
 

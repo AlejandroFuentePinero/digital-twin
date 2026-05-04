@@ -242,6 +242,102 @@ The Flags panel sits above Panel 1 and surfaces three automatically-detected ano
 
 ---
 
+## Canary tab (Session 42)
+
+Drift-focused panel between Trends and Failures. Closes the specific-question-regression blind spot the Session 41 audit identified — aggregate metrics on long-tail traffic miss regressions buried inside categories that aren't being asked, and at ~30 records/day the dashboard cannot catch them.
+
+### How it works
+
+A 50-question canary corpus (`data/canaries/corpus.json`) is replayed through the live pipeline N=3 replicates per question. Each replay produces `InteractionRecord`s tagged `is_canary=True` and writes to the canonical `data/logs/interactions.jsonl` alongside live records. A frozen golden baseline (a designated past run) is the reference; drift fires per-question when the current run's aggregate diverges.
+
+> **Status (2026-05-04):** Implementation shipped Session 42; **baseline not yet frozen.** The first establishment batch crashed on Anthropic API credit exhaustion at question 26/50 (`LIMITATIONS::P14`). 76 orphan canary records sit under `run_id=run-20260504-115055-336112`; no `baseline.json` exists. The Canary tab renders the cold-start state until the batch is re-run with credits restored: `uv run python src/canary_runner.py --freeze-baseline`.
+
+### Live vs canary separation
+
+Live and canary records share one file. The discriminator is the `is_canary` schema flag:
+
+| Surface | Constructor | Sees |
+|---|---|---|
+| Metrics / Trends / Failures | `DashboardModel(records)` (default) | live records only (`is_canary=False`) |
+| Canary tab | `DashboardModel(records, include_canary=True, only_canary=True)` | canary records only (`is_canary=True`) |
+| `cluster_gaps.run_batch` | filters `is_canary` before extraction | live records only |
+| `summarize_failures.run_batch` | filters `is_canary` before group selection | live records only |
+
+Legacy v1/v2 records on disk (no `is_canary` field at all) parse with the default `is_canary=False` — they continue flowing through the live tabs unchanged. Locked by `tests/test_log_reader.py::test_read_tolerates_pre_issue_39_records_lacking_canary_fields`.
+
+The two LLM-calling batch processors (`cluster_gaps`, `summarize_failures`) read the canonical log directly via `LocalReader().read()` rather than through `DashboardModel`, so they need their own filter. Forcing functions: `tests/test_cluster_gaps.py::test_run_batch_excludes_canary_records_from_clustering` and `tests/test_summarize_failures.py::test_run_batch_excludes_canary_records_from_every_group` — both fail loudly if a future refactor drops the filter.
+
+### Drift summary banner
+
+```
+N major · M minor · benchmark YYYY-MM-DD (sha {abc1234}) → latest canary run YYYY-MM-DD (sha {def5678})
+```
+
+- **N major / M minor** — flag counts from `detect_drift(latest_run, baseline_run, corpus)`.
+- **benchmark date + sha** — when the baseline was frozen and on which commit.
+- **latest run date + sha** — when the most recent canary batch ran and on which commit. SHA pair gives drift attribution at one glance.
+- **No baseline frozen yet** — the banner falls back to "no benchmark frozen — use `uv run python src/canary_runner.py --freeze-baseline` or the Re-baseline button". Cold-start safe.
+
+### Five drift kinds × two severity tiers
+
+| Kind | Major when | Minor when |
+|---|---|---|
+| `branch_changed` | always | — |
+| `event_type_changed` | always | — |
+| `retry_depth_changed` | crosses 1↔3+ boundary | delta ±1 within mid-band |
+| `chunk_set_changed` | Jaccard < 0.4 | Jaccard ∈ [0.4, 0.7) |
+| `latency_p95_regression` | median grew >50% | median grew >25% |
+
+Replicates are aggregated *first* (majority branch / event_type, median latency, intersected chunk-set, max attempts) and the drift detector compares aggregates per question. A flaky single-replicate retrieval doesn't move the baseline; the operator sees stable signal.
+
+### Per-question drift table
+
+Defaults to "drifting only" — the rows that actually fired. Toggle "Show all (not just drifting)" surfaces every corpus question, with non-drifting rows muted as `healthy` / `—`.
+
+### Re-baseline button
+
+Promotes the *latest* canary run to the frozen golden baseline. Use after intentional changes (KB rewrites, prompt tightening) where you've reviewed the drift, accept the new behaviour, and want the next run to compare against the new "correct" state.
+
+### Manual-only batch — *do not auto-refresh*
+
+Sentinel does **not** auto-run the canary batch on launch. The `ensure_fresh_canaries` helper exists in `sentinel.py` but `build_app` never calls it. Reasoning:
+
+- A full canary run is 50 questions × 3 replicates × full pipeline ≈ **30 min wall-clock**, ~$1.50.
+- The operator decides cadence — typically weekly, or on demand for fix verification.
+
+To run the batch manually:
+
+```bash
+# Ad-hoc run (writes records to the canonical log; does not change the baseline)
+uv run python src/canary_runner.py
+
+# First baseline / re-baseline after intentional changes
+uv run python src/canary_runner.py --freeze-baseline
+
+# Smaller smoke run for fix verification
+uv run python src/canary_runner.py --replicates 1
+```
+
+The batch echoes the `run_id` on completion; that's the same id that lands on every record in `data/logs/interactions.jsonl` and on the baseline pointer at `data/canaries/baseline.json`.
+
+### What the canary catches that the dashboard doesn't
+
+- **Specific-question regressions** at portfolio scale. The dashboard's aggregate metrics don't fire when a single recruiter question silently regresses from `answered` to `gap` or routes from `TECHNICAL` to `GENERIC` — the long-tail dilutes the signal. The canary fires per-question.
+- **Branch-mix shifts.** If recruiter traffic moves toward GENERIC questions and away from TECHNICAL, the system can quietly regress on TECHNICAL handling without `gap_rate` or `confident_failure_rate` moving. The canary's branch routing surface is locked across all 5 branches every run.
+- **Calibration ladder degradation.** C037–C040 probe gap-aware calibration. If the system stops emitting honest-gap markers and starts pure-gap or pure-claim, that's drift the dashboard's gap rate alone can't attribute.
+- **Tool uptake on tool-warranting questions.** `tool_uptake_on_warranted(corpus)` uses a clean denominator (only canary questions with `requires_tool=True`) — fixes `LIMITATIONS::P8`'s noisy denominator on the live `technical_tool_uptake_rate`.
+
+### What the canary does NOT catch
+
+- Real recruiter traffic patterns. Canary is synthetic — it's a probe set, not a sample. The dashboard's live-traffic metrics and Failure Feed remain the source of truth for "what real recruiters are asking."
+- Regressions in surfaces not represented in the corpus. New failure modes that the corpus doesn't probe will land first in the dashboard.
+
+### Stale-baseline failure mode
+
+If the operator forgets to re-baseline after an intentional change (e.g. a KB rewrite that legitimately moves chunk_set Jaccard < 0.4 across many questions), every run will fire major flags until re-baselined. Treat the banner's "benchmark date" as the load-bearing read — a baseline more than ~30 days old, frozen on a sha that's now far behind `HEAD`, is the trip-wire condition for stale-baseline noise.
+
+---
+
 ## Trends tab (Session 41 redesign — grouped bar charts)
 
 Trend charts now compare 5 branches across 4 time windows in one glance. Replaces the Session 40 line/time-series view: at portfolio-scale traffic (~30 records/day, 4-day history at the time of redesign), line charts were rendering 3–4 dots per series — most "trends" were single line segments between two points. Bar charts with 4 × 5 = 20 bars per chart are denser and don't fake temporal smoothness.

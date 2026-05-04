@@ -37,7 +37,7 @@ flowchart TD
   TOOL -.->|"tool-fetched content<br/>recomposed into judge prompt<br/>so guardrail sees what model grounded in<br/>(LIMITATIONS::R1)"| JUDGE
   GEN --> JUDGE["Guardrail — Claude Sonnet 4.6<br/>same composed prompt + answer<br/>distinct model family"]:::llm
   JUDGE --> ACCEPT{"is_acceptable?"}:::decision
-  ACCEPT -->|yes| LOG["InteractionLog append (JSONL)<br/>branch, classifier_labels, attempts,<br/>retrieved_chunks, tool_calls (with attempt_index),<br/>latency_ms, contact_offered, contact_provided"]:::sideEffect
+  ACCEPT -->|yes| LOG["InteractionLog append (JSONL, schema v3)<br/>branch, classifier_labels, attempts,<br/>retrieved_chunks, tool_calls (with attempt_index),<br/>latency_ms, contact_offered, contact_provided,<br/>is_canary, run_id, replicate_index"]:::sideEffect
   ACCEPT -->|"no — rejection feedback<br/>wraps into next system prompt"| RETRY{"attempts &lt; MAX_ATTEMPTS = 3?"}:::decision
   RETRY -->|yes| GEN
   RETRY -->|no| REFUSE["CANNED_REFUSAL<br/>polite decline + contact email"]:::refusal
@@ -57,3 +57,11 @@ flowchart TD
   STATE -.->|"should_show_contact_form()<br/>= turn≥3 OR gap OR explicit, AND NOT contact_provided"| FORM
   FORM -->|"on submit"| CONTACTS["ContactLog append<br/>data/logs/contacts.jsonl<br/>session_id (join key) + email + name + note"]:::sideEffect
   FORM -.->|"latches contact_provided=True<br/>(form hides forever for this session)"| STATE
+
+  %% Canary side-channel (#39) — runs via CLI, not auto-refresh.
+  %% _CanaryLogWriter wraps LogWriter to inject is_canary/run_id/replicate_index.
+  %% Records land in the same interactions.jsonl as live records; DashboardModel
+  %% filters them out by default (include_canary=False) so live tabs are unaffected.
+  CANARY[/"canary_runner.py CLI<br/>50 questions × 3 replicates<br/>--freeze-baseline → baseline.json"/]:::io
+  CANARY -.->|"each replicate calls<br/>pipeline.run() through<br/>_CanaryLogWriter wrapper"| GEN
+  CANARY -.->|"is_canary=True,<br/>shared run_id, replicate_index"| LOG

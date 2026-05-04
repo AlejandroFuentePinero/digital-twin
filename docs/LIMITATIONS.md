@@ -274,6 +274,8 @@ The `fetch_project_readme` tool fires on the model's discretion — `tool_rules`
 
 **What would help observe this cleanly:** a Sentinel panel showing `branch == TECHNICAL` turn count vs `len(tool_calls) > 0` count, broken down by question shape (project-named vs general). The aggregate `technical_tool_uptake_rate` exists today; the question-shape breakdown is not yet built (would be a custom Sentinel surface — `#34`'s `FlagDetector` ships `gap_rate_jump` / `new_cluster` / `repeat_failure` only, not question-shape disaggregation).
 
+**Partial fix (Session 42, #39):** the Canary tab's `tool_uptake_on_warranted(corpus)` metric uses a clean denominator — only canary questions with `requires_tool=True`. Live `technical_tool_uptake_rate` keeps its noisy denominator (every TECHNICAL turn, regardless of whether the question warranted a tool call). The canary surface gives a sharp signal on a closed corpus; the live metric remains a coarse aggregate. Both are kept — they answer different questions.
+
 ---
 
 ### O6 — Classifier routes specific-paper questions to GENERIC, losing TECHNICAL tool access
@@ -374,6 +376,98 @@ These are not "readme content" failures — the content is correct and accessibl
 **Test:** `tests/test_pipeline.py::test_guardrail_prompt_includes_tool_returned_content_for_grounded_evaluation` — locks the contract that the guardrail's system prompt must include any tool-returned content from the same turn.
 
 **Smoke-test verification:** re-run Q8.2 against the live pipeline post-fix — expected `event_type=answered` rather than `refused`, and the guardrail accepts the tool-grounded answer rather than rejecting it as fabrication.
+
+---
+
+### P12 — Canary stale-baseline noise
+
+**Status:** Predicted (Session 42, `#39`).
+
+The canary's drift detector compares each run against a **frozen golden baseline** that the operator manually promotes (CLI `--freeze-baseline` flag or Sentinel "Re-baseline" button). If the operator forgets to re-baseline after an *intentional* change — KB rewrite, prompt tightening, model upgrade — every subsequent canary run will fire major flags until the baseline is refreshed. The drift detector cannot distinguish "regression I should fix" from "intentional change I forgot to acknowledge."
+
+**Why this is logged but not fixed today:**
+
+- Auto-promoting the baseline on every change defeats the purpose. The operator's deliberate freeze is what makes the baseline *golden*.
+- Auto-suggesting a re-baseline (e.g. "you have N major drifts and the baseline is M weeks old — re-baseline?") is reasonable UX but premature without observed friction.
+- The Sentinel banner shows the baseline date next to the latest-run date, so a stale baseline is one glance away from being noticed.
+
+**Trip-wires (any one promotes priority):**
+
+1. Operator reports drifts firing on a baseline they accept as "intentional change I should have re-baselined" — single instance is anecdote, recurrence (3+ in a quarter) is a pattern.
+2. The canary banner shows a baseline frozen >30 days ago and the current `git_sha` differs from `frozen_git_sha` by >5 commits — a heuristic stale-baseline signal Sentinel could surface.
+3. Canary alerts get muted by an operator because they're known-noise rather than acted on. Defeats the purpose of the canary; means the trip-wires are firing too cheaply.
+
+**Action when a trip-wire fires:**
+
+- Add a banner-level UX nudge: "Baseline frozen YYYY-MM-DD on sha {abc}. Current sha is {def}. Considering re-baselining?" — text only, not blocking.
+- Optional automation: a CLI flag (`--auto-rebaseline-after-major-changes`) that promotes the run when explicit code changes are detected since the last freeze. Defer until the manual workflow shows clear friction.
+
+**Companion observability:** Sentinel can surface "baseline_age_days" + "baseline_sha_distance_from_head" as a small chip next to the banner. Not yet built; lives in v2 of the Canary tab if needed.
+
+---
+
+### P14 — Canary batch is atomic; mid-batch failure leaves orphan records
+
+**Status:** **Observed** (Session 42, first benchmark attempt).
+
+The canary runner replays 50 questions × 3 replicates = 150 sequential `pipeline.run()` calls. Per the issue spec ("fail loud over silent gaps"), there is **no per-question try/except** — any uncaught exception inside the loop propagates up and exits the batch. Records written before the failure remain in `data/logs/interactions.jsonl` with their `run_id`, but `freeze_baseline()` only runs *after* `run_batch()` returns successfully, so a failed batch leaves the log carrying a partial canary run that no baseline points at.
+
+**Observed: 2026-05-04 baseline-establishment attempt.** The first canary batch crashed at the 26th question's 2nd replicate after the Anthropic API returned `400 Bad Request — Your credit balance is too low to access the Anthropic API`. Tenacity exhausted its 5-retry policy (transient-infra retry, not credit-exhaustion-aware), the `BadRequestError` propagated through the guardrail call, the runner died, and `data/logs/interactions.jsonl` was left with **76 orphan canary records** sharing `run_id=run-20260504-115055-336112` and **no `baseline.json`** (the `--freeze-baseline` step never reached).
+
+**Why this is logged but not fixed today:**
+
+- The "fail loud" design is the right default. Silently skipping a failed question would generate a baseline with gaps — the drift detector cannot tell "question dropped" from "question consistently routed differently" except via the `expected_*` fields, and a missing baseline aggregate is worse than no baseline at all.
+- Tenacity's exponential backoff is the existing infrastructure-resilience layer for transient API hiccups (rate limits, brief network loss). Credit exhaustion is a *non-transient* failure where retrying is wasteful but not incorrect.
+- The orphan records are inert by design. They share one `run_id`; the drift detector groups by `run_id` and won't try to compare them against a non-existent baseline. The next clean run gets a new `run_id`; the orphans become unreferenced log lines.
+
+**Trip-wires (any one promotes priority):**
+
+1. The same shape recurs (≥3 baseline-establishment failures from credit / rate-limit / API outage causes within a quarter) — pattern, not anecdote.
+2. A canary run partially succeeds, the operator manually freezes the partial baseline because they didn't notice the early termination, and the next run fires false-positive drift on every question that wasn't replayed.
+3. The orphan-record count exceeds ~500 and starts noticeably bloating the log file.
+
+**Action when a trip-wire fires:**
+
+- Add per-question try/except in `canary_runner.run_batch` that **logs the failure and continues**, but writes a side file (`data/canaries/last_run_status.json`) with `{run_id, completed_questions, failed_questions, exit_reason}` so `--freeze-baseline` can refuse to freeze an incomplete run by reading this status.
+- Tighten tenacity policy in `guardrail.py` / `generator.py` / `classifier.py` to NOT retry on `BadRequestError` with credit-exhaustion message bodies — fail-fast on permanent errors, retry on transient ones.
+- Optional: add a checkpointed resume mode that reads the partial run's `run_id` and skips already-completed questions.
+
+**Recovery procedure when this fires:**
+
+1. Address the root cause (top up credits, wait for rate limit, etc.).
+2. **Leave orphan records in the log** — destructive deletion is worse than inert orphan data.
+3. Re-run the batch from scratch: `uv run python src/canary_runner.py --freeze-baseline`. Fresh `run_id`, fresh 150 records, baseline gets frozen.
+4. The orphan `run_id` becomes a permanent log entry — that's fine; it's a forensic artifact of the failed attempt, not noise that affects future drift comparisons.
+
+**Companion observability:** Sentinel's Canary tab banner should ideally surface "incomplete runs detected — N orphan records under run_id Z" as a side note. Not yet built; would be a small formatter on top of `_canary_runs_grouped` checking for runs with `< replicates × len(corpus)` records.
+
+---
+
+### P13 — Canary corpus drift away from KB content
+
+**Status:** Predicted (Session 42, `#39`).
+
+The 50 canary questions were curated against the KB as it existed on 2026-05-04. As Alejandro adds projects, publications, or rewrites the KB, the corpus may stop reflecting current content — questions could become unanswerable from the new KB, or new content surfaces could go unprobed.
+
+**Why this is logged but not fixed today:**
+
+- The corpus is small enough (50 entries) to audit manually when the KB changes materially.
+- Loading-time validation (`load_canaries()` checks every `expected_branch` against `branches.REGISTRY`) catches the structural-drift case but not the content-drift case (a question whose answer no longer exists in the KB).
+- The right cadence for a corpus refresh is "after a KB rewrite that changes >20% of section content" — too rare to automate.
+
+**Trip-wires (any one promotes priority):**
+
+1. A canary question's `expected_event_type` no longer matches the system's stable behaviour after a KB rewrite — meaning the corpus is wrong, not the system.
+2. New flagship projects / publications land in the KB and no canary question probes them — content blind spot.
+3. The corpus's branch routing distribution stops reflecting recruiter probe shapes — corpus distribution drifted away from realistic traffic.
+
+**Action when a trip-wire fires:**
+
+- Audit the corpus against the current KB state — same line-by-line audit as Session 42's audit pass.
+- Add new questions for new flagship content; replace questions whose grounding has been removed.
+- After audit, **re-baseline** to lock the new "correct" state before the next drift comparison.
+
+**Companion observability:** could compute `canary_questions_per_branch` + `canary_questions_per_kb_file` and display in Sentinel as a small audit panel. Not yet built; would be a cheap formatter on top of `load_canaries()` + `kb_corpus.load_sections()`.
 
 ---
 

@@ -5,6 +5,119 @@
 
 ---
 
+## Session 42 (2026-05-04) — `#39` shipped: canary set + drift detector (Phase 5 prep)
+
+**Status:** Canary set + drift detector implemented end-to-end. Suite at **460 passing** (+44 net from Session 41's 416). 50-question corpus shipped at `data/canaries/corpus.json`, audited against the live KB. Sentinel gains a fourth tab (Canary) between Trends and Failures. Per operator directive, **canary runs are CLI-triggered manually** — no auto-refresh on Sentinel launch (cost + wall-clock at 50q×3replicates ≈ 30 min, ~$1.50/run).
+
+### What shipped — code (per the issue body's locked module split)
+
+| Module | Concern | Tests |
+|---|---|---|
+| `src/interaction_log.py` | Schema bump v2 → v3: `is_canary: bool = False`, `replicate_index: int \| None = None`, `run_id: str \| None = None`. Defaults absorb every legacy record so the 99 records on disk still parse as live. | `test_canary_fields_default_to_live_record_shape_and_round_trip_when_set`; the legacy-tolerance forcing function is `tests/test_log_reader.py::test_read_tolerates_pre_issue_39_records_lacking_canary_fields` |
+| `src/dashboard_model.py` | `DashboardModel.__init__` gains `include_canary: bool = False, only_canary: bool = False`; `__post_init__` filters records before any aggregation runs. Live tabs construct `DashboardModel(records)` and never see canary records. New methods: `branch_match_rate(corpus)` (canary-only classifier-correctness signal) + `tool_uptake_on_warranted(corpus)` (clean-denominator fix for LIMITATIONS::P8). `for_window` / `for_prior_window` propagate the flag via `include_canary=True` so children don't re-filter. | `test_dashboard_model_excludes_canary_records_by_default` + 3 sibling tests |
+| `src/canary_corpus.py` (new) | Pure data: `CanaryQuestion` dataclass + `load_canaries()`. Forcing function: every `expected_branch` re-resolves against `branches.REGISTRY` at load time — typos / removed branches fail at import, before any replay. | `test_load_canaries_*` × 4 |
+| `data/canaries/corpus.json` (new) | 50 curated questions across 12 categories (branch routing × tool-loop × numerical / temporal / calibration / personal-story / comparative / refusal probes). Audited against `data/profile.md`, `data/knowledge_base/*.md`, and `data/readmes/*.md` line-by-line. C049 was originally `"Tell me about your Officeworks colleagues by name"` — replaced (no colleagues content in profile.md, would force hallucination probe shape). New C049: `"Would you accept a role in the gambling industry?"` — clean LOGISTICAL probe with explicit profile.md grounding (industries-declined list). C037/C039 keywords tightened to match exact profile.md phrasing. | (loaded by `load_canaries`; corpus integrity is enforced by the loader's branch validation) |
+| `src/canary_baseline.py` (new) | Pointer storage at `data/canaries/baseline.json` with `freeze_baseline(run_id, frozen_git_sha, notes)`, `read_baseline()`, `resolve_baseline_records(records)`. Cold-start safety: missing pointer → `None` / `[]`. Stale pointer (run_id absent from log) → `[]`. | `test_freeze_and_read_baseline_*` × 6 |
+| `src/canary_drift.py` (new) | Pure detector. Two phases: (1) `aggregate_question(records)` rolls N replicates into one `AggregatedCanaryRun` (majority branch, majority event_type, median latency, **intersected** chunk-set, max attempts); (2) `detect_drift(current, baseline, corpus)` per-question compare emits 5 drift kinds × minor/major: `branch_changed` (always major), `event_type_changed` (always major), `retry_depth_changed` (minor ±1, major 1↔3+), `chunk_set_changed` (Jaccard < 0.4 = major, [0.4, 0.7) = minor), `latency_p95_regression` (>50% growth = major, >25% = minor). Stratified summary helper groups by `expected_branch` + `category`. | `test_*` × 22, including boundary tests on all four drift kinds and per-question-matching skip-when-only-in-one-run |
+| `src/canary_runner.py` (new) | CLI orchestrator. `_CanaryLogWriter` wraps the canonical `LogWriter` and injects `is_canary=True`, shared `run_id` (`run-YYYYMMDD-HHMMSS-<rand6>`), and per-replicate `replicate_index`. Pipeline-factory injection seam for tests. Default factory builds the same pipeline as `app.py`. CLI flags: `--replicates N` (default 3), `--corpus PATH` (default `data/canaries/corpus.json`), `--freeze-baseline` (promote this run to the frozen baseline pointer). | `test_*` × 5 — verifies N replicates per question, shared `run_id`, append-not-clobber against an existing log, optional `freeze_baseline` |
+| `src/sentinel.py` | New `Canary` tab between Trends and Failures: drift summary banner (benchmark date + sha → latest canary run date + sha + flag counts), drift flag cards (severity-styled cards using the existing `--alert` / `--warning` palette), per-question drift table with "show all" toggle defaulting to drifting-only, Re-baseline button. `_build_canary_drift_state` resolves drift between latest run + frozen baseline. `_canary_runs_grouped` chronologically orders canary records by `run_id`. `render_sparkline` exists as a helper for v2 health-block tables (deferred; see "Out of scope below"). `ensure_fresh_canaries` exists but **deliberately not wired** into the autorefresh path. | Sentinel partial-exemption per `docs/TESTING.md` — `build_app` smoke covers wiring; Pure formatters covered indirectly via the live runtime smoke |
+| `src/system_map.py` | `MODULE_CATEGORY` registers the four new `canary_*` modules under `Tooling`. | `test_every_src_module_has_an_explicit_category` |
+
+### Architecture summary
+
+```
+[CLI]  uv run python src/canary_runner.py [--freeze-baseline]
+   │
+   ▼
+load_canaries(corpus.json)  ─── 50 CanaryQuestion (validated against branches.REGISTRY)
+   │
+   ▼
+For each q × N=3 replicates:
+   _CanaryLogWriter(run_id=run-2026-...).append({..., is_canary=True, run_id, replicate_index})
+   pipeline.run(q.question, history=[], session_id=f"canary-{run_id}-{q.id}", turn_index=i)
+   │
+   ▼
+data/logs/interactions.jsonl   ◄── live records and canary records share one file;
+                                   `is_canary` is the only discriminator
+   │
+   ▼ (Sentinel reads on launch)
+   ├─ DashboardModel(records)                              → live tabs (Metrics/Trends/Failures)
+   └─ DashboardModel(records, include_canary=True,
+                            only_canary=True)              → Canary tab
+                                │
+                                ▼
+                  detect_drift(latest_run, baseline_run, corpus)
+                                │
+                                ▼
+                      [drift cards + per-question table]
+```
+
+### Design choices (selected)
+
+- **`is_canary` schema flag, not file-location separation.** The original PRD (Session 40) proposed writing canaries to a separate `data/logs/canaries.jsonl`. Session 42 reversed this in the body rewrite: a schema flag is the cleaner discriminator, lets the existing `LocalReader` + `DashboardModel` handle filtering, and preserves audit-trail joinability with the live log. Live tabs default to `include_canary=False` so live aggregations are unaffected.
+- **`expected_branch` validated at load time** against `branches.REGISTRY`. Forcing function: a typo in the corpus JSON fails on `load_canaries()`, before any replay starts. Without it, drift would silently fail to fire because `branch_match_rate(corpus)` would never see a match.
+- **Intersected chunk-set across replicates.** Each replicate runs the same question through deterministic ChromaDB retrieval, so chunks should be identical across the N=3 — but if anything ever varies, intersection captures the *stable* set the pipeline relies on. Drift fires against the stable set, not against an artefact of single-replicate noise.
+- **Per-question matching, not paired-by-replicate-index.** The drift detector aggregates first, then compares aggregates. A test (`test_detect_drift_aggregates_replicates_before_comparing`) locks this against the obvious bug.
+- **Canary as a probe of *behaviour space*, not a pass/fail rubric.** Corpus mixes pass-aimed (TECHNICAL/BEHAVIOURAL/LOGISTICAL/GENERIC questions that should answer correctly), gap-aimed (niche-tech + out-of-scope; system *should* emit the gap phrase), calibration-aimed (system should answer with the broader-skill reframe + honest-gap acknowledgement), and refusal-aimed probes. The frozen baseline locks whatever the system does today across all surfaces; drift is the signal. **Forcing potential failures is required, not OK-to-tolerate** — silent regressions in gap / refusal / calibration surfaces would otherwise go undetected.
+- **Auto-refresh deliberately not wired.** A full canary run is 50q × 3replicates ≈ 30 min wall-clock, ~$1.50. Auto-running on every Sentinel launch would burn budget and block UI boot. Operator triggers via CLI on their cadence. Memory pinned: `feedback_canary_manual_run.md`.
+- **C049 replaced.** Original C049 ("Tell me about your Officeworks colleagues by name") would force the system into either confidentiality redirect (correct) or hallucinated colleague names (wrong). Either path is *valid* canary signal but the question shape probed a hallucination surface rather than a grounded behaviour. New C049 ("Would you accept a role in the gambling industry?") is a clean LOGISTICAL probe with explicit profile.md grounding (industries-declined list).
+
+### Live-vs-canary separation — verification
+
+Manual smoke against the live log (99 records, 0 canary at session start):
+```
+Total records on disk:           99
+Live-only (default):             99
+Canary-only:                      0
+Mixed (include_canary=True):     99
+Live default + Canary only sum:  99
+```
+
+Test surface that locks the contract:
+- `test_dashboard_model_excludes_canary_records_by_default` — default-off filter
+- `test_dashboard_model_only_canary_inverts_the_filter` — Canary tab construction
+- `test_run_batch_appends_to_existing_log_without_clobbering_live_records` — append-not-overwrite
+- `test_read_tolerates_pre_issue_39_records_lacking_canary_fields` — legacy v1/v2 records on disk parse with default `is_canary=False`
+
+### Out of scope / deferred
+
+- **Inline sparkline tables** for the 3 health blocks (Drift / Quality / Latency) on the Canary tab. The `render_sparkline` matplotlib helper exists; the table-with-base64-PNG-cell renderer + the 3 thematic blocks were scoped out for v1 to ship the load-bearing pieces (banner + drift cards + per-question table + re-baseline). Phase 5 will tell us whether sparklines are load-bearing or ornamental — re-open as a follow-up issue if the operator wants them after seeing real drift signals.
+- **LLM-as-judge `answer_drifted` flag kind** — keyword-matching against `expected_keywords` is the v1 surface; LLM-judge layer can be added if keyword matching proves too brittle. Defer until v1 is observed.
+- **Statistical significance tests** (chi-squared, PSI) on aggregate canary metrics — at 50 × 3 = 150 sample size, statistical power is too low. Per-question binary detection + stratified summaries is the right grain.
+- **Cost tracking on canary runs** (`tokens_in`, `tokens_out`, USD) — parallel concern, separate ticket.
+
+### Verified
+
+- `uv run pytest -q` → **460 passed**.
+- Live runtime: `PYTHONPATH=src uv run python -c "from sentinel import build_app; build_app(autorefresh=False)"` boots cleanly with the new Canary tab.
+- `system_map` regenerated → `MAP.md` includes `canary_corpus`, `canary_baseline`, `canary_drift`, `canary_runner` under Tooling.
+
+### Baseline establishment — attempted, deferred
+
+`uv run python src/canary_runner.py --freeze-baseline` was launched at session close. The batch ran ~5 minutes (76 of expected 150 records appended, 26 of 50 distinct questions covered) before the **Anthropic API returned `400 Bad Request — Your credit balance is too low to access the Anthropic API`**. Tenacity exhausted its 5-retry policy (transient-infra retry, not credit-exhaustion-aware), the `BadRequestError` propagated through the guardrail call, the runner died, and **no `baseline.json` was written** — `freeze_baseline()` only runs after `run_batch()` returns successfully.
+
+**Current state:**
+- 76 orphan canary records under `run_id=run-20260504-115055-336112` in `data/logs/interactions.jsonl`. Inert (no baseline points at them; future runs get fresh `run_id`s).
+- 99 live records untouched.
+- `data/canaries/baseline.json` does not exist.
+- Sentinel Canary tab renders the cold-start banner: "no benchmark frozen — use `--freeze-baseline` or the Re-baseline button".
+
+**Decision: defer to a later session, leave orphan records as-is.** Per `feedback_full_set_when_thinking_is_done.md` the implementation work is complete and shouldn't be blocked by an external billing constraint. The right call is **leave orphans in place** (destructive deletion is worse than inert log lines that share a unique `run_id`) and re-run the batch from scratch when credits are restored. New `LIMITATIONS::P14` entry captures this failure mode + recovery procedure + trip-wires for promoting it from "observed once" to "engineering response warranted".
+
+**Issue #39 stays open** until the baseline is frozen. The implementation modules are shipped + tested; the benchmark-establishment step is the only blocker. A comment on the issue records the deferred state.
+
+### Outstanding
+
+- **Establish the canary benchmark** — re-run `uv run python src/canary_runner.py --freeze-baseline` once Anthropic credits are restored. Cost ~$1.50, ~30 min wall-clock. Verification on completion: 150 fresh records under a new `run_id`, all `is_canary=True`; `data/canaries/baseline.json` exists; Sentinel banner shows "0 major · 0 minor". This step closes #39.
+- **Phase 5 (break the live system)** — blocked on baseline establishment. Plan unchanged: deliberately introduce regressions; check whether canary catches what the dashboard misses, and what the dashboard catches that canary doesn't.
+- **Push the local commits** — push remains harness-protected.
+
+### Next session entry-point
+
+Read `docs/SENTINEL.md` § "Canary tab (Session 42)" for the operator reference and the manual-CLI workflow. Read this Session 42 entry for design rationale + the deferred-baseline state. Read `LIMITATIONS::P14` for the partial-batch failure mode the first attempt surfaced. Top up Anthropic credits → re-run the baseline batch → freeze → close #39 → start Phase 5.
+
+---
+
 ## Session 41 (2026-05-04) — Trends tab redesign (line charts → grouped bars) + UX polish + honest over-engineering audit
 
 **Status:** Trends tab fundamentally rewired. Suite holds at **416 passing** (net −1 from Session 40 due to deleted line-chart tests + new bar-chart tests). Primary outcome: a clearer surface that compares 5 branches × 4 time windows in one glance. Secondary outcome: an honest over-engineering audit that locks in the next move — **stop polishing, build canary (PRD #39), then run Phase 5**.

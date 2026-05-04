@@ -51,6 +51,17 @@ Pre-deploy verification that every artifact reflects the deployed system. Run th
 - [ ] Sentinel reads from production log location (HF Dataset in prod, JSONL in dev).
 - [ ] Every record carries the full enriched schema — no missing fields.
 - [ ] Sentinel surfaces the metrics it was designed to: gap rate, deflection rate, misclassification rate (high-confidence-but-fell-back-to-GENERIC), retry rate, answered/refused split.
+- [ ] **Canary baseline frozen and current** (#39). `data/canaries/baseline.json` exists; `frozen_git_sha` is within ~5 commits of `HEAD` AND the `frozen_at` date is within ~30 days. If either drifts, run `uv run python src/canary_runner.py --freeze-baseline` to refresh before shipping. (`LIMITATIONS::P12` — stale-baseline noise.)
+- [ ] **Canary corpus audited** against current KB content. After any KB rewrite that changes >20% of section content, walk `data/canaries/corpus.json` line-by-line; replace questions whose grounding was removed; add questions for new flagship content. Re-baseline after audit. (`LIMITATIONS::P13` — corpus content drift.)
+- [ ] **Live-vs-canary separation verified** — total records on disk = live-default + canary-only. Sanity check after any pipeline / writer changes:
+  ```python
+  from log_reader import LocalReader
+  from dashboard_model import DashboardModel
+  records = LocalReader().read()
+  live = DashboardModel(records).total_interactions
+  canary = DashboardModel(records, include_canary=True, only_canary=True).total_interactions
+  assert live + canary == len(records), "live/canary split is broken"
+  ```
 
 ## Deployment
 
