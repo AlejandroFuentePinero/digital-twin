@@ -15,14 +15,20 @@ from canary_baseline import (
     freeze_baseline,
     read_baseline,
     resolve_baseline_records,
+    runs_after_baseline,
 )
 
 
-def _record(run_id: str = "run-A", question: str = "q", branch: str = "GENERIC"):
+def _record(
+    run_id: str = "run-A",
+    question: str = "q",
+    branch: str = "GENERIC",
+    timestamp: str | None = None,
+):
     from interaction_log import InteractionRecord
 
     return InteractionRecord.model_validate({
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
         "session_id": "canary",
         "turn_index": 0,
         "question": question,
@@ -104,3 +110,82 @@ def test_default_baseline_path_lives_under_data_canaries():
     refactor doesn't quietly move it."""
     assert DEFAULT_BASELINE_PATH.name == "baseline.json"
     assert DEFAULT_BASELINE_PATH.parent.name == "canaries"
+
+
+# ----- runs_after_baseline (Session 51) -------------------------------------
+
+
+def test_runs_after_baseline_returns_chronologically_ordered_run_ids(tmp_path: Path):
+    """The N most recent post-baseline runs in chronological order — drives
+    the +1 / +2 / +3 columns in the canary trajectory view."""
+    pointer = tmp_path / "baseline.json"
+    freeze_baseline("run-baseline", frozen_git_sha="sha", path=pointer)
+    frozen_at = read_baseline(pointer)["frozen_at"]
+
+    # Three post-baseline runs at known timestamps after the freeze.
+    base_dt = datetime.fromisoformat(frozen_at)
+    records = [
+        _record(run_id="run-baseline", timestamp=frozen_at),  # baseline run itself
+        _record(run_id="run-+2", timestamp=(base_dt.replace(microsecond=0) + (datetime.fromisoformat("2026-05-05T00:00:02") - datetime.fromisoformat("2026-05-05T00:00:00"))).isoformat()),
+        _record(run_id="run-+1", timestamp=(base_dt.replace(microsecond=0) + (datetime.fromisoformat("2026-05-05T00:00:01") - datetime.fromisoformat("2026-05-05T00:00:00"))).isoformat()),
+        _record(run_id="run-+3", timestamp=(base_dt.replace(microsecond=0) + (datetime.fromisoformat("2026-05-05T00:00:03") - datetime.fromisoformat("2026-05-05T00:00:00"))).isoformat()),
+    ]
+    result = runs_after_baseline(records, n=3, path=pointer)
+    assert result == ["run-+1", "run-+2", "run-+3"]
+
+
+def test_runs_after_baseline_caps_at_n(tmp_path: Path):
+    """When more than N post-baseline runs exist, only the earliest N are
+    returned — the trajectory view shows the first three runs after the
+    baseline, not the latest three."""
+    pointer = tmp_path / "baseline.json"
+    freeze_baseline("run-baseline", frozen_git_sha="sha", path=pointer)
+    frozen_at = read_baseline(pointer)["frozen_at"]
+    base_dt = datetime.fromisoformat(frozen_at)
+
+    records = [_record(run_id="run-baseline", timestamp=frozen_at)]
+    for i in range(5):
+        ts = (base_dt.replace(microsecond=0) + (datetime.fromisoformat(f"2026-05-05T00:00:0{i+1}") - datetime.fromisoformat("2026-05-05T00:00:00"))).isoformat()
+        records.append(_record(run_id=f"run-+{i+1}", timestamp=ts))
+
+    result = runs_after_baseline(records, n=3, path=pointer)
+    assert result == ["run-+1", "run-+2", "run-+3"]
+    assert len(result) == 3
+
+
+def test_runs_after_baseline_returns_empty_when_no_post_baseline_runs(tmp_path: Path):
+    """Freshly-frozen baseline + only the baseline run on disk → empty list.
+    The trajectory view renders all em-dash placeholders until new runs land."""
+    pointer = tmp_path / "baseline.json"
+    freeze_baseline("run-baseline", frozen_git_sha="sha", path=pointer)
+    frozen_at = read_baseline(pointer)["frozen_at"]
+    records = [_record(run_id="run-baseline", timestamp=frozen_at)]
+    assert runs_after_baseline(records, n=3, path=pointer) == []
+
+
+def test_runs_after_baseline_returns_empty_when_pointer_absent(tmp_path: Path):
+    """No pointer → no trajectory comparison possible. Cold-start safety."""
+    records = [_record(run_id="run-anything")]
+    assert runs_after_baseline(records, n=3, path=tmp_path / "missing.json") == []
+
+
+def test_runs_after_baseline_ignores_runs_before_the_baseline(tmp_path: Path):
+    """Records timestamped before the baseline freeze (e.g. an earlier
+    canary run before the operator decided to lock the baseline) MUST NOT
+    appear in the trajectory — they're historical, not post-baseline drift
+    candidates."""
+    pointer = tmp_path / "baseline.json"
+    # Freeze the baseline at a known point in time (post the existing records).
+    base_ts = "2026-05-05T12:00:00+00:00"
+    pointer.write_text(json.dumps({
+        "run_id": "run-baseline",
+        "frozen_at": base_ts,
+        "frozen_git_sha": "sha",
+        "notes": "",
+    }))
+    records = [
+        _record(run_id="run-old", timestamp="2026-05-05T11:00:00+00:00"),  # before
+        _record(run_id="run-baseline", timestamp=base_ts),
+        _record(run_id="run-after", timestamp="2026-05-05T13:00:00+00:00"),
+    ]
+    assert runs_after_baseline(records, n=3, path=pointer) == ["run-after"]

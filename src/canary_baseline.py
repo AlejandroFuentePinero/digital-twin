@@ -70,3 +70,44 @@ def resolve_baseline_records(
         return []
     target = pointer.get("run_id")
     return [r for r in records if r.run_id == target]
+
+
+def runs_after_baseline(
+    records: list[InteractionRecord],
+    n: int = 3,
+    path: Path = DEFAULT_BASELINE_PATH,
+) -> list[str]:
+    """Return up to ``n`` chronologically-ordered run_ids of canary runs that
+    happened **after** the frozen baseline (Session 51 trajectory view).
+
+    Empty when no pointer is set, when the pointer is missing
+    ``frozen_at`` / ``run_id``, or when no runs have happened since the
+    freeze. Caller's responsibility to pass canary records only
+    (``is_canary=True`` filter applied upstream).
+
+    Comparison uses each run's earliest record timestamp vs the pointer's
+    ``frozen_at``. This handles operator-clock skew cleanly and avoids
+    relying on lexicographic run_id sort (which would tie our hands to the
+    ``run-YYYYMMDD-...`` naming convention)."""
+    pointer = read_baseline(path)
+    if pointer is None:
+        return []
+    baseline_run = pointer.get("run_id")
+    frozen_at = pointer.get("frozen_at")
+    if not baseline_run or not frozen_at:
+        return []
+
+    # Group records by run_id; for each run, take the earliest timestamp
+    # (the run's start). Skip the baseline run itself.
+    by_run: dict[str, str] = {}
+    for r in records:
+        if r.run_id is None or r.run_id == baseline_run:
+            continue
+        first = by_run.get(r.run_id)
+        if first is None or r.timestamp < first:
+            by_run[r.run_id] = r.timestamp
+
+    # Keep only runs whose earliest record post-dates the baseline freeze.
+    post = [(ts, run) for run, ts in by_run.items() if ts > frozen_at]
+    post.sort()  # chronological by earliest timestamp
+    return [run for _, run in post[:n]]
