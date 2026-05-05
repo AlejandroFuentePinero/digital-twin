@@ -78,6 +78,29 @@ _SEVERITY_RANK: dict[str, int] = {
     "deflected":                4,
 }
 
+# Two-tier partition for the Failure Feed UI (Session 49). Mirrors the
+# Session 48 Live-tab framework: "failure" modes are where the metric IS
+# the failure event (system delivered nothing / burned its budget);
+# "outcome" modes are where the metric IS a system-output shape worth
+# scanning for patterns but not a defect (correct gap-acks, correct
+# deflections, guardrail-recovered turns). The data flow is unchanged
+# (classify_failure still returns one of the 5 mode strings); only the
+# Sentinel renderer regroups for display.
+FAILURE_MODE_TIER: dict[str, str] = {
+    "refused":                  "failure",
+    "retry-exhausted":          "failure",
+    "rejected-then-recovered":  "outcome",
+    "gap":                      "outcome",
+    "deflected":                "outcome",
+}
+
+
+def tier_for_mode(mode: str) -> str:
+    """Return 'failure' or 'outcome' for a mode label. Defaults to 'outcome'
+    on unknown — fail-soft: an unrecognised mode shouldn't be flagged as a
+    strict failure."""
+    return FAILURE_MODE_TIER.get(mode, "outcome")
+
 
 def failure_mode_counts(records: list[InteractionRecord]) -> dict[str, int]:
     """Per-mode count over ``records``. Surfaces the per-mode breakdown above
