@@ -176,13 +176,13 @@ When a metric goes red, the matching **runbook** at the bottom of this doc tells
 - **What it measures:** raw volume of `fetch_project_readme` calls. Pairs with the rate-style uptake + success metrics for at-a-glance read.
 - **No threshold** — orientation. Volume context: a sudden drop is more useful read against the rate metrics.
 
-#### `technical_tool_uptake_rate`
+#### `technical_tool_call_rate`
 
 - **Definition:** `count(branch == "TECHNICAL" AND tool_calls != []) / count(branch == "TECHNICAL")`.
-- **What it measures:** the fraction of TECHNICAL turns that actually invoked `fetch_project_readme`.
-- **What it proxies:** whether the tool surface is being used as designed (LIMITATIONS::P8).
-- **Proxy caveats:** denominator is "all TECHNICAL," not "TECHNICAL warranting tool." Some TECHNICAL questions are answerable from the KB alone — meta-questions about the system, generic skills questions, follow-ups whose context is in scope. The metric undercounts "warranted uptake" and overcounts the denominator.
-- **No threshold (Session 39 demotion).** Was previously `healthy ≥ 70%, warning ≥ 50%`. Operator pointed out the metric definition is conceptually noisy — `all TECHNICAL` includes turns that legitimately don't need a tool call, producing false warnings at "normal" uptake levels (60% live). Demoted to orientation: the rate still renders for the operator, but no badge / no warning. A future fix would refine the denominator to count only TECHNICAL turns whose question names a specific project from `data/readmes/registry.json` (28-key registry-driven heuristic).
+- **What it measures:** the rate of TECHNICAL turns that invoked at least one `fetch_project_readme` call.
+- **How to read it:** descriptive direction-of-change orientation, **not a target**. Renamed from `technical_tool_uptake_rate` in PRD #41 slice 3 — "uptake" implied a target the system isn't trying to hit, when in practice many TECHNICAL turns are legitimately answerable from the KB alone (meta-questions about the system, generic skills questions, follow-ups whose context is in scope).
+- **Denominator caveat (LIMITATIONS::P8):** denominator is "all TECHNICAL", not "TECHNICAL warranting a tool". The canary-side `tool_uptake_on_warranted(corpus)` is the surface with the clean denominator (only canary questions with `requires_tool=True`); the live metric is a coarse aggregate by design. Both are kept — they answer different questions.
+- **No threshold.** Orientation only — no badge, no warning. The rate renders for the operator on the Metrics tab and on Trend Explorer; pair it with `tool_call_count` (volume) and `tool_call_success_rate` (quality) for a full read of the tool surface.
 
 #### `tool_call_success_rate`
 
@@ -350,7 +350,7 @@ The batch echoes the `run_id` on completion; that's the same id that lands on ev
 - **Specific-question regressions** at portfolio scale. The dashboard's aggregate metrics don't fire when a single recruiter question silently regresses from `answered` to `gap` or routes from `TECHNICAL` to `GENERIC` — the long-tail dilutes the signal. The canary fires per-question.
 - **Branch-mix shifts.** If recruiter traffic moves toward GENERIC questions and away from TECHNICAL, the system can quietly regress on TECHNICAL handling without `gap_rate` or `confident_failure_rate` moving. The canary's branch routing surface is locked across all 5 branches every run.
 - **Calibration ladder degradation.** C037–C040 probe gap-aware calibration. If the system stops emitting honest-gap markers and starts pure-gap or pure-claim, that's drift the dashboard's gap rate alone can't attribute.
-- **Tool uptake on tool-warranting questions.** `tool_uptake_on_warranted(corpus)` uses a clean denominator (only canary questions with `requires_tool=True`) — fixes `LIMITATIONS::P8`'s noisy denominator on the live `technical_tool_uptake_rate`.
+- **Tool uptake on tool-warranting questions.** `tool_uptake_on_warranted(corpus)` uses a clean denominator (only canary questions with `requires_tool=True`) — fixes `LIMITATIONS::P8`'s noisy denominator on the live `technical_tool_call_rate`.
 
 ### What the canary does NOT catch
 
@@ -454,7 +454,7 @@ When a metric fires, here's where to look and where the fix likely lives.
 4. If `classifier`: gpt-4.1-nano providing slow responses; consider model switch.
 5. If all stages up uniformly: network — check local connectivity, then provider status.
 
-### `technical_tool_uptake_rate` drop
+### `technical_tool_call_rate` drop
 
 1. **Inspect TECHNICAL records with empty `tool_calls`** in Failure Feed.
 2. If tools are being skipped on questions that *should* fetch: fix is in `branches.py::REGISTRY["TECHNICAL"].tool_rules` (make the rule more emphatic) or `tools.py::build_fetch_project_readme_tool` (description / when-to-use copy).
