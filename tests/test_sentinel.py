@@ -95,7 +95,7 @@ def test_format_metrics_overview_includes_every_metric_label():
         "Classifier mean confidence",
         "Unique sessions", "Avg questions per session",
         "Turns/session", "Contact-conversion",
-        "Tool uptake", "Tool-call success",
+        "Tool calls / TECHNICAL turn", "Tool-call success",
         "classifier", "retrieval", "generation", "guardrail", "total",
     ):
         assert label in overview, f"missing metric row: {label!r}"

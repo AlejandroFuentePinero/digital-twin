@@ -53,15 +53,13 @@ THRESHOLDS: dict[str, Threshold] = {
     # Latency — only the headline (total p95)
     "latency_p95_total": Threshold(healthy=25_000, warning=40_000, unit="ms"),
     # Higher-is-better metrics.
-    # NB: ``technical_tool_uptake_rate`` was previously thresholded
-    # (healthy >= 0.70, warning >= 0.50) but the denominator (`all TECHNICAL`)
-    # includes turns that legitimately don't need a tool call — meta-questions
-    # about the system, generic skills questions, follow-ups whose context is
-    # already in scope. The threshold produced false warnings at "normal"
-    # uptake levels. Demoted to orientation: the rate is still rendered for
-    # the operator, but no badge / no warning. A future fix (LIMITATIONS::P8)
-    # would refine the denominator to only count TECHNICAL turns that name a
-    # specific project from `data/readmes/registry.json`.
+    # NB: ``technical_tool_call_rate`` (renamed from ``technical_tool_uptake_rate``
+    # in PRD #41 slice 3) is orientation-only — no threshold. The denominator
+    # (`all TECHNICAL`) includes turns that legitimately don't need a tool call
+    # — meta-questions about the system, generic skills questions, follow-ups
+    # whose context is already in scope. The canary-side
+    # ``tool_uptake_on_warranted(corpus)`` (LIMITATIONS::P8) is the surface
+    # with the clean denominator.
     "contact_conversion_rate": Threshold(healthy=0.10, warning=0.05, higher_is_better=True),
     "turns_per_session_median": Threshold(healthy=2.0, warning=1.5, higher_is_better=True, unit=""),
 }

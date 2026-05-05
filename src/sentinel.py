@@ -1174,7 +1174,7 @@ FRIENDLY_BANNER_LABELS: dict[str, str] = {
     "low_confidence_rate":          "Uncertain classifications",
     "confident_failure_rate":       "Misclassified questions",
     "latency_p95_total":            "Slow responses",
-    "technical_tool_uptake_rate":   "Tool usage",
+    "technical_tool_call_rate":     "Tool calls per TECHNICAL turn",
     "contact_conversion_rate":      "Contact form submitted",
     "turns_per_session_median":     "Conversation depth",
 }
@@ -1279,9 +1279,11 @@ METRIC_SPECS: list[tuple[str, list[tuple]]] = [
     ]),
     ("Tool use", [
         ("Tool calls (count)",         None,                          lambda m: m.tool_call_count, str),
-        # Tool uptake is orientation only — see metric_status.py for the
-        # denominator caveat (not every TECHNICAL turn warrants a tool call).
-        ("Tool uptake (TECHNICAL)",    None,                          lambda m: m.technical_tool_uptake_rate, _fmt_pct),
+        # technical_tool_call_rate is orientation only — see metric_status.py
+        # for the denominator caveat (not every TECHNICAL turn warrants a
+        # tool call). Renamed from technical_tool_uptake_rate in PRD #41
+        # slice 3 to drop the normative "uptake" framing.
+        ("Tool calls / TECHNICAL turn", None,                         lambda m: m.technical_tool_call_rate, _fmt_pct),
         ("Tool-call success rate",     None,                          lambda m: m.tool_call_success_rate, _fmt_pct),
     ]),
     ("Latency", [
@@ -1330,7 +1332,7 @@ METRIC_GLOSSARY: dict[str, str] = {
     "Contact-conversion rate":                             "Share of offered sessions that submitted the form — joined session-level on contacts.jsonl.",
     # Tool use
     "Tool calls (count)":                                  "Total fetch_project_readme invocations across the window — volume signal.",
-    "Tool uptake (TECHNICAL)":                             "Fraction of TECHNICAL turns that invoked a tool — orientation only (denominator is conceptually noisy).",
+    "Tool calls / TECHNICAL turn":                         "Rate of TECHNICAL turns that invoked at least one tool call — descriptive direction-of-change orientation, not a target. Denominator is all TECHNICAL turns (LIMITATIONS::P8); the canary tab carries the warranted-only counterpart.",
     "Tool-call success rate":                              "Fraction of tool invocations that returned successfully — should be ~100% for local file reads.",
     # Latency
     "classifier":                                          "p50 | p95 | share of total p95 for the classifier stage — typical 1s, p95 ≈ 1.7s; gpt-4.1-nano cached.",
@@ -2290,7 +2292,7 @@ METRIC_LABELS: dict[str, str] = {
     "low_confidence_rate": "Low-confidence rate (<0.7)",
     "confident_failure_rate": "Confident-failure rate (≥0.8 & failed)",
     "latency_p95_total": "Total latency p95",
-    "technical_tool_uptake_rate": "Tool uptake (TECHNICAL)",
+    "technical_tool_call_rate": "Tool calls / TECHNICAL turn",
     "contact_conversion_rate": "Contact-conversion rate",
     "turns_per_session_median": "Turns/session (median)",
 }
@@ -2302,7 +2304,7 @@ THEMATIC_BLOCKS: dict[str, list[str]] = {
     ],
     "Routing": ["low_confidence_rate", "confident_failure_rate"],
     "Engagement": ["turns_per_session_median", "contact_conversion_rate"],
-    "Tool use": ["technical_tool_uptake_rate"],
+    "Tool use": ["technical_tool_call_rate"],
     "Latency": ["latency_p95_total"],
 }
 
