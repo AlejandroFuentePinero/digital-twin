@@ -86,12 +86,12 @@ When a Tier A metric goes red OR a Tier B metric fires a shift alert, the matchi
 
 #### `attempts_distribution` (Session 40)
 
-- **Definition:** `Counter(min(len(r.attempts), 3) for r in records)` bucketed as `{"1", "2", "3+"}`, expressed as fractions.
-- **What it measures:** share of turns by retry depth — what fraction sailed through clean (attempt 1), what fraction needed one rejection-and-recovery (attempt 2), what fraction hit the retry ceiling (3+).
-- **What it proxies:** guardrail health, mid-band. The endpoints are already covered by `refusal_rate` (3+ rejected) and `retry_exhausted_rate` (3+ regardless of acceptance); this row fills in the middle and lets the operator see "20% of turns needed the guardrail to push back" as its own number.
+- **Definition:** `Counter(min(len(r.attempts), 3) for r in records)` bucketed as `{"1", "2", "3"}`, expressed as fractions. Bucket keys are exact counts because `pipeline.MAX_ATTEMPTS = 3` is the hard upper bound — the loop terminates at attempt 3, so a `"3+"` framing would suggest a "4 or more" possibility that doesn't exist (corrected in Session 52).
+- **What it measures:** share of turns by retry depth — what fraction sailed through clean (attempt 1), what fraction needed one rejection-and-recovery (attempt 2), what fraction hit the retry ceiling (3).
+- **What it proxies:** guardrail health, mid-band. The endpoints are already covered by `refusal_rate` (3 rejected) and `retry_exhausted_rate` (3 regardless of acceptance); this row fills in the middle and lets the operator see "20% of turns needed the guardrail to push back" as its own number.
 - **No threshold** — orientation. The thresholded `refusal_rate` and `retry_exhausted_rate` carry the alerting; this is for context.
 - **Confidence:** high — direct read.
-- **Display:** inline distribution `1: 91% · 2: 7% · 3+: 2%` in the Outcome block, matching the `branch_distribution` rendering pattern.
+- **Display:** inline distribution `1: 91% · 2: 7% · 3: 2%` in the Outcome block, matching the `branch_distribution` rendering pattern.
 
 ### Routing block
 

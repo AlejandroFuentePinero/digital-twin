@@ -1122,7 +1122,7 @@ def _fmt_latency_row(p: dict) -> str:
 
 
 def _fmt_attempts_distribution(d: dict[str, float]) -> str:
-    """Inline distribution: ``1: 75% · 2: 18% · 3+: 7%`` — same compact
+    """Inline distribution: ``1: 75% · 2: 18% · 3: 7%`` — same compact
     pattern as branch_distribution."""
     if not d:
         return EM_DASH
@@ -1407,7 +1407,7 @@ METRIC_GLOSSARY: dict[str, str] = {
     "Refusal rate":                                        "Share of turns that bottomed out into the canned-refusal copy after 3 rejected guardrail attempts. Tier A — value alert (mechanism IS failure).",
     "Guardrail rejection rate":                            "Share of turns where the guardrail rejected at least one attempt — composite over fabrication, scope, tone, injection, dishonest gap. Tier B — shift-detected.",
     "Retry-exhaustion rate":                               "Share of turns that consumed all 3 generation attempts — superset of refusal_rate; the gap is barely-accepted turns. Tier A — value alert.",
-    "Attempts distribution":                               "Share of turns by attempt count (1 / 2 / 3+) — fills the middle between first-attempt-pass and retry-exhausted. Tier C — orientation chip.",
+    "Attempts distribution":                               "Share of turns by attempt count (1 / 2 / 3) — fills the middle between first-attempt-pass and retry-exhausted. MAX_ATTEMPTS=3 is the hard ceiling, so the bucket key is exact (no '3+'). Tier C — orientation chip.",
     # Routing
     "Classifier branch distribution":                      "Fraction of turns routed to each branch (GENERIC / GAP / TECHNICAL / BEHAVIOURAL / LOGISTICAL). Tier C — orientation chip.",
     "Classifier mean confidence":                          "Average classifier confidence across the window — direct read of how sure the classifier is on average. Tier B — shift-detected.",

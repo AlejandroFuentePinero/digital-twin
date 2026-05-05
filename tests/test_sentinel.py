@@ -987,8 +987,9 @@ def test_format_trend_header_surfaces_metric_label_and_current_value():
 
 def test_attempts_distribution_renders_with_three_buckets_in_metrics_overview():
     """Attempts distribution row appears in the Outcome block with the three
-    bucket labels (1 / 2 / 3+) inline — operator sees the share of turns at
-    each retry depth at a glance."""
+    bucket labels (1 / 2 / 3) inline — operator sees the share of turns at
+    each retry depth at a glance. Bucket keys are exact counts because
+    pipeline.MAX_ATTEMPTS=3 is the hard ceiling (no '3+' framing per Session 52)."""
     bad = _record_dict()
     bad["attempts"] = [
         {"answer": "x", "is_acceptable": False, "guardrail_feedback": "f"},
@@ -1003,8 +1004,9 @@ def test_attempts_distribution_renders_with_three_buckets_in_metrics_overview():
     overview = format_metrics_overview(models, priors)
 
     assert "Attempts distribution" in overview
-    # The bucket labels appear as the value-cell text.
-    assert "1:" in overview and "2:" in overview and "3+" in overview
+    # The bucket labels appear as the value-cell text — exact counts only.
+    assert "1:" in overview and "2:" in overview and "3:" in overview
+    assert "3+" not in overview, "MAX_ATTEMPTS=3 means '3+' framing is misleading"
 
 
 def test_latency_section_renders_caption_and_share_per_stage():

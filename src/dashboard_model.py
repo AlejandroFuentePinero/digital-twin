@@ -126,7 +126,13 @@ class DashboardModel:
 
     @property
     def attempts_distribution(self) -> dict[str, float]:
-        """Share of turns by attempt count: ``{"1": 0.75, "2": 0.18, "3+": 0.07}``.
+        """Share of turns by attempt count: ``{"1": 0.75, "2": 0.18, "3": 0.07}``.
+
+        Bucket keys are exact counts because ``pipeline.MAX_ATTEMPTS = 3`` is
+        the hard upper bound (the guardrail loop terminates at attempt 3); a
+        ``"3+"`` label would suggest a "4 or more" possibility that doesn't
+        exist. If MAX_ATTEMPTS ever rises, generalise the bucket keys to
+        match.
 
         Surfaces what fraction of turns the guardrail had to push back on. The
         endpoints are already covered by ``refusal_rate`` / ``retry_exhausted_rate``;
@@ -134,7 +140,7 @@ class DashboardModel:
         if not self.records:
             return {}
         total = len(self.records)
-        buckets = {"1": 0, "2": 0, "3+": 0}
+        buckets = {"1": 0, "2": 0, "3": 0}
         for r in self.records:
             n = len(r.attempts)
             if n <= 1:
@@ -142,7 +148,7 @@ class DashboardModel:
             elif n == 2:
                 buckets["2"] += 1
             else:
-                buckets["3+"] += 1
+                buckets["3"] += 1
         return {k: v / total for k, v in buckets.items()}
 
     @property
