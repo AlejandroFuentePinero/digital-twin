@@ -54,18 +54,6 @@ FAILURE_MODE_LABELS: dict[str, str] = {
 }
 
 
-# Per-mode CSS class, drives the row stripe + summary count colour. Each
-# mode gets a distinct colour so the operator can differentiate at a glance.
-# (Older code referenced this as ``FAILURE_MODE_SEVERITY``; the rename here
-# reflects that we no longer collapse modes into a 3-bucket severity.)
-FAILURE_MODE_SEVERITY: dict[str, str] = {
-    "refused":                  "refused",
-    "retry-exhausted":          "retry-exhausted",
-    "rejected-then-recovered":  "rejected-then-recovered",
-    "gap":                      "gap",
-    "deflected":                "deflected",
-}
-
 # Sort rank: refused first (system gave up), retry-exhausted next (3
 # rejected attempts), rejected-then-recovered (system fought back to OK),
 # gap and deflected last (informational — honest "I don't know" or correct

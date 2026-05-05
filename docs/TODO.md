@@ -3,13 +3,19 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-05 (Sessions 52-54 — Sentinel polish wrap-up: attempts label honesty, Trends 2-per-row layout, Tier B 14-day cold-start gate. All pre-Phase-5 observability work structurally complete; one operator action remains.)
-**Current phase:** **Observability rework complete (PRD `#41`) + all dashboard polish (Sessions 48-54) shipped.** Phase 5 (break the live system) blocks on canary baseline re-freeze (operator-gated). Suite at **532 passing**.
+**Last updated:** 2026-05-06 (Session 55 — Canary baseline re-frozen (`run-20260505-132248-4aeb15`); PRD `#41` closed; producer-rule architectural seam logged as `LIMITATIONS::P17`; bundled audit polish (F1/H/G1) shipped. Phase 5 unblocked.)
+**Current phase:** **Phase 5 — break the live system + recruiter eval.** Observability rework complete; canary baseline frozen; dashboard trustworthy; system publishable. Suite at **537 passing**.
 
 **Locked next-step order:**
-1. **Establish canary benchmark** — re-run `uv run python src/canary_runner.py --freeze-baseline` against the fixed v4 producer + relabelled corpus. Operator action; gated on credit availability. Expected baseline targets per `#45` Definition of Done: outcome accuracy ≥95%, red_flag_rate=0%, keyword coverage at or above pre-`#45` substantive subset (~85%). Runbook in `docs/audits/slice-4-canary-recalibration.md` § 9. Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39) stays open until this completes; closes PRD `#41`.
-2. **Run Phase 5** (break the live system) against the recalibrated canary + dashboard. **Blocked on step 1.**
-3. **Iterate dashboard from Phase 5 findings**, not from polish instinct.
+1. **Phase 5 thread (a)** — local probe session. Try recruiter-shaped probes, behavioural questions, gap questions, edge cases against the live system + Sentinel. Identify actual failure modes (informed by post-baseline canary trajectory + live-tab signals once log volume grows).
+2. **Phase 5 thread (b)** — recruiter eval pass. Run the existing eval harness with a recruiter-shape question set; compare against v4 baseline (MRR 0.866 / accuracy 4.56). Optional KB enrichment if probes surface specific-fact gaps that cost user-facing credibility.
+3. **Iterate dashboard from Phase 5 findings**, not from polish instinct. Re-tune Tier B bands (7%/15% placeholders) once a month of post-baseline traffic accumulates.
+
+**Deferred (gated on Phase 5 trip-wires):**
+- **Producer-rule v2** (`LIMITATIONS::P17`) — branch-identity-canonical conflation surfaced by Session 55 freeze. Defer until Phase 5 traffic shows the cost. New PRD if/when a trip-wire fires.
+- **Reproducibility provenance surface** (`LIMITATIONS::P16`) — `model_id` / `temperature` / `prompt_hash` are write-only; ship the failure-drilldown surface only when an incident actually reaches for them.
+- **HuggingFace Dataset migration** (issue `#5`, Phase 6) — sequenced after Phase 5.
+- **HuggingFace Spaces deploy** (issue `#6`, Phase 7) — sequenced last.
 
 **Audit-first discipline (slices 1–4):** every slice ships with a written audit at `docs/audits/slice-<N>-<name>.md` listing field readers, predicted behaviour change, fixtures requiring updates, and workarounds removed. Audit lands first; code change lands second; PR review verifies the change matches the audit.
 

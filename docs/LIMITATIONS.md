@@ -507,6 +507,74 @@ Pre-#42 these outcomes silently mis-classified as `event_type='answered'` becaus
 
 ---
 
+### P16 — Reproducibility metadata is written but unsurfaced
+
+**Status:** Predicted (Session 55 audit).
+
+`InteractionRecord` carries four reproducibility fields populated by the producer at `pipeline.py:240–243`: `git_sha`, `model_id`, `temperature`, `prompt_hash`. Issue #37 added them to enable replay-failed-turn affordances and shift-vs-prompt-change correlation. As of 2026-05-05, `git_sha` is read by `canary_drift.aggregate_question` (and surfaced by Sentinel's canary drift summary as `from_sha → to_sha`), but `model_id` / `temperature` / `prompt_hash` have **no consumer in `src/`** beyond the producer itself. Tests assert the write; no surface reads them.
+
+The data is on disk and recoverable. The risk is the half-finished-feature pattern: three releases from now this looks like the `multi_label_rate` shape — fields nobody remembers writing, no consumer ever reading them, deletion candidates without context.
+
+**Why this is logged but not fixed today:**
+
+- The intended use case (replay a failed turn against a specific prompt+model+temperature pin; correlate a Sentinel shift with a recent prompt edit by `prompt_hash` change) is real but speculative. No incident yet has reached for these fields to diagnose.
+- Building the consumer surface (Sentinel "Provenance" sub-section on the failure drilldown) without a concrete need would be the build-vs-validate spiral the operator already flagged in Sessions 49–54. Better path: defer until Phase 5 produces an incident where these fields would have unblocked diagnosis.
+
+**Trip-wires (any one promotes to Observed and triggers building the surface):**
+
+1. A failure-feed drilldown investigation actually reaches for `prompt_hash` to answer "did this regression land with the last prompt edit?" — and the operator has to construct the read manually.
+2. A Phase 5 break-the-system experiment needs to replay a specific record's prompt at the exact `(model_id, temperature, prompt_hash)` it ran under, and the fields aren't surfaced for selection.
+3. Sentinel surfaces a Tier B shift and the operator needs `git_sha` × `prompt_hash` to attribute it — and `prompt_hash` isn't there.
+
+**Action when a trip-wire fires:** add a Provenance row to the failure-feed drilldown rendering `(git_sha, model_id, temperature, prompt_hash)` with a copy-paste-safe format. Estimate: ~one short slice; the data is already on disk.
+
+---
+
+### P17 — Producer rule conflates branch identity with outcome label (LOGISTICAL / GAP)
+
+**Status:** **Observed** (Session 55, 2026-05-06 baseline re-freeze).
+
+`event_classifier.classify_event_type(branch, final_answer)` (`src/event_classifier.py:25–28`) makes branch identity canonical for two branches:
+
+```python
+if branch == "GAP":          return "gap"
+if branch == "LOGISTICAL":   return "deflected"
+```
+
+This was the deliberate slice-1 design ("branches imply outcomes"). It compresses the 4-value `event_type` enum onto branch identity for these two cases without reading the answer text. The downstream consequence — surfaced by Session 55's freeze — is that **substantive answers from these branches are tagged with their branch's outcome label regardless of content**:
+
+- **LOGISTICAL substance**: "Where are you based?" → "Alejandro de la Fuente is based in Melbourne, Victoria, Australia." Substantive logistical answer; producer tags `event_type=deflected`. Canary's `derive_outcome` maps `deflected → out_of_scope_redirect`. Corpus expected `answered_with_substance` (correct semantically; the answer IS substance, not a redirect). Mismatch.
+- **GAP-branch constructive answer**: "How much production AWS experience?" → "Foundational, AWS Cloud Practitioner cert (CLF-C02, 2026), no production yet." Constructive gap-aware answer (calibration-ladder shaped per `profile.md`); producer tags `event_type=gap`. Canary's `derive_outcome` maps `gap → gap_acknowledged`. Corpus expected `answered_with_substance` (the answer DOES have substance — it names credentials and concrete services).
+
+**Session 55 freeze evidence:** 24 of 42 record-level canary misses (out of 150 records) trace directly to this conflation — 12 LOGISTICAL substance + 12 GAP-branch constructive. Together with the related TECHNICAL-paraphrased-gap case (3 records) and the refusal-class deflection cases (9 records), 36 of 42 outcome misses are the producer rule's overgeneralization, not system errors. `red_flag_rate=0%` on the same run confirms no fabrications.
+
+**Why this is logged but not fixed today:**
+
+- The rule's branch-identity-canonical decision is genuinely simpler than reading answer content for every emit. Slice 1 picked simplicity; slice 4's corpus relabel made an assumption that didn't hold against it. Both decisions were defensible alone; they don't compose.
+- Internal observability surface only — `event_type` is not user-facing. A recruiter asking "Where are you based?" sees "Melbourne", not the `deflected` label. So the conflation has zero user-facing impact today.
+- Tier B trajectory shift-detection cares about deltas from a baseline, not the baseline's absolute level. The frozen baseline carries the conflation; subsequent runs will too; shifts surface against the same shape.
+- Companion to `P15`. `P15` covers the converse: TECHNICAL/BEHAVIOURAL graceful-deflect outcomes that the post-#42 phrase-detection rule classifies correctly. `P17` is the inverse: LOGISTICAL/GAP branches whose phrase-detection is shortcut by the branch-identity rule.
+
+**Trip-wires (any one promotes producer-rule v2 to in-scope):**
+
+1. Phase 5 recruiter eval shows real downstream cost — e.g., the operator wants the canary trajectory to distinguish "Where are you based?" → "Melbourne" (substance, healthy) from "What's your favorite movie?" → "I'm here to discuss professional background" (deflection, expected). With the current rule both look like `deflected`/`out_of_scope_redirect`; trajectory drift on either becomes ambiguous.
+2. A subsequent re-freeze produces `outcome_accuracy < 65%` on the same corpus + producer code. The Session 55 anchor is 72%; sustained drift below that signals a producer or prompt change interacting badly with the conflation.
+3. Operator wants to integrate canary outcome metrics into a CI gate (e.g., "fail PR if outcome_accuracy drops > 5%"). Current 72% baseline is too noisy a floor for a CI threshold; the conflation must be cleaned up first.
+4. Sentinel Live tab's Tier B `answered_with_substance_rate` shift-alerts trigger on traffic mix changes that are actually LOGISTICAL/GAP rebalancing rather than substance changes — the rule's rigidity propagates to the live tab and confuses operator reads.
+
+**Action when a trip-wire fires:** open a "producer rule v2" PRD with this scope:
+
+- Read `final_answer` content for LOGISTICAL: if the answer carries a `DEFLECTION_MARKERS` literal at the start (or covers <N tokens of substance), keep `deflected`; otherwise emit `answered`. Lets "Where are you based?" → "Melbourne" register as substance.
+- Read `final_answer` content for GAP: if the answer contains `GAP_PHRASE` AND is short (gap-only), keep `gap`; if the answer contains `GAP_PHRASE` AND has additional substance (calibration-ladder shape — broader skill + active learning), emit a new `gap_with_substance` value (or stay `answered`, depending on the canary contract redesign). Schema bump to v5.
+- Update `derive_outcome` in tandem so the canary's outcome bucketing maps the new event_type values cleanly.
+- Re-relabel the corpus and re-freeze. Expect outcome_accuracy to land in the 90s.
+
+The work is plausibly one PRD's worth (audit doc + producer change + canary-side update + corpus relabel + re-freeze). Estimate: 3-4 sessions, similar in shape to slice 4 of `#41`. **Do not start until a trip-wire fires** — Path A from Session 55 deferred this deliberately.
+
+**Companion observability:** the post-#42 framework treats `outcome_accuracy` as a Tier B shift-detection metric, not a Tier A value-on-band alert. The 72% baseline anchors trajectory; absolute level isn't a gate. This `P17` entry exists so a future maintainer reading "outcome_accuracy 72%" doesn't read it as a defect to fix unilaterally.
+
+---
+
 ## Cross-references
 
 - [`docs/adr/0003-classify-then-route-orchestration.md`](./adr/0003-classify-then-route-orchestration.md) — architectural risks (predicted entries cite §Operational risks).

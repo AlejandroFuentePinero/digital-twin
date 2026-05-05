@@ -3,7 +3,7 @@ import pytest
 from branches import REGISTRY, BranchSpec
 from composer import PromptComposer
 from profile import ProfileLoader
-from rules import DEFLECTION_MARKERS, RULES, UNIVERSAL
+from rules import DEFLECTION_MARKERS, GAP_PHRASE, RULES, UNIVERSAL
 
 
 @pytest.fixture
@@ -156,4 +156,29 @@ def test_deflecting_branches_carry_a_canonical_deflection_marker_literal(branch,
     assert any(marker in prompt for marker in DEFLECTION_MARKERS), (
         f"branch={branch} prompt is missing every DEFLECTION_MARKERS literal — "
         "the prompt↔producer contract has drifted"
+    )
+
+
+@pytest.mark.parametrize("branch", list(REGISTRY.keys()))
+def test_every_branch_generator_prompt_carries_gap_phrase_literal(branch, fixture_profile):
+    """Forcing function for the GAP_PHRASE prompt↔producer contract.
+
+    `event_classifier.classify_event_type` upgrades any answer containing
+    `GAP_PHRASE` to `event_type='gap'` — the catch-all rule that surfaces
+    graceful-deflect outcomes from non-GAP branches (TECHNICAL/BEHAVIOURAL
+    probing absent skills, etc., per LIMITATIONS::P15). For that producer
+    rule to keep firing, every branch's generator prompt must instruct the
+    model to emit the literal phrase when it can't answer from context.
+
+    Today this is enforced by `composer.GENERATOR_FRAMING` (universal,
+    appended on every generator compose call). A future edit that drops
+    the literal — or replaces it with a paraphrase — fails this test
+    before it ships, mirroring the DEFLECTION_MARKERS guard above.
+    """
+    composer = PromptComposer(fixture_profile, REGISTRY)
+    prompt = composer.compose([branch], "generator")
+    assert GAP_PHRASE in prompt, (
+        f"branch={branch} generator prompt is missing the GAP_PHRASE literal — "
+        "the prompt↔producer contract has drifted (event_classifier's gap "
+        "fallback would silently stop firing)"
     )

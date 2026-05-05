@@ -71,7 +71,6 @@ from flag_detector import (
 from summarize_failures import DEFAULT_SUMMARIES_DIR, latest_summary_path, read_summary
 from failure_feed import (
     FAILURE_MODE_LABELS,
-    FAILURE_MODE_SEVERITY,
     FAILURE_MODES,
     FailureRow,
     Session,

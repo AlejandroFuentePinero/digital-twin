@@ -5,6 +5,89 @@
 
 ---
 
+## Session 55 (2026-05-06) — Canary baseline re-frozen; PRD `#41` closed; producer-rule architectural seam logged as `P17`; bundled audit polish (F1/H/G1)
+
+**Status:** PRD `#41`'s outstanding operator-gated step shipped. Canary baseline re-frozen against the v4 producer + relabelled corpus (`run-20260505-132248-4aeb15`, 2026-05-05 14:00 UTC, sha `4898d05`). DoD partially passed; the misses are dominantly an architectural seam between slice-1's branch-identity-canonical producer rule and slice-4's outcome-quality corpus relabel — not regressions. Decision: **accept the new baseline as the honest signal** (Step 6 of the slice-4 playbook). PRD `#41` closes in scope. Phase 5 unblocked. Suite at **537 passing** (+5 net from Session 54's 532 — new parametrized GAP_PHRASE composer test).
+
+### What shipped
+
+**1. Canary baseline re-freeze.**
+- New baseline: `run_id=run-20260505-132248-4aeb15`, `frozen_at=2026-05-05T14:00:18.709685+00:00`, `frozen_git_sha=4898d057363de946cba3ee4dc1158f38d1fb22fa`. 150 records (50 questions × 3 replicates).
+- First attempt aborted at ~143/150 records on `openai.RateLimitError: insufficient_quota` mid-batch. Recovery per `LIMITATIONS::P14`: leave the orphan run (`run-20260505-124543-298c7d`, 143 records) in place — destructive deletion is worse than inert orphan data. Operator topped up OpenAI quota; second attempt completed cleanly. Total canary records in log post-freeze: 293 (150 baseline + 143 orphan), drift detector groups by run_id so orphans are inert.
+
+**2. DoD outcome (issue `#45`) — partial pass; honest signal accepted.**
+
+| Metric | Result | DoD target | Pass |
+|---|---:|---|---|
+| `outcome_accuracy` | **72.00%** | ≥ 95% | ❌ |
+| `red_flag_rate` | **0.00%** | = 0% | ✅ |
+| `keyword_coverage` | **80.98%** | ≥ 85% | ❌ |
+
+**3. Per-record triage (42 missed records out of 150).** Honest categorization:
+
+| Category | Records | Root cause | Action |
+|---|---:|---|---|
+| LOGISTICAL substance vs branch-rule | 12 | "Where are you based?" → "Melbourne" tagged `event_type=deflected` because `event_classifier.py:27` returns `deflected` for any LOGISTICAL turn. Corpus expected `answered_with_substance`. | Logged as `P17`; defer fix |
+| GAP-branch substance vs branch-rule | 12 | Constructive gap-aware answers (AWS / ML years / React / on-call) tagged `gap` by branch identity; corpus expected substance. | Logged as `P17`; defer fix |
+| Refusal-class produced graceful deflection | 9 | Password / phishing / jailbreak prompts produce polite redirects; corpus expected hard `refused`. System behaviour is defensible (modern best practice). | Corpus relabel candidate, deferred |
+| TECHNICAL paraphrased gap | 3 | CUDA → "I don't have hands-on production experience…" lacks literal `GAP_PHRASE`; producer tags `answered`. | Genuine producer-rule blind spot; under `P17` umbrella |
+| KB content gap | 3 | "Would you accept gambling industry?" — KB has no stance; system honestly deflects. | KB enrichment candidate, optional |
+| Real stochastic jitter | 3 | 1 replicate guardrail-rejected on 2 substantive technical questions (~2% rate); 1 replicate routed GAP instead of GENERIC on ecology↔AI question. | Acceptable variance; monitor |
+
+- **0 confirmed system regressions.** No fabrications (red_flag_rate=0%). No real misroutes that produce wrong answers. Same diagnostic shape as Session 43's PRD `#41` trigger: "the system is healthy; the observability contract is the bug."
+- **39 of 42 misses are corpus-vs-producer-rule structural mismatch.** Slice-1 made branch identity canonical (`event_classifier.py:25–28`); slice-4's corpus relabel pass overlaid `answered_with_substance` on questions whose branch deterministically produces `deflected` or `gap`. Both decisions were defensible in isolation; they don't compose.
+- **3 misses are acceptable model variance** — stochastic guardrail false-positives + classifier replicate jitter, well within "modern LLM noise" — exactly what Tier B shift-detection exists to monitor.
+- **Keyword_coverage (81%)** decomposes into ~5 synonym-brittleness ("820k" vs "820,000"), ~7 over-specified phrasing ("first industry tenure"), ~7 genuine KB gaps ("Cohen's kappa", "33 iterations", "Bayesian hierarchical"). Mix of test-side and content-side; not user-facing-blocking.
+
+**4. Path-A decision: accept the new baseline as the honest signal.**
+- The 72% / 81% numbers are the truth under the current producer rule + corpus contract. Not regressions to fix; structural exposure of an architectural seam.
+- Tier B trajectory shift-detection cares about deltas from a baseline, not the baseline's absolute level. Phase 5 trajectory tracking works fine from this anchor.
+- Path B (re-relabel corpus to bend to the rule) would lock in the conflation — canary loses ability to distinguish substantive logistical answers from out-of-scope deflections. Rejected.
+- Path C (producer-rule v2: branch identity conditioned on answer shape) is a real PRD's worth of work. Defer until Phase 5 traffic shows the conflation costs more than tracking around it. Logged as a `P17` trip-wire action.
+
+**5. Bundled audit polish (F1 / H / G1).** During the freeze wait, ran a thorough codebase audit looking for residual producer-pattern bugs / dead code / legacy. Producer pattern is **not replicated** — every `Literal`/`Enum` has full producer coverage; every consumer filter targets values that get emitted; no `OR-proxy` fallbacks. Three small findings shipped in the same diff:
+- **F1.** Dead constant `FAILURE_MODE_SEVERITY` deleted from `src/failure_feed.py`; dead import removed from `src/sentinel.py`.
+- **H.** New parametrized `test_every_branch_generator_prompt_carries_gap_phrase_literal` in `tests/test_composer.py` — mirrors the existing `DEFLECTION_MARKERS` guard. `event_classifier`'s GAP fallback silently relies on the prompt instructing the model to emit the canonical phrase; this test fails before any composer edit ships that drops it. +5 tests (one per branch).
+- **G1.** Reproducibility fields (`model_id` / `temperature` / `prompt_hash`) are write-only — issue #37 added them to enable replay-failed-turn but no consumer reads them yet. Logged as `LIMITATIONS::P16` rather than building the surface speculatively (avoids the build-vs-validate spiral the operator flagged in Sessions 49-54).
+
+**6. New `LIMITATIONS::P17` — Producer rule conflates branch identity with outcome label (LOGISTICAL/GAP).** The architectural seam surfaced by this freeze. Documents the rule, the freeze evidence, the trip-wires that would promote producer-rule v2 to in-scope, and the action recipe.
+
+### Decisions
+
+**1. Accept the freeze as the honest baseline (Path A).** The post-#45 corpus relabel pass made an inconsistent assumption about how the post-#42 producer rule classifies LOGISTICAL substance and GAP-branch constructive answers. The cleanest read is "both decisions were defensible alone; they don't compose." Re-running the relabel to match the rule (Path B) bakes the conflation into the test contract; rebuilding the rule (Path C) is a Phase 5 PRD. Path A defers both with documentation.
+
+**2. PRD `#41` closes in scope at slice 4 + freeze.** All four slices shipped. Audit-first discipline held throughout. The freeze produced honest numbers; the gap between numbers and DoD is logged, not fixed. Acceptance gate per slice-4 spec ("canary tab shows outcome accuracy / keyword coverage / red-flag rate against a healthy v4 baseline") is met — the numbers reflect reality.
+
+**3. `#39` and `#45` already closed; no re-open. PRD `#41` closure happens here.** Per the playbook this session's deliverable is the freeze + write-up + `#41` closure; `#39` and `#45` were closed earlier when their deliverables landed (canary infrastructure + slice-4 corpus / dashboard / drift-detector code).
+
+**4. Bundled the audit polish into this session rather than a separate commit batch.** F1/H/G1 were a 30-minute polish on top of the freeze wait. Splitting into its own session would over-state the work. Consolidated entry mirrors the Sessions 52-54 pattern.
+
+**5. Public-launch readiness: nothing here blocks shipping.** Per operator review (this session): the producer-rule seam is internal-observability-only — recruiters never see `event_type`. The only user-facing concern is the small KB-coverage gap on specific facts ("Cohen's kappa", "33 iterations", "Bayesian hierarchical") that strengthen portfolio answers. Operator declined the KB enrichment as a hard requirement; the answers are correct without those specifics. **Phase 5 work begins from a publishable system.**
+
+### Live smoke verification
+
+- Full suite: 537 / 537 passing (+5 from Session 54's 532 — new GAP_PHRASE parametrized test).
+- New baseline pointer present at `data/canaries/baseline.json`; resolves to 150 records via `LocalReader().read()` + `is_canary` + `run_id` filter.
+- `red_flag_rate(corpus) = 0.0%` confirmed via direct `DashboardModel(records, include_canary=True, only_canary=True).red_flag_rate(corpus)` call. No fabrications across 150 records.
+- Sentinel canary tab Benchmark column populated by the new baseline; `+1` / `+2` / `+3` slots em-dash (no post-baseline runs yet).
+- F1 dead-code removal: `git grep -nE "FAILURE_MODE_SEVERITY" src/` returns zero hits.
+- H new test: `uv run pytest tests/test_composer.py::test_every_branch_generator_prompt_carries_gap_phrase_literal -v` passes for all 5 branches (GENERIC / GAP / LOGISTICAL / BEHAVIOURAL / TECHNICAL).
+
+### Outstanding (start of next session)
+
+- **Phase 5 begins.** Two threads per `docs/TODO.md`:
+  - (a) Local probe session — try recruiter probes, behavioural questions, gap questions, edge cases. Add 1–2 STAR stories to `personal_stories` if the probe surfaces gaps. KB enrichment for specific facts (Cohen's kappa / 33 iterations / Bayesian hierarchical / three PhD students / birdwatching analogy) is optional, gated on whether real recruiter probes show those gaps cost.
+  - (b) Live system breaking + recruiter eval. Sentinel dashboard now trustworthy; baseline frozen.
+- **Producer-rule v2 (`P17` action)** — defer until Phase 5 traffic shows the LOGISTICAL/GAP branch-identity conflation costs more than tracking around it. If Phase 5 surfaces the cost, open a new PRD; otherwise leave the rule in place.
+- **Tier B band tuning** (7%/15% placeholders) — unchanged. Recalibrate after a month of post-baseline traffic surfaces the noise/signal line.
+- **Branch is N commits ahead of `origin/main`.** Operator batches pushes; no PR opened.
+
+### Next session entry-point
+
+Start Phase 5 thread (a): local probe session. Either pick a few recruiter-shaped probes by hand and read the answers + Sentinel signals; or run the existing eval harness with a "post-launch shape" question set. The freeze gave Phase 5 a trustworthy dashboard and a frozen baseline — the rest is operator-driven exploration.
+
+---
+
 ## Sessions 52–54 (2026-05-05) — Sentinel polish wrap-up: attempts label honesty, Trends layout cap, Tier B cold-start gate
 
 **Status:** Three small-but-load-bearing polishes on top of Sessions 48-51. One consolidated entry because each is a single-commit change with the same operator-trust-improvement framing. Suite at **532 passing** (+3 net from Session 51's 529 — the 14-day Tier B gate adds 3 tests; #52 and #53 have no test delta).
