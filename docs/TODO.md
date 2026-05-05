@@ -3,13 +3,18 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-04 (Session 42 — `#39` implementation complete; baseline establishment deferred on Anthropic credit exhaustion)
-**Current phase:** **Phase 4.5 + canary (#39) implementation complete; baseline pending.** Suite at **460 passing**.
+**Last updated:** 2026-05-05 (Session 44 — `#42` slice 1 of PRD `#41` shipped; producer fix + Live tab cleanup complete)
+**Current phase:** **Observability rework in progress (PRD `#41`).** Slice 1 of 4 complete. Phase 5 (break the live system) paused until rework lands. Suite at **479 passing**.
 
 **Locked next-step order:**
-1. **Establish canary benchmark** — re-run `uv run python src/canary_runner.py --freeze-baseline` once Anthropic credits are restored. The first attempt (Session 42) crashed at question 26/50 on `400 Bad Request — credit balance too low`; 76 orphan records sit under `run_id=run-20260504-115055-336112`, `baseline.json` was never written. **Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39) stays open** until this step completes. See `LIMITATIONS::P14` for the partial-batch failure mode + recovery procedure.
-2. **Run Phase 5** (break the live system) against canary + dashboard. **Blocked on step 1.** Plan: deliberately introduce regressions in the pipeline; check whether the canary catches what the dashboard misses, and what the dashboard catches that canary doesn't. Iterate dashboard + canary corpus from real failure signals — not from polish instinct.
-3. **Iterate dashboard from Phase 5 findings**, not from polish instinct.
+1. **Slice 2 of PRD `#41`** — Failure Feed + Gap Clusters rebuild. Audit-first: draft `docs/audits/slice-2-failure-feed.md` *before* code. Owns the deferred question of whether `event_type='deflected'` belongs in the failure feed. Migrates `failure_feed.classify_failure` / `cluster_gaps.extract_gap_questions` / `summarize_failures` away from `knew_answer` proxy reads. Resolves the dashboard-vs-failure-feed `gap_rate` divergence documented in slice 1's audit § 5.
+2. **Slice 3 of PRD `#41`** — Metrics tab cleanup + remaining `knew_answer` legacy marking. `dashboard_model.confident_failure_rate`'s `not r.knew_answer` disjunct removed; `technical_tool_uptake_rate` reframed as descriptive (no normative threshold).
+3. **Slice 4 of PRD `#41`** — Canary recalibration. New `canary_outcome` deep module; `corpus.json` relabel (drop `expected_branch`/`requires_tool`/`expected_event_type`; add `expected_outcome`/`must_not_appear`); strip 226 historical canary records and re-freeze baseline against fixed v4 producer.
+4. **Establish canary benchmark** — re-run `uv run python src/canary_runner.py --freeze-baseline` once slice 4 lands and credits are restored. Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39) stays open until this completes. See `LIMITATIONS::P14`.
+5. **Run Phase 5** (break the live system) against the recalibrated canary + dashboard. **Blocked on step 4.**
+6. **Iterate dashboard from Phase 5 findings**, not from polish instinct.
+
+**Audit-first discipline (slices 1–4):** every slice ships with a written audit at `docs/audits/slice-<N>-<name>.md` listing field readers, predicted behaviour change, fixtures requiring updates, and workarounds removed. Audit lands first; code change lands second; PR review verifies the change matches the audit.
 
 ---
 

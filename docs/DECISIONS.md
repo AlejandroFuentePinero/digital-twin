@@ -5,6 +5,69 @@
 
 ---
 
+## Session 44 (2026-05-05) — Observability rework slice 1 shipped (`#42`): producer fix + Live tab cleanup
+
+**Status:** Slice 1 of PRD `#41` shipped end-to-end. 7 commits land on top of Session 43, audit doc lands first per the audit-first discipline. Suite at **479 passing** (+17 net from Session 43's 462). The producer now emits all four `event_type` values; the Live tab reads them directly. Slice 2 (Failure Feed + Gap Clusters rebuild) is the next entry-point.
+
+### What shipped
+
+| Commit | Layer |
+|---|---|
+| `a25503f` | Audit doc (`docs/audits/slice-1-producer-fix.md`) + new `event_classifier` module + `DEFLECTION_MARKERS` constant in `rules.py` |
+| `13a63e1` | Composer `DEFLECTION_INSTRUCTIONS` rule wired to LOGISTICAL/BEHAVIOURAL/GENERIC + parametrized static prompt-drift test |
+| `138f746` | Pipeline switches to `classify_event_type`; `interaction_log.SCHEMA_VERSION` constant; on-disk schema bumped from v3 to v4 |
+| `f61f929` | `LogReader` smart-normalize for any pre-v4 record carrying `GAP_PHRASE` (read-time only) |
+| `1f69a6a` | `dashboard_model.gap_rate` workaround removed; replacement test with a discriminator record forces the change |
+| `cb2fa6d` | Sentinel tooltips, `SENTINEL.md`, `LIMITATIONS.md` (new P15) — operator-facing copy aligned with the v4 contract |
+| `1ab42e2` | Midnight-safe time-series test (pre-existing flakiness surfaced mid-rebuild at 00:04 UTC) |
+
+### Decisions made (principled departures from PRD `#41`)
+
+The operator's directive at the start of slice 1 — *"fix things properly not just patches; think long-term, don't overfit to observed behaviour"* — drove three departures from the PRD's literal spec, all surfaced in the audit before implementation.
+
+**1. `DEFLECTION_MARKERS` reframed as a prompt↔producer contract, not a detector vocabulary.** The PRD listed five markers mined from observed transcripts. That framing leads to whack-a-mole: a model upgrade rewords deflections and the classifier silently regresses. The slice-1 framing inverts the dependency — the composer prompt instructs the model to *use* the canonical phrasings, the classifier reads the same constant, and a static prompt-drift test pins the two together. The list isn't "what we observed" but "what we instruct the model to use". Direct consequences: (a) apostrophe variants and paraphrases are surfaced naturally as guardrail-rule-following misses, not patched into the matcher; (b) a future model change is on-rule until proved otherwise; (c) adding a new deflection shape is a single edit to `rules.DEFLECTION_MARKERS` that the prompt rule, the classifier, and the static test all pick up automatically.
+
+**2. `LogReader` smart-normalize generalised from "v3 only" to "any pre-v4 record".** The PRD locked the smart-normalize to `schema_version == "3"` records. The audit's empirical pass found 8 historical v1 records carrying `GAP_PHRASE` that the v3-only narrowing would have left mis-labelled as `event_type='answered'` indefinitely. The PRD's stated rationale ("pre-fix prompts didn't enforce canonical phrasing for non-GAP_PHRASE deflection") applies equally to v1 and v2; `GAP_PHRASE` itself has been canonical across all schema versions. Generalising to `schema_version != SCHEMA_VERSION` has the same false-positive surface as the v3-only rule but is principled rather than patch-style. `DEFLECTION_MARKERS` is still NOT retro-applied (pre-v4 prompts didn't carry the marker contract).
+
+**3. `SCHEMA_VERSION` constant in `interaction_log.py` rather than literal `"4"` repeated across modules.** Both writer (`pipeline.py`) and reader (`log_reader._smart_normalize_event_type`) key off the constant. The next bump is a one-line edit. Tests reference the constant rather than hard-coding the version string. Same scope, better infrastructure.
+
+**Other principled calls inside the slice:**
+
+- **Tooltip rewrites in user-mental-model terms, not implementation terms.** `Gap rate` reads "Share of turns where the system either acknowledged it didn't have the information (canonical gap phrase) or produced a structured gap-aware response about an absent skill" — what the operator wants to know about system behaviour, not what the predicate computes.
+- **Threshold recalibration deferred, with explicit callout.** The pre-#42 thresholds (`gap_rate ≤ 10% healthy`) were calibrated against the proxy. The post-#42 metric reads materially higher on healthy traffic (~44% predicted live; mostly correct constructive GAP-branch responses). `SENTINEL.md` and the new `LIMITATIONS::P15` flag the historical thresholds as descriptive-not-actionable until a week of v4 traffic accumulates and the operator sets a new healthy band.
+- **`knew_answer` kept being written; reads survive in 4 modules into slices 2/3.** `failure_feed`, `cluster_gaps`, `summarize_failures`, `flag_detector`, and `dashboard_model.confident_failure_rate` continue to read `knew_answer`. Slice 1 stays bounded; slices 2/3 finish the consumer migration. Removal of the writer is a future v5 schema bump (TODO comment lands in `pipeline.py`).
+- **`gap_rate` test now carries a discriminator record.** A fixture with all-`knew_answer=True` records would have passed against either the pre-#42 proxy or the v4 definition. Adding a record with `event_type='answered'` + `knew_answer=False` forces the workaround removal — the pre-#42 disjunct counted it as a gap; the v4 definition does not.
+- **`event_classifier` registered under "Frame & Rules" in `system_map.py`.** Sibling to `rules.py` and `composer.py` — pure rule logic that converts pipeline output into a log signal. Module-graph artifact `docs/MAP.md` regenerated.
+
+### Predicted live impact (per audit § 5)
+
+Computed against the local 99-record live log:
+
+| Metric | Pre-#42 (proxy) | Post-#42 (real signal) |
+|---|---|---|
+| `gap_rate` | 9.4% | ~44.4% (40 GAP-branch + 4 phrase-bearing) |
+| `deflection_rate` | 0.0% (writer bug — flat) | ~7.1% (4 LOGISTICAL-branch + 3 phrase-bearing) |
+| `refusal_rate` | 1.0% | 1.0% (unchanged) |
+
+Most of the gap-rate jump is constructive GAP-branch gap-aware responses — the metric becoming honest, not a regression. Documented in audit § 5 + `LIMITATIONS::P15` so a future maintainer reading "gap_rate 44%" doesn't treat it as an alert.
+
+### Intermediate-state divergence (resolves in slice 2)
+
+Between slice 1 and slice 2, the dashboard `gap_rate` (~44%) and the failure-feed `gap` count (~8%) disagree because `failure_feed.classify_failure` still keys on `not record.knew_answer`. This is documented in the audit and resolves when slice 2's audit + rewrite migrates `failure_feed` / `cluster_gaps` / `summarize_failures` to read `event_type` directly.
+
+### Outstanding (start of next session)
+
+- **Slice 2 — Failure Feed + Gap Clusters rebuild.** Owner of the open question deferred from slice 1: should `event_type='deflected'` records appear in the failure feed, or only in metrics? Slice 2's audit decides. Other slice-2 surface: `failure_feed.classify_failure` reads `event_type` directly; `_REPEAT_FAILURE_EVENTS` filter audited and reset; `cluster_gaps.extract_gap_questions` switches from `not knew_answer` proxy to `event_type='gap'`; `summarize_failures.deflected` group surfaces real records (already coded that way; slice 1 just made it work end-to-end).
+- **`CONTEXT.md` edits live in working tree (gitignored)** — new `Event type` and `Deflection markers` glossary entries; `knew_answer` marked `[Legacy as of v4]`; `Interaction log` references `SCHEMA_VERSION`. Per commit `6c13221` `CONTEXT.md` is intentionally untracked.
+- **No PR opened, no push.** 7 commits ahead of origin (was 35; the previous 35 are still ahead too — total 42 commits ahead pending the operator's batched push).
+- **Phase 5** still paused. Resumes after observability rework (slices 2/3/4) completes.
+
+### Next session entry-point
+
+Read PRD `#41` for the canonical scope and slice-1 audit at `docs/audits/slice-1-producer-fix.md` for the implementation pattern. Pick up slice 2 by drafting the audit document at `docs/audits/slice-2-failure-feed.md` first, *then* implementing. The slice-1 audit's § 5 documents the dashboard-vs-failure-feed `gap_rate` divergence that slice 2 resolves; that's the load-bearing intermediate state to verify after slice 2 ships.
+
+---
+
 ## Session 43 (2026-05-05) — Canary baseline read → observability rework PRD (`#41`)
 
 **Status:** No code shipped. Planning session that produced PRD `#41` (the comprehensive observability rework) and closed PRD `#40` (the narrower canary-only recalibration) as superseded. Outcome: a 4-slice vertical-slicing plan covering producer fix + consumer cleanup + canary recalibration, locked behind an audit-first discipline.
