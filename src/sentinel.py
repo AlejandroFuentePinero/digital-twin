@@ -483,11 +483,13 @@ body, .gradio-container {
    the dark background. refused = bright red; retry-exhausted = orange (needed
    recovery loop but failed); rejected-then-recovered = amber (recovered);
    gap = info-blue (operator-friendly, distinct from the gray that disappears
-   into the background). */
+   into the background); deflected = teal (informational, parked at lowest
+   severity — surfaced for pattern-spotting on out-of-scope redirects). */
 .feed-summary .feed-summary-mode.refused                  { color: #f87171; }
 .feed-summary .feed-summary-mode.retry-exhausted          { color: #fb923c; }
 .feed-summary .feed-summary-mode.rejected-then-recovered  { color: #fbbf24; }
 .feed-summary .feed-summary-mode.gap                      { color: #60a5fa; }
+.feed-summary .feed-summary-mode.deflected                { color: #2dd4bf; }
 
 .feed-row {
     border: 1px solid var(--border);

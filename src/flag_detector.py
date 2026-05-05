@@ -130,7 +130,13 @@ def detect_new_cluster(
 
 # Event types that count toward the repeat-failure threshold. Excludes "gap"
 # (handled by the new_cluster detector + clustering batch) and "answered"
-# (success). Refused + deflected are the operator-actionable repeat patterns.
+# (success). Audited and confirmed in slice 2 of PRD #41 (see
+# `docs/audits/slice-2-failure-feed.md` § 2): a *repeat* pattern of identical
+# deflections in a short window is operator-actionable (suggests a missing
+# branch, a corpus pattern, or a spam category) even though *individual*
+# deflections are correct system behaviour. The trip-wire's click-target is
+# `failure_feed`, which post-#43 surfaces deflected rows at the lowest
+# severity tier so the click-through lands on real records.
 _REPEAT_FAILURE_EVENTS = {"deflected", "refused"}
 
 
