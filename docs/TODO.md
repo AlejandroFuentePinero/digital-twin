@@ -3,14 +3,13 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-05 (Session 46 — `#44` slice 3 of PRD `#41` shipped; consumer-side `knew_answer` migration complete; `technical_tool_uptake_rate` renamed to `technical_tool_call_rate`)
-**Current phase:** **Observability rework in progress (PRD `#41`).** Slices 1 + 2 + 3 of 4 complete. Phase 5 (break the live system) paused until rework lands. Suite at **484 passing**.
+**Last updated:** 2026-05-05 (Session 47 — `#45` slice 4 of PRD `#41` shipped; canary surface end-to-end on the new outcome contract; 226 historical canary records stripped; baseline re-freeze gated on operator credit availability)
+**Current phase:** **Observability rework complete (PRD `#41`).** All 4 slices shipped. Phase 5 (break the live system) blocks on canary baseline re-freeze. Suite at **503 passing**.
 
 **Locked next-step order:**
-1. **Slice 4 of PRD `#41`** — Canary recalibration. New `canary_outcome` deep module; `corpus.json` relabel (drop `expected_branch`/`requires_tool`/`expected_event_type`; add `expected_outcome`/`must_not_appear`); strip 226 historical canary records and re-freeze baseline against fixed v4 producer. Audit-first: draft `docs/audits/slice-4-canary-recalibration.md` *before* code.
-2. **Establish canary benchmark** — re-run `uv run python src/canary_runner.py --freeze-baseline` once slice 4 lands and credits are restored. Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39) stays open until this completes. See `LIMITATIONS::P14`.
-3. **Run Phase 5** (break the live system) against the recalibrated canary + dashboard. **Blocked on step 2.**
-4. **Iterate dashboard from Phase 5 findings**, not from polish instinct.
+1. **Establish canary benchmark** — re-run `uv run python src/canary_runner.py --freeze-baseline` against the fixed v4 producer + relabelled corpus. Operator action; gated on credit availability. Expected baseline targets per `#45` Definition of Done: outcome accuracy ≥95%, red_flag_rate=0%, keyword coverage at or above pre-`#45` substantive subset (~85%). Runbook in `docs/audits/slice-4-canary-recalibration.md` § 9. Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39) stays open until this completes; closes PRD `#41`.
+2. **Run Phase 5** (break the live system) against the recalibrated canary + dashboard. **Blocked on step 1.**
+3. **Iterate dashboard from Phase 5 findings**, not from polish instinct.
 
 **Audit-first discipline (slices 1–4):** every slice ships with a written audit at `docs/audits/slice-<N>-<name>.md` listing field readers, predicted behaviour change, fixtures requiring updates, and workarounds removed. Audit lands first; code change lands second; PR review verifies the change matches the audit.
 

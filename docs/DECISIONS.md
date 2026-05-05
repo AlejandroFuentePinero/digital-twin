@@ -5,6 +5,88 @@
 
 ---
 
+## Session 47 (2026-05-05) — Observability rework slice 4 shipped (`#45`): canary surface recalibrated end-to-end, contract switched from mechanism to outcome
+
+**Status:** Slice 4 of PRD `#41` shipped end-to-end (PR-equivalent batch). Audit doc lands first per the audit-first discipline; new `canary_outcome` deep module, corpus relabel, dashboard / drift-detector / Sentinel rewires, and the 226-record historical strip follow. Suite at **503 passing** (+19 net from Session 46's 484 — 11 new `canary_outcome` tests, 7 new drift-kind tests, 1 new dashboard method test net). PRD `#41` is closed in scope; the canary baseline re-freeze (step 7 of the slice spec) is gated on operator credit availability and lands as a follow-on operator action. Issue `#39` stays open until the re-freeze completes.
+
+### What shipped
+
+| Layer | Change |
+|---|---|
+| Audit | `docs/audits/slice-4-canary-recalibration.md` — field-reader inventory across `expected_branch` / `requires_tool` / `expected_event_type` / `branch_match_rate` / `tool_uptake_on_warranted` + the existing canary drift kinds; predicted behaviour, fixtures, workarounds removed; new corpus contract design; canary_outcome deep module spec; resolution of the two PRD-deferred open questions |
+| Code | New `src/canary_outcome.py` deep module — pure functions `derive_outcome(record, q) -> Outcome`, `has_red_flag(record, q) -> bool`, `keyword_hits(record, q) -> (matched, total)`. Imports `CanaryQuestion` via `TYPE_CHECKING` to break the circular dependency on `canary_corpus` |
+| Code | `src/canary_corpus.CanaryQuestion` recalibrated — drop `expected_branch` / `expected_event_type` / `requires_tool`; add `expected_outcome: Outcome` / `must_not_appear: list[str]`. Validation switches from `branches.REGISTRY` to the four-bucket `Outcome` literal — typo / removed bucket fails on import (same forcing-function pattern) |
+| Code | `data/canaries/corpus.json` 50-question relabel — `expected_outcome` populated per question; `must_not_appear` populated for gap / refused / out-of-scope outcomes (and selectively on calibration_ladder entries where a specific shape would constitute fabrication). C019–C022 (out-of-scope personal probes) reclassified from pre-`#45` `gap_acknowledged` to `out_of_scope_redirect` — resolves the pre-existing producer-vs-corpus disagreement that Session 42's baseline read as `branch_match_rate=78.7%` drift |
+| Code | `src/dashboard_model.py` — `branch_match_rate(corpus)` and `tool_uptake_on_warranted(corpus)` deleted. `outcome_accuracy(corpus)` / `keyword_coverage(corpus)` / `red_flag_rate(corpus)` added |
+| Code | `src/canary_drift.py` — three new drift kinds (`outcome_changed` always-major, `keyword_coverage_dropped` minor at ≥0.2 / major at ≥0.5, `red_flag_emerged` always-major + asymmetric — clearing a red flag is improvement). `AggregatedCanaryRun` gains `outcome` / `keyword_coverage` / `red_flag` fields. `aggregate_question` takes an optional `CanaryQuestion` to populate the new fields. `stratified_summary` returns `by_outcome` / `by_category` / `by_drift_kind` |
+| Code | `src/sentinel.py` — Quality block in `format_canary_health_blocks` rebuilt: drop two rows (Branch match / Tool uptake), add three (Outcome accuracy / Keyword coverage / Red-flag rate). `format_canary_stratified` reads `by_outcome` instead of `by_branch`. Per-question table renders `Expected outcome` instead of `Expected branch`. `_delta_cell` docstring example updated |
+| Code | `src/system_map.py` — `canary_outcome` registered in `MODULE_CATEGORY` as `Tooling` |
+| Code | `src/metric_status.py:56–62` — historical comment refreshed to drop the `tool_uptake_on_warranted` reference; replaces with a one-liner pointing at the post-`#45` outcome contract on the canary surface |
+| Tests | `tests/test_canary_outcome.py` (new) — 11 tests: 4 derive_outcome (one per bucket); 4 has_red_flag (substring present, empty list, case-insensitive, scans-all-attempts); 3 keyword_hits (full match, case-insensitive, partial). No mocks |
+| Tests | `tests/test_canary_corpus.py` rewritten — three tests updated to the new contract; `test_load_canaries_rejects_unknown_expected_outcome` replaces the pre-`#45` branch-typo forcing function |
+| Tests | `tests/test_canary_drift.py` — `_q` fixture builder migrated to the new `CanaryQuestion` shape (~30 call sites re-parametrised). `_r` fixture extended to accept `attempts` as either a count (back-compat) or an explicit list of attempt dicts (so coverage / red-flag tests can set the answer text the metric reads). 7 new tests added: `outcome_changed` (fires + silent), `keyword_coverage_dropped` (minor + major + silent on non-substantive outcomes), `red_flag_emerged` (fires + silent on clearing). `stratified_summary` test renamed and rewritten |
+| Tests | `tests/test_canary_runner.py` fixture corpus dict updated to the new field set |
+| Tests | `tests/test_dashboard_model.py` — two old tests replaced (`test_branch_match_rate_*` and `test_tool_uptake_on_warranted_*`) by three new tests (`test_outcome_accuracy_*`, `test_keyword_coverage_*`, `test_red_flag_rate_*`) |
+| Data | `data/logs/interactions.jsonl` — 226 historical canary records stripped (76 orphan from `run-20260504-115055-336112` + 150 contaminated baseline from `run-20260504-121937-9af6fb`). Total dropped from 325 → 99 lines; all surviving records are live records. One-shot Python one-liner per audit § 9 |
+| Data | `data/canaries/baseline.json` pointer is now stale (run_id no longer in the log). Cold-start path in `_build_canary_drift_state` degrades cleanly to "no benchmark frozen" — already covered by existing tests |
+| Docs | `docs/SENTINEL.md` § Canary tab — rewritten "How it works" paragraph + outcome contract callout; "First baseline run" table reframed as historical pre-`#45` and annotated with the resolution per slice; "Five drift kinds" → "Eight drift kinds" with the three new rows; "What the canary catches" bullets updated (drop `tool_uptake_on_warranted`, add coverage / red-flag bullets) |
+| Docs | `docs/LIMITATIONS.md::P8` — drop the "Partial fix (Session 42)" paragraph referencing `tool_uptake_on_warranted`; replace with a paragraph noting the post-`#45` outcome contract on the canary + the unchanged live-side denominator caveat. Pre-`#45` Session 42 baseline numbers reframed as historical / contaminated. `P14` — append a bulk-strip exception callout pointing at slice 4's audit § 9 |
+| Docs | `CONTEXT.md` — `Drift kind` glossary entry updated to list eight kinds; new entries for `Outcome (canary)` and `must_not_appear`. Working tree only — `CONTEXT.md` is gitignored per Session 44 / commit `6c13221` |
+| Docs | `docs/TODO.md` — Last updated banner refreshed; observability rework marked complete (4 of 4 slices shipped); next-step list now starts with "Establish canary benchmark (re-freeze)" gated on operator credits |
+
+### Decisions made
+
+**1. Outcome bucket vocabulary — four mutually exclusive buckets.** `answered_with_substance` / `gap_acknowledged` / `out_of_scope_redirect` / `refused`. Mirrors the producer's four `event_type` values one-to-one (slice 1's contract). Keeps `derive_outcome` a thin adapter — the producer does the hard mechanism work, the canary measures the outcome shape. If a future producer event_type lands, the rule extends with one branch.
+
+**2. C019–C022 reclassification (out-of-scope personal → `out_of_scope_redirect`).** Pre-`#45` corpus labelled "what's your favourite colour?" / "tell me about your romantic relationships" / "what's your shoe size?" / "what did you have for breakfast?" as `expected_event_type=gap`. Reality post-`#42`: the producer correctly emits `event_type=deflected` for these turns (LOGISTICAL / GENERIC routing + DEFLECTION_MARKERS phrasing). The relabel resolves the pre-existing producer-vs-corpus disagreement that Session 42's baseline read as `branch_match_rate=78.7%` drift.
+
+**3. `keyword_coverage` is scoped to substantive answers only.** Coverage on a `gap_acknowledged` outcome is either tautological (checks the gap phrase, already covered by `derive_outcome`) or rewards fabrication (system mentions absent skill ⇒ "covers the keyword"). Skipping non-substantive outcomes keeps the metric measuring what the operator actually cares about — substance loss on substantive answers.
+
+**4. `red_flag_emerged` is asymmetric.** Baseline clean → current fabrication = drift to surface (major). Baseline fabrication → current clean = system improvement, not drift. The asymmetry is intentional; operator workflow doesn't need a "system improved" banner cluttering the canary tab.
+
+**5. `branch_changed` and `event_type_changed` drift kinds kept.** Even though the corpus no longer asserts an `expected_branch` / `expected_event_type`, these drift kinds compare *baseline* to *current* per-question rather than corpus to either. The anchor is the frozen baseline, not the corpus. Per-question routing-stability + producer-token stability remain meaningful signals (PRD #41 user-story #26 explicitly requested keeping `event_type_changed`).
+
+**6. Resolved deferred open question — replicate consistency promotion.** **NOT promoted in slice 4.** Outcome accuracy + keyword coverage + red-flag rate already cover the load-bearing quality signals; promoting consistency to a fourth metric would compete for operator attention without proportional new information (the cases where consistency is meaningfully low *without* outcome shifting are a niche failure mode without observed evidence). Information remains recoverable from per-question drilldowns. Trip-wire: if Phase 5 work shows `outcome_accuracy=95%` co-occurring with frequent operator drilldowns to "this question flipped between two outcomes", promote then. Audit § 11.1.
+
+**7. Resolved deferred open question — per-question drift severity tiers.** **NOT introduced in slice 4.** Single severity per drift kind keeps the contract simple. Tiers risk training the operator to ignore "informational" drifts (the `LIMITATIONS::P12` failure mode). 50-question corpus is small enough to read every flag individually. The right factoring for "some drifts matter more" is the existing `category` field + the `stratified_summary` chip groups. Trip-wire: if after a quarter of canary-driven Phase 5 work the operator finds themselves consistently ignoring drift on certain question shapes, promote then. Audit § 11.2.
+
+**8. 226-record bulk strip vs leaving orphans.** PRD `#45` spec called for stripping pre-`#42` canary records because they were unreadable under the new contract (the producer didn't emit `event_type='gap'` / `'deflected'` for the records, so `derive_outcome` would systematically misclassify them). Distinct from `LIMITATIONS::P14`'s default "leave orphans" recovery — the latter applies to credit / rate-limit failures where the records are well-formed under the current schema. Bulk strip annotated as an exception in P14.
+
+**9. Re-freeze step 7 deferred to operator-gated follow-on.** The slice's code/test/doc batch lands; the actual `--freeze-baseline` run is a separate operator action gated on Anthropic credit availability. Same pattern as Session 42's baseline establishment (which first failed on credit exhaustion per `LIMITATIONS::P14`). Cold-start path in the canary tab degrades cleanly between merge and re-freeze — operator sees "no benchmark frozen" rather than a broken UI.
+
+### Predicted behaviour change (per audit § 6)
+
+Computed against the local interactions log on 2026-05-05.
+
+| Phase | Canary records on disk | Baseline frozen? | Outcome metrics readable? |
+|---|---|---|---|
+| Pre-slice-4 (Session 46) | 226 (all pre-v4, contaminated) | Yes — `run-20260504-121937-9af6fb`, contaminated | Old-contract metrics returned values; new contract not implemented |
+| Slice 4 lands (this session) | 0 | No — pointer stale | Cold-start ("no canary records" / "no benchmark frozen") on the canary tab; suite green |
+| Step 7 runs (operator-gated) | 150 (one fresh run, v4 producer) | Yes — new run_id, frozen against fixed producer | All three new metrics + eight drift kinds populated |
+
+**Expected post-step-7 baseline shape:** outcome accuracy ≥ 95%, red_flag_rate = 0%, keyword coverage at or above the pre-`#45` substantive subset (~85% mean). If any miss, operator inspects records (Failure Feed canary view) to triage as Phase 5 work.
+
+### Live smoke verification — matches audit § predictions
+
+- 503 / 503 tests pass.
+- `git grep -nE "branch_match|tool_uptake_on_warranted|expected_branch|requires_tool|expected_event_type" src/ tests/` → zero hits except (a) explanatory rename callouts in docstrings/comments at `src/canary_drift.py:355`, `src/canary_corpus.py:13`, `src/dashboard_model.py:230`, `tests/test_dashboard_model.py:782`, `tests/test_canary_drift.py:349` (deliberate "renamed from / replaces X" pointers); (b) `branch_match` as an unrelated word in `tests/test_branches.py` (test names like `test_generic_branch_matches_locked_spec`).
+- `wc -l data/logs/interactions.jsonl` → 99 lines (down from 325). `grep -c '"is_canary":true'` → 0.
+- `data/canaries/baseline.json` exists but the run_id no longer matches any record — pointer is stale; canary tab degrades to "no benchmark frozen" cold-start state.
+- `uv run python src/system_map.py` → "Wrote docs/MAP.md + docs/MAP.html"; `canary_outcome.py` registers in the auto-generated module graph.
+
+### Outstanding (start of next session)
+
+- **Step 7 — Operator re-freeze.** `uv run python src/canary_runner.py --freeze-baseline` against the fixed v4 producer + relabelled corpus. Gated on Anthropic credit availability per `LIMITATIONS::P14`. Closes PRD `#41` and unblocks `#39`.
+- **`CONTEXT.md` edits live in working tree (gitignored)** — `Drift kind` entry updated; new `Outcome (canary)` and `must_not_appear` entries.
+- **No PR opened, no push.** Slice-4 commits land on top of Session 46's; previous local commits still ahead. Total commits ahead pending the operator's batched push.
+- **Phase 5** still paused. Resumes after canary baseline re-freeze (step 7) completes.
+
+### Next session entry-point
+
+If credits are restored: run `uv run python src/canary_runner.py --freeze-baseline` per the audit § 9 runbook; verify the expected baseline shape; close `#39` and `#45`; close PRD `#41`. If credits are not restored: pick up the next-step from `docs/TODO.md` and queue the re-freeze for the next available session.
+
+---
+
 ## Session 46 (2026-05-05) — Observability rework slice 3 shipped (`#44`): consumer-side `knew_answer` migration complete; live tool metric renamed to drop normative framing
 
 **Status:** Slice 3 of PRD `#41` shipped end-to-end. Audit doc lands first per the audit-first discipline; code + tests + operator-facing copy follow. Suite at **484 passing** (no net change from Session 45 — the `confident_failure_rate` test was rewritten in place; the `technical_tool_uptake_rate` test was renamed in place; nothing else moved). After this slice **zero** modules in `src/` read `knew_answer`; the live tool-call metric is descriptive, not normative. Slice 4 (canary recalibration — corpus relabel + `canary_outcome` deep module + 226-record strip + baseline re-freeze) is the next entry-point, blocked on operator credit availability.
