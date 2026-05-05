@@ -68,6 +68,7 @@ MODULE_CATEGORY: dict[str, str] = {
     "canary_corpus": "Tooling",
     "canary_baseline": "Tooling",
     "canary_drift": "Tooling",
+    "canary_outcome": "Tooling",
     "canary_runner": "Tooling",
 }
 
