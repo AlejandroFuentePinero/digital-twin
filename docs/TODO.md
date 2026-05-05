@@ -3,8 +3,8 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-05 (Session 47 — `#45` slice 4 of PRD `#41` shipped; canary surface end-to-end on the new outcome contract; 226 historical canary records stripped; baseline re-freeze gated on operator credit availability)
-**Current phase:** **Observability rework complete (PRD `#41`).** All 4 slices shipped. Phase 5 (break the live system) blocks on canary baseline re-freeze. Suite at **503 passing**.
+**Last updated:** 2026-05-05 (Session 48 — Live observability tier polish shipped; three-tier framework (A/B/C) replaces value-on-band-for-everything; 2 useless metrics removed; 2 new metrics added; banner now honest)
+**Current phase:** **Observability rework complete (PRD `#41`) + Live tier polish complete.** Phase 5 (break the live system) blocks on canary baseline re-freeze. Suite at **515 passing**.
 
 **Locked next-step order:**
 1. **Establish canary benchmark** — re-run `uv run python src/canary_runner.py --freeze-baseline` against the fixed v4 producer + relabelled corpus. Operator action; gated on credit availability. Expected baseline targets per `#45` Definition of Done: outcome accuracy ≥95%, red_flag_rate=0%, keyword coverage at or above pre-`#45` substantive subset (~85%). Runbook in `docs/audits/slice-4-canary-recalibration.md` § 9. Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39) stays open until this completes; closes PRD `#41`.

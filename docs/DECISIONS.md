@@ -5,6 +5,77 @@
 
 ---
 
+## Session 48 (2026-05-05) — Live observability tier polish: separate alerting (Tier A) from shift detection (Tier B) from orientation (Tier C); remove two useless metrics
+
+**Status:** Polish on PRD `#41` informed by Session 47 Q&A. Audit doc lands first per project discipline; code + tests + operator-facing copy follow. Suite at **515 passing** (+12 net from Session 47's 503 — new shift_status / tier_of tests, new property tests, two property tests removed). The Live Metrics tab now structurally separates *mechanism-IS-failure* metrics (Tier A — value alerts) from *behavioural shift* metrics (Tier B — relative-change alerts on window pairs) from *deterministic reflection* metrics (Tier C — orientation, no badges). Two useless metrics removed entirely: `confident_failure_rate` (semantic conflation of correct gap-acks with misroutes; ~62% of records that fired the alert on the local log were correct system behaviour) and `multi_label_rate` (always 0% in live data; composition routing dormant by design per ADR-0003).
+
+### What shipped
+
+| Layer | Change |
+|---|---|
+| Audit | `docs/audits/observability-tier-polish.md` — three-tier framework spec; per-metric tier assignments across all 25 Metrics-tab rows; shift-status spec (≥7% warning / ≥15% alert across 7d↔30d, 30d↔90d window pairs); ripple inventory across `metric_status` / `dashboard_model` / `sentinel`; new metric additions (`mean_confidence_by_branch`, `answered_with_substance_rate`); risk register (Tier B band-tuning deferred per PRD `#41` Open questions) |
+| Code | `src/metric_status.py` — `THRESHOLDS` shrunk from 8 to 5 entries (Tier A only): `refusal_rate`, `retry_exhausted_rate`, `contact_conversion_rate`, `tool_call_success_rate` (newly added with healthy ≥0.99 / warning ≥0.95), `latency_p95_total`. New `TIER_B_METRICS` frozenset (10 entries). New `shift_status(current, prior) -> Status \| None` (relative-change-on-band). New `tier_of(metric) -> Literal["A", "B", "C"] \| None` helper. New constants `SHIFT_WARNING=0.07` / `SHIFT_ALERT=0.15` |
+| Code | `src/dashboard_model.py` — `confident_failure_rate` property removed (and its METRIC_GETTERS entry); `multi_label_rate` property removed. New `answered_with_substance_rate` property (Tier B) — completes the 4-bucket Outcome partition. New `mean_confidence_by_branch -> dict[str, float]` property (Tier C orientation chip) — actionable Routing-block read. METRIC_GETTERS expanded from 11 to 15 entries (registers Tier B metrics that need shift-tracking) |
+| Code | `src/sentinel.py` — `_row_severity` and `_status_summary` rewired tier-aware: Tier A reads value-on-band per window; Tier B reads shift-on-band across the (raws[0]↔raws[1]) and (raws[1]↔raws[2]) comparisons; Tier C / unknown returns `orientation`. `_status_class` skips per-cell colouring for Tier B (row-level shift status only; the per-cell values are context). New `_worst_status` helper. `METRIC_SPECS` drops two rows + adds two new (Answered with substance, Classifier mean confidence by branch). `METRIC_GLOSSARY` / `METRIC_LABELS` / `THEMATIC_BLOCKS` / `FRIENDLY_BANNER_LABELS` updated. New `METRIC_UNITS` dict + `_unit_for(metric)` helper — chart formatters (`_y_axis_title` / `_scale_value` / `_fmt_metric_value`) read units independently of THRESHOLDS so Tier B metrics still render with `(%)` / `(s)` suffixes |
+| Tests | `tests/test_metric_status.py` rewritten — Tier A tests switch from `gap_rate` (now Tier B) to `refusal_rate` (still Tier A). 8 new tests for `shift_status` (band thresholds, direction-agnosticism, boundary-inclusive, None handling, zero-prior). 4 new tests for `tier_of` (A / B / C / Tier-A-and-B-disjoint forcing function). Pre-#48 `multi_label_rate` test references replaced |
+| Tests | `tests/test_dashboard_model.py` — two old tests removed (`test_confident_failure_rate_*`, `test_multi_label_rate_*`); two new tests added (`test_answered_with_substance_rate_completes_the_outcome_partition`, `test_mean_confidence_by_branch_returns_per_branch_mean`) |
+| Tests | `tests/test_sentinel.py` — `test_format_metrics_overview_includes_every_metric_label` updated for the new METRIC_SPECS shape; `test_format_metrics_overview_applies_status_class_to_thresholded_metric` rewritten to use `refusal_rate` (Tier A) instead of `gap_rate` (Tier B post-#48) |
+| Docs | `docs/SENTINEL.md` § How to read this doc — leads with the three-tier framework table. Per-metric entries annotated with their tier. `confident_failure_rate` and `multi_label_rate` entries replaced by a "Removed in #48" callout with rationale. New entries for `mean_confidence_by_branch`, `answered_with_substance_rate`. `tool_call_success_rate` promoted to Tier A with explicit threshold callout. Tier B metrics' "Thresholds" sections rewritten to "Tier B alerting: shift-on-band" with the rationale for demoting from value-on-band |
+
+### Decisions made
+
+**1. Three tiers, not two.** Initially proposed A/B (alert vs shift). Session 47 Q&A clarified the right move was A/B/C: deterministic-reflection metrics (Tier C — `total_interactions`, `unique_sessions`, `tool_call_count`, `branch_distribution`, `attempts_distribution`, per-stage latencies) should never carry badges OR delta-alerts. They're pure system-state reflection — orientation context for reading Tier A and B. Adding the third tier prevents the dashboard from accidentally surfacing "5% more sessions this week" as alert noise.
+
+**2. Tier B membership is explicit (`TIER_B_METRICS` frozenset), Tier C is implicit (everything else).** Documenting Tier C explicitly would require enumerating every metric in the codebase; making it the fall-through means new orientation metrics don't need registration. Forcing function `test_tier_a_and_tier_b_membership_are_disjoint` guards against accidentally registering a metric in both.
+
+**3. Shift bands are placeholders.** `SHIFT_WARNING=0.07` / `SHIFT_ALERT=0.15` (relative absolute change). PRD `#41` § Open questions explicitly defers drift-threshold tuning until first real data informs reasonable values. Same disposition as `gap_rate`'s value bands post-slice-1: descriptive-not-actionable until a month of operator usage validates / recalibrates.
+
+**4. Window pairs are 7d↔30d and 30d↔90d.** Catches both rapid shifts (recent week vs broader month) and slower drifts (recent month vs quarter). Worst severity wins. Not 7d↔30d↔90d transitive — each pair compared independently.
+
+**5. Per-cell colour only for Tier A.** Tier B's row-level shift status doesn't map cleanly to per-cell value status (the cells are window-snapshot values, not shift readings). Cells render plain; the row ribbon carries the badge. Operator reads the ribbon then scans the cells for context.
+
+**6. `tool_call_success_rate` promoted to Tier A.** Pre-#48 was orientation only. The metric IS the failure mode (tool errors don't have a "shape" reading; they're broken — registry rot, file disappearance). Healthy ≥99%, warning ≥95%, alert below. Threshold band reflects design intent (local file reads should be ~100% reliable).
+
+**7. `confident_failure_rate` removed entirely (not renamed or carved out).** The Session 47 per-record inspection of the 13 firing records on the live log showed ~8 of 13 (62%) were correct system behaviour. The metric's design (`confidence ≥0.8 AND (gap OR refused OR rejected attempt)`) inferred classifier failure from system-output shape; that inference is structurally weak. Renaming would have left the inference. The signals it reached for are covered by `refusal_rate` (Tier A) + per-record drilldown via Failure Feed.
+
+**8. `multi_label_rate` removed entirely.** Always 0% in live data per ADR-0003 ("composition routing essentially dormant in practice"). A metric that's always zero is dashboard noise. Reintroduce if composition routing ever becomes load-bearing.
+
+**9. New `mean_confidence_by_branch` is a Tier C orientation chip, not a Tier B shift metric.** Per-branch confidence values aren't independently classifiable as healthy / unhealthy — context-dependent. Render as a single `branch_distribution`-shaped chip (`GENERIC: 0.85 · GAP: 0.78 · ...`); operator scans for low values and drills.
+
+**10. New `answered_with_substance_rate` is Tier B.** Completes the 4-bucket Outcome partition explicitly. Substance share depends on traffic mix (no normative target); shift-detection is the right alerting shape.
+
+### Predicted Sentinel banner change
+
+Computed against the local 99-record live log (all pre-v4; slice 1's smart-normalize upgrades 8 records to `event_type='gap'`):
+
+| Metric | Pre-#48 banner | Post-#48 banner |
+|---|---|---|
+| `gap_rate` ~8% | warning (in pre-#42 band ≤10%/15%) | not surfaced (Tier B; no shift > 7% across windows on stable log) |
+| `confident_failure_rate` 13.1% | **alert** (in pre-#48 band ≤3%/7%) | **removed** entirely |
+| `refusal_rate` ~1% | healthy | healthy (Tier A; unchanged) |
+| `tool_call_success_rate` 100% | not surfaced | healthy (Tier A; new threshold) |
+
+Net banner alert count: pre-#48 surfaced spurious alerts on `gap_rate` and `confident_failure_rate` from miscalibrated bands and semantic-conflation; post-#48 the banner is honest — only Tier A value crossings or Tier B significant shifts.
+
+### Live smoke verification
+
+- 515 / 515 tests pass.
+- `git grep -nE "confident_failure_rate|multi_label_rate" src/` → zero hits in `src/` (only DECISIONS.md historical / audit-doc references remain).
+- `tier_of` returns A / B / C correctly across every registered metric.
+- `tests/test_metric_status.py::test_tier_a_and_tier_b_membership_are_disjoint` enforces the no-double-register invariant.
+
+### Outstanding (start of next session)
+
+- **Re-freeze canary baseline** (operator-gated) — unchanged from Session 47. PRD `#41` closes when this lands.
+- **Tier B band tuning** — placeholders 7%/15% are first-pass; recalibrate after a month of v4 traffic accumulates and the noise / signal line surfaces.
+- **No PR opened, no push.** Session 48 commits land on top of Session 47's; previous local commits still ahead. Total commits ahead pending the operator's batched push.
+
+### Next session entry-point
+
+Either: (a) operator runs `--freeze-baseline` and closes PRD `#41` + `#39`; or (b) start Phase 5 prep — the dashboard is now trustworthy enough to support break-the-system work, with the canary baseline gap as the one remaining caveat for per-question regression detection.
+
+---
+
 ## Session 47 (2026-05-05) — Observability rework slice 4 shipped (`#45`): canary surface recalibrated end-to-end, contract switched from mechanism to outcome
 
 **Status:** Slice 4 of PRD `#41` shipped end-to-end (PR-equivalent batch). Audit doc lands first per the audit-first discipline; new `canary_outcome` deep module, corpus relabel, dashboard / drift-detector / Sentinel rewires, and the 226-record historical strip follow. Suite at **503 passing** (+19 net from Session 46's 484 — 11 new `canary_outcome` tests, 7 new drift-kind tests, 1 new dashboard method test net). PRD `#41` is closed in scope; the canary baseline re-freeze (step 7 of the slice spec) is gated on operator credit availability and lands as a follow-on operator action. Issue `#39` stays open until the re-freeze completes.
