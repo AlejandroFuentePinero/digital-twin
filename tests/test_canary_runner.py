@@ -24,12 +24,11 @@ def _corpus_at(path: Path, n: int = 2) -> Path:
         rows.append({
             "id": f"C{i+1:03d}",
             "question": f"q{i+1}",
-            "expected_branch": "GENERIC",
-            "expected_event_type": "answered",
-            "expected_chunk_sources": [],
+            "expected_outcome": "answered_with_substance",
             "expected_keywords": [],
+            "must_not_appear": [],
+            "expected_chunk_sources": [],
             "category": "smoke",
-            "requires_tool": False,
         })
     path.write_text(json.dumps(rows))
     return path

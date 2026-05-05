@@ -1,4 +1,4 @@
-"""Tests for the canary corpus loader (issue #39)."""
+"""Tests for the canary corpus loader (issue #39, recalibrated in #45)."""
 
 from __future__ import annotations
 
@@ -18,35 +18,39 @@ def test_load_canaries_returns_fifty_entries_against_real_corpus():
 
 
 def test_load_canaries_populates_every_required_field_for_every_entry():
-    """Every entry has id, question, branch, event_type, category, and a
-    bool requires_tool. Smoke that the loader doesn't silently skip fields."""
+    """Every entry has id, question, expected_outcome, expected_keywords,
+    must_not_appear, category. Smoke that the loader doesn't silently skip
+    fields after the #45 corpus relabel."""
+    valid_outcomes = {
+        "answered_with_substance", "gap_acknowledged",
+        "out_of_scope_redirect", "refused",
+    }
     for q in load_canaries():
         assert q.id
         assert q.question
-        assert q.expected_branch
-        assert q.expected_event_type
+        assert q.expected_outcome in valid_outcomes
+        assert isinstance(q.expected_keywords, list)
+        assert isinstance(q.must_not_appear, list)
         assert q.category
-        assert isinstance(q.requires_tool, bool)
 
 
-def test_load_canaries_rejects_unknown_expected_branch(tmp_path: Path):
-    """Forcing function: a typo in `expected_branch` (or a removed branch)
+def test_load_canaries_rejects_unknown_expected_outcome(tmp_path: Path):
+    """Forcing function: a typo in `expected_outcome` (or a removed bucket)
     fails at load time, before any replay starts. The drift detector relies
-    on the branch comparing equal to a real registry key."""
+    on the outcome comparing equal to one of the four canonical buckets."""
     bad = tmp_path / "corpus.json"
     bad.write_text(json.dumps([
         {
             "id": "C001",
             "question": "q",
-            "expected_branch": "MADE_UP_BRANCH",
-            "expected_event_type": "answered",
-            "expected_chunk_sources": [],
+            "expected_outcome": "MADE_UP_BUCKET",
             "expected_keywords": [],
+            "must_not_appear": [],
+            "expected_chunk_sources": [],
             "category": "x",
-            "requires_tool": False,
         }
     ]))
-    with pytest.raises(ValueError, match="MADE_UP_BRANCH"):
+    with pytest.raises(ValueError, match="MADE_UP_BUCKET"):
         load_canaries(bad)
 
 
@@ -58,22 +62,20 @@ def test_load_canaries_round_trips_a_minimal_entry(tmp_path: Path):
         {
             "id": "C999",
             "question": "smoke",
-            "expected_branch": "GENERIC",
-            "expected_event_type": "answered",
-            "expected_chunk_sources": ["profile.md"],
+            "expected_outcome": "answered_with_substance",
             "expected_keywords": ["alpha"],
+            "must_not_appear": ["beta"],
+            "expected_chunk_sources": ["profile.md"],
             "category": "smoke",
-            "requires_tool": False,
         }
     ]))
     [q] = load_canaries(one)
     assert q == CanaryQuestion(
         id="C999",
         question="smoke",
-        expected_branch="GENERIC",
-        expected_event_type="answered",
-        expected_chunk_sources=["profile.md"],
+        expected_outcome="answered_with_substance",
         expected_keywords=["alpha"],
+        must_not_appear=["beta"],
+        expected_chunk_sources=["profile.md"],
         category="smoke",
-        requires_tool=False,
     )
