@@ -3041,15 +3041,19 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
 
                 bar_charts: dict[str, gr.Plot] = {}
                 bar_headers: dict[str, gr.Markdown] = {}
+                # Global 2-per-row cap (Session 53). Pre-#53 only Outcome was
+                # capped at 2; the others jammed every chart onto one row,
+                # which collapsed the per-chart axis space on Engagement (4
+                # metrics post-#48). One rule for all blocks now: at most 2
+                # charts per row, every block. Singletons (Latency =
+                # latency_p95_total) render as a half-width chart.
+                CHARTS_PER_ROW = 2
                 for block_name, block_metrics in THEMATIC_BLOCKS.items():
                     gr.Markdown(
                         f"<div class='section-header'>{block_name}</div>"
                     )
-                    # Outcome jams 5 charts — chunk into 2-per-row so each
-                    # chart has room for axis labels.
-                    per_row = 2 if block_name == "Outcome" else len(block_metrics)
-                    for chunk_start in range(0, len(block_metrics), per_row):
-                        chunk = block_metrics[chunk_start:chunk_start + per_row]
+                    for chunk_start in range(0, len(block_metrics), CHARTS_PER_ROW):
+                        chunk = block_metrics[chunk_start:chunk_start + CHARTS_PER_ROW]
                         with gr.Row():
                             for metric in chunk:
                                 with gr.Column(min_width=320, elem_classes=["chart-card"]):
