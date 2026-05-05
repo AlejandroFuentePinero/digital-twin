@@ -5,6 +5,57 @@
 
 ---
 
+## Sessions 52–54 (2026-05-05) — Sentinel polish wrap-up: attempts label honesty, Trends layout cap, Tier B cold-start gate
+
+**Status:** Three small-but-load-bearing polishes on top of Sessions 48-51. One consolidated entry because each is a single-commit change with the same operator-trust-improvement framing. Suite at **532 passing** (+3 net from Session 51's 529 — the 14-day Tier B gate adds 3 tests; #52 and #53 have no test delta).
+
+### What shipped
+
+**Session 52 — `attempts_distribution` bucket key 3+ → 3** (`commit 081124a`)
+- `pipeline.MAX_ATTEMPTS = 3` is the hard ceiling enforced by `for attempt_idx in range(MAX_ATTEMPTS)`. The loop terminates at attempt 3; no path produces a 4th. The `"3+"` label suggested a "4 or more" possibility that doesn't exist.
+- `dashboard_model.attempts_distribution` bucket keys: `{"1", "2", "3+"}` → `{"1", "2", "3"}`. Display shifts from `1: 91% · 2: 7% · 3+: 2%` to `1: 91% · 2: 7% · 3: 2%`.
+- Docstring + glossary call out the dependency on `MAX_ATTEMPTS=3` so a future maintainer who raises the ceiling knows to generalise.
+- Test guards `"3+" not in overview` so a future revert is caught at CI time.
+
+**Session 53 — Trends 2-per-row chart layout** (`commit 08f0cf1`)
+- Pre-#53: only the Outcome block was capped at 2 charts per row (`per_row = 2 if block_name == "Outcome" else len(block_metrics)`); every other block jammed all charts onto one row. With Engagement now carrying 4 metrics post-#48, per-chart axis space collapsed.
+- New rule: `CHARTS_PER_ROW = 2` globally. Engagement (4) → 2 rows × 2 ✓. Outcome (6) → 3 × 2. Routing (2) → 1 × 2. Tool use (2) → 1 × 2. Latency (1) → 1 chart spanning the row (verified: chart-card CSS `width: 100% !important` makes the singleton render full-width — earlier review claim of "half-width" was wrong).
+
+**Session 54 — Tier B `shift_status` gated on ≥14 days of history** (`commit 10a3f6e`)
+- Pre-#54 Tier B fired alert/warning purely on relative-change band (≥15% / ≥7%) regardless of how much data history existed. With <14 days of records the 7d/30d/90d windows overlap heavily; the comparison is structurally noisy and the bands can fire spurious alerts on cold-start ramp.
+- Mirrors the existing `_delta_inline` gate (`MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA = 14`) — under 14 days the WoW delta arrows already render muted; now Tier B status is also suppressed (falls through to orientation in `_row_severity`, suppressed entirely from the `_status_summary` banner).
+- Tier A unchanged — value-on-band semantics don't depend on data history (a refusal rate above 3% is a failure regardless of log span).
+- 3 new tests: gate suppresses Tier B below threshold; default `history_days=0` keeps Tier B suppressed (forcing function — callers that forget to pass the gate don't accidentally surface alerts); Tier A unaffected.
+
+### Decisions
+
+**1. Sessions 52-54 consolidated into one DECISIONS entry rather than three.** Each is a single-commit polish; three separate session entries would over-state the work. The consolidation also reflects the audit-first discipline correctly: small polishes don't require their own audit doc; the operator's existing review pattern + tests pin them.
+
+**2. Latency-block "half-width" claim from the Sentinel review (preceding Session 54) was wrong.** CSS at `sentinel.py:898` (`.chart-card .gradio-plot { width: 100% !important }`) forces full-width inside the chart-card. A single `gr.Column(scale=1)` in a `gr.Row` spans the row. The singleton chart renders full-width by default; no fix needed. Documented here so the misclaim doesn't recur.
+
+**3. Tier B history gate applies to BOTH `_row_severity` (per-row badge) AND `_status_summary` (banner aggregator).** Same gate, same threshold, applied at both surfaces. The forcing function on `_row_severity`'s default `history_days=0` ensures any future caller that forgets the parameter falls back to the safe (suppressed) path.
+
+### Phase 5 readiness — net effect
+
+Sessions 48-54 have closed the load-bearing pre-Phase-5 polish. Specifically:
+- **Cold-start safety:** Tier B alerts gated on ≥14 days of data (Session 54). The dashboard won't fire spurious shift alerts as v4 traffic ramps over the first weeks of Phase 5.
+- **Visual coherence:** chart layout consistent (Session 53). Bucket labels honest (Session 52).
+- **Tier framework intact:** Live tabs (Session 48), Failure Feed (Session 49), KB Coverage (Session 50), Canary trajectory (Session 51) all surface signal in the framing the operator can trust.
+
+The dashboard now cleanly distinguishes: real failures (Tier A value-on-band), behavioural shifts worth investigating (Tier B shift-on-band, gated for cold-start), deterministic reflection (Tier C orientation). Failure Feed splits Failures vs Outcomes; Canary tab shows trajectory across the 3 runs after the frozen baseline.
+
+### Outstanding (start of next session)
+
+- **Canary baseline re-freeze** (operator-gated, unchanged from Sessions 47-51). Single load-bearing item left for PRD `#41` closure. Run `uv run python src/canary_runner.py --freeze-baseline` against the fixed v4 producer + relabelled corpus when Anthropic credits are available. Closes `#39` and `#45` and populates the canary trajectory view with real values.
+- **Tier B band tuning** (15%/7%) — placeholders. Recalibrate after a month of v4 traffic shows the noise/signal line.
+- **Branch is 51 commits ahead of `origin/main`.** Operator batches pushes; no PR opened.
+
+### Next session entry-point
+
+Operator runs `--freeze-baseline` (closes PRD `#41` + `#39`); subsequent canary runs populate the trajectory view; Phase 5 break-the-system work begins with a trustworthy dashboard. The pre-Phase-5 work is structurally complete; one operator action remains.
+
+---
+
 ## Session 51 (2026-05-05) — Canary trajectory view: Benchmark | +1 | +2 | +3
 
 **Status:** Canary tab health blocks reshaped from `(Current | Δ baseline)` two-column snapshot to `(Benchmark | +1 | +2 | +3)` four-column trajectory. Suite at **529 passing** (+7 net from Session 50's 522 — 5 new `runs_after_baseline` tests + 2 new trajectory rendering tests).
