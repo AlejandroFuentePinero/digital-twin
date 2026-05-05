@@ -201,11 +201,11 @@ class Pipeline:
 
         # 5. Build + emit the enriched log record
         event_type = classify_event_type(branch_name, final_answer)
-        # `knew_answer` populated for v3-record consumer compat (failure_feed,
-        # cluster_gaps, summarize_failures still read it as of slice 1 of #42).
-        # New consumer code must read `event_type` instead. Removal of this
-        # write is scheduled for a future v5 schema bump once slices 2 and 3
-        # of the observability rework finish migrating consumers.
+        # `knew_answer` populated for v3-record consumer compat. Consumer
+        # migration is complete (PRD #41 slice 3 — no consumer in src/ reads
+        # this field; failure_feed / cluster_gaps / summarize_failures /
+        # flag_detector / dashboard_model all read `event_type` directly).
+        # TODO(v5): drop this write in the next schema bump.
         knew_answer = bool(last_answer) and (GAP_PHRASE not in last_answer)
 
         self._log_writer.append({

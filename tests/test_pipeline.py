@@ -169,8 +169,8 @@ def test_pipeline_emits_event_type_gap_when_classifier_routes_to_gap_branch(
     A constructive gap-aware response (broader-skill reframe + active learning)
     is the GAP branch's job; the producer marks it ``event_type='gap'`` so
     Sentinel can read the outcome shape directly. Replaces the pre-#42 case
-    where every GAP-branch turn read as ``answered`` and the dashboard
-    proxied through ``not knew_answer``."""
+    where every GAP-branch turn read as ``answered`` and the dashboard read
+    a ``knew_answer``-derived proxy."""
     log_path = tmp_path / "interactions.jsonl"
     classifier = FakeClassifier(ClassifierResult(labels=["GAP"], confidence=1.0))
     generator = FakeGenerator(answers=[
@@ -261,7 +261,7 @@ def test_retry_loop_returns_second_answer_when_first_is_rejected(real_composer, 
 
 
 def test_canned_refusal_when_all_attempts_rejected(real_composer, fake_chunks, tmp_path):
-    """Guardrail rejects all MAX_ATTEMPTS — pipeline returns CANNED_REFUSAL; log marks event_type='refused'; knew_answer reflects whether the last generated answer was a real answer (not gap phrase)."""
+    """Guardrail rejects all MAX_ATTEMPTS — pipeline returns CANNED_REFUSAL; log marks event_type='refused'. ``knew_answer`` is still written for v3-record consumer compat (no consumer reads it post-#41 slice 3); the writer pins its value to whether the last generated answer was a real answer (not the gap phrase)."""
     log_path = tmp_path / "interactions.jsonl"
     classifier = FakeClassifier(ClassifierResult(labels=["GENERIC"], confidence=1.0))
     generator = FakeGenerator(answers=[f"answer {i}" for i in range(MAX_ATTEMPTS)])
@@ -277,7 +277,8 @@ def test_canned_refusal_when_all_attempts_rejected(real_composer, fake_chunks, t
     record = LogReader(log_path).read_all()[0]
     assert record["event_type"] == "refused"
     assert len(record["attempts"]) == MAX_ATTEMPTS
-    # The last generated answer was "answer 2" — not the gap phrase, so knew_answer=True even on a refused turn
+    # The last generated answer was "answer 2" — not the gap phrase — so the
+    # v3-compat writer still records knew_answer=True even on a refused turn.
     assert record["knew_answer"] is True
 
 
