@@ -264,69 +264,49 @@ def test_low_confidence_rate_counts_records_below_default_threshold():
     assert model.low_confidence_rate(threshold=0.6) == 0.25  # 1 of 4 below 0.6
 
 
-def test_confident_failure_rate_counts_high_confidence_gap_refused_or_retry():
-    """confident_failure_rate counts records where confidence >= 0.8 AND a failure signal fires
-    (event_type in {gap, refused} OR any rejected attempt). The metric catches misroutes that
-    low_confidence_rate is blind to — the system was certain and still failed. Per issue #35
-    'Detection gap'.
-
-    Forcing function for the slice 3 v4 contract (PRD #41):
-    - A confident GAP-branch record with a substantive answer (event_type='gap',
-      knew_answer=True) MUST count. The pre-#42 ``not knew_answer`` proxy missed it
-      (knew_answer=True → not counted); the v4 contract counts it because the producer
-      classified it as a gap.
-    - A confident deflected record MUST NOT count. A correctly-handled out-of-scope
-      redirect is not a failure for this metric (slice 2 audit § 2 framing).
-    """
-    rejected_then_accepted = [
-        {"answer": "bad", "is_acceptable": False, "guardrail_feedback": "fix"},
-        {"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""},
-    ]
+def test_answered_with_substance_rate_completes_the_outcome_partition():
+    """answered_with_substance_rate is the share of records the producer
+    classified as substantive answers. Combined with gap_rate +
+    deflection_rate + refusal_rate it forms a 4-bucket partition that sums
+    to 1.0 across the record set."""
     accepted = [{"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""}]
-
     records = [
-        # confident success — not counted
-        _r(classification_confidence=0.95, event_type="answered", attempts=accepted),
-        # confident gap with phrase (knew_answer=False because GAP_PHRASE in answer) — counted
-        _r(classification_confidence=0.95, event_type="gap", knew_answer=False, attempts=accepted),
-        # confident GAP-branch with substantive answer — counted
-        # (forcing function: pre-#42 proxy missed this; v4 contract counts it)
-        _r(classification_confidence=0.95, event_type="gap", knew_answer=True, attempts=accepted),
-        # confident retry — counted (rejected attempt before acceptance)
-        _r(classification_confidence=0.95, event_type="answered", attempts=rejected_then_accepted),
-        # confident refusal — counted
-        _r(classification_confidence=0.95, event_type="refused", attempts=accepted),
-        # confident deflection — NOT counted (deflected is not a failure mode for this metric)
-        _r(classification_confidence=0.95, event_type="deflected", attempts=accepted),
-        # low-confidence gap — NOT counted (different metric)
-        _r(classification_confidence=0.50, event_type="gap", knew_answer=False, attempts=accepted),
+        _r(event_type="answered", attempts=accepted),
+        _r(event_type="answered", attempts=accepted),
+        _r(event_type="gap", attempts=accepted),
+        _r(event_type="deflected", attempts=accepted),
+        _r(event_type="refused", attempts=accepted),
     ]
     model = DashboardModel(records)
-    assert model.confident_failure_rate() == 4 / 7  # 4 of 7
-
-    # Threshold parameter overridable
-    assert model.confident_failure_rate(threshold=0.99) == 0.0
-
-
-def test_multi_label_rate_excludes_records_with_empty_classifier_labels_from_denominator():
-    """multi_label_rate = count(len(labels)>1) / count(labels populated). Records with empty
-    classifier_labels (the legacy v1 ones) are excluded from the denominator — otherwise
-    a fully-blank corpus would report 0% as if multi-label routing were never working,
-    when really the data just isn't there. Returns None when denominator is 0."""
-    model = DashboardModel(
-        [
-            _r(classifier_labels=["GENERIC"]),
-            _r(classifier_labels=["GAP", "TECHNICAL"]),
-            _r(classifier_labels=["TECHNICAL"]),
-            _r(classifier_labels=["GAP", "GENERIC", "TECHNICAL"]),
-            _r(classifier_labels=[]),  # excluded from denominator
-        ]
+    assert model.answered_with_substance_rate == 2 / 5
+    # Partition closes
+    total = (
+        model.answered_with_substance_rate
+        + model.gap_rate
+        + model.deflection_rate
+        + model.refusal_rate
     )
-    assert model.multi_label_rate == 0.5  # 2 of 4 populated have len>1
+    assert abs(total - 1.0) < 1e-9
 
-    # All-empty population — None, not 0.0
-    only_empty = DashboardModel([_r(classifier_labels=[]), _r(classifier_labels=[])])
-    assert only_empty.multi_label_rate is None
+
+def test_mean_confidence_by_branch_returns_per_branch_mean():
+    """mean_confidence_by_branch is the actionable Routing breakdown — the
+    global `mean_classification_confidence` answers 'how sure is the
+    classifier on average'; the per-branch dict answers 'on which branch is
+    the classifier wobbling'. Returns one entry per observed branch; absent
+    branches are absent from the dict (not 0)."""
+    records = [
+        _r(branch="GENERIC", classification_confidence=0.9),
+        _r(branch="GENERIC", classification_confidence=0.7),
+        _r(branch="TECHNICAL", classification_confidence=0.85),
+        _r(branch="GAP", classification_confidence=0.5),
+    ]
+    model = DashboardModel(records)
+    by_branch = model.mean_confidence_by_branch
+    assert by_branch["GENERIC"] == pytest.approx(0.8)
+    assert by_branch["TECHNICAL"] == pytest.approx(0.85)
+    assert by_branch["GAP"] == pytest.approx(0.5)
+    assert "BEHAVIOURAL" not in by_branch  # absent branches don't appear
 
 
 def test_unique_sessions_counts_distinct_session_ids():

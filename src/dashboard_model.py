@@ -292,28 +292,30 @@ class DashboardModel:
         return sum(1 for c in all_calls if c.get("status") == "success") / len(all_calls)
 
     @property
-    def multi_label_rate(self) -> float | None:
-        # Live data: 0/79 records have len(classifier_labels) > 1 — composition
-        # routing dormant in practice (ADR-0003 § Composition table). None when
-        # the corpus has zero populated labels (e.g. all-legacy-v1).
-        populated = [r for r in self.records if r.classifier_labels]
-        if not populated:
-            return None
-        return sum(1 for r in populated if len(r.classifier_labels) > 1) / len(populated)
+    def answered_with_substance_rate(self) -> float:
+        """Share of turns the producer classified as a substantive answer.
+        Completes the 4-bucket Outcome partition: gap + deflected + refused
+        + answered_with_substance = 100%. Tier B per the post-#48 framework
+        — shift-detected, not threshold-alerted (substance share is shape,
+        not health)."""
+        return self._rate_of(lambda r: r.event_type == "answered")
 
-    def confident_failure_rate(self, threshold: float = HIGH_CONFIDENCE_THRESHOLD) -> float:
-        # Surfaces the failures `low_confidence_rate` is blind to: the
-        # classifier was sure, but the turn still failed. A failure here is
-        # any of (gap | refused | guardrail-rejected attempt). Deflected is
-        # NOT a failure: a confident deflection on an out-of-scope question
-        # is correct system behaviour (slice 2 audit § 2). Issue #35
-        # 'Detection gap'; v4 contract per PRD #41 slice 3.
-        def _failed(r: InteractionRecord) -> bool:
-            return (
-                r.event_type in {"gap", "refused"}
-                or any(not a.get("is_acceptable", True) for a in r.attempts)
-            )
-        return self._rate_of(lambda r: r.classification_confidence >= threshold and _failed(r))
+    @property
+    def mean_confidence_by_branch(self) -> dict[str, float]:
+        """Mean classifier confidence per branch — the actionable Routing
+        breakdown. Today only the global mean (`mean_classification_confidence`)
+        is surfaced; per-branch lets the operator scan which branch the
+        classifier is wobbling on. Renders as a one-row chip in the Metrics
+        tab Routing block, mirroring the `branch_distribution` shape."""
+        from collections import defaultdict
+        by_branch: dict[str, list[float]] = defaultdict(list)
+        for r in self.records:
+            by_branch[r.branch].append(r.classification_confidence)
+        return {
+            branch: sum(confs) / len(confs)
+            for branch, confs in by_branch.items()
+            if confs
+        }
 
     @property
     def branch_distribution(self) -> dict[str, float]:
@@ -404,15 +406,24 @@ def _record_date(record: InteractionRecord) -> date:
 # needs a getter here so `time_series_by_day` and the Trend Explorer (issue #30) can
 # compute it per day. Keep in sync with THRESHOLDS; tests pin both keysets together.
 METRIC_GETTERS: dict[str, Callable[["DashboardModel"], float | None]] = {
+    # Outcome
     "gap_rate": lambda m: m.gap_rate,
     "deflection_rate": lambda m: m.deflection_rate,
     "refusal_rate": lambda m: m.refusal_rate,
     "guardrail_rejection_rate": lambda m: m.guardrail_rejection_rate,
     "retry_exhausted_rate": lambda m: m.retry_exhausted_rate,
+    "answered_with_substance_rate": lambda m: m.answered_with_substance_rate,
+    # Routing
     "low_confidence_rate": lambda m: m.low_confidence_rate(),
-    "confident_failure_rate": lambda m: m.confident_failure_rate(),
-    "latency_p95_total": lambda m: m.latency_percentiles("total").get(95),
-    "technical_tool_call_rate": lambda m: m.technical_tool_call_rate,
-    "contact_conversion_rate": lambda m: m.contact_conversion_rate,
+    "mean_classification_confidence": lambda m: m.mean_classification_confidence,
+    # Engagement
     "turns_per_session_median": lambda m: m.turns_per_session_median,
+    "mean_turns_per_session": lambda m: m.mean_turns_per_session,
+    "contact_offer_rate": lambda m: m.contact_offer_rate,
+    "contact_conversion_rate": lambda m: m.contact_conversion_rate,
+    # Tool use
+    "technical_tool_call_rate": lambda m: m.technical_tool_call_rate,
+    "tool_call_success_rate": lambda m: m.tool_call_success_rate,
+    # Latency
+    "latency_p95_total": lambda m: m.latency_percentiles("total").get(95),
 }
