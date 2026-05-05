@@ -594,22 +594,29 @@ def test_time_series_by_day_aggregates_per_day_records_with_gaps_as_none():
     """Multiple records on the same day collapse into one metric value computed over that
     day's records; days with no records render as None — never zero, so the chart can
     distinguish 'no data' from 'a real 0% rate'."""
-    now = datetime.now(timezone.utc)
-    today = now.date()
+    from datetime import time
+
+    today = datetime.now(timezone.utc).date()
     yesterday = today - timedelta(days=1)
     two_days_ago = today - timedelta(days=2)
 
+    # Anchor record timestamps to mid-day UTC on the target date so the test
+    # is midnight-safe (offsets-from-now used to roll into the previous date
+    # when the suite ran around 00:00 UTC).
+    def _on_date(d, hour):
+        return datetime.combine(d, time(hour=hour), tzinfo=timezone.utc).isoformat()
+
     # Today: 1 gap of 4 → 25% gap_rate
     today_records = [
-        _record(timestamp=(now - timedelta(hours=1)).isoformat()),  # clean
-        _record(timestamp=(now - timedelta(hours=2)).isoformat(), event_type="gap"),
-        _record(timestamp=(now - timedelta(hours=3)).isoformat()),  # clean
-        _record(timestamp=(now - timedelta(hours=4)).isoformat()),  # clean
+        _record(timestamp=_on_date(today, 9)),                       # clean
+        _record(timestamp=_on_date(today, 11), event_type="gap"),
+        _record(timestamp=_on_date(today, 13)),                      # clean
+        _record(timestamp=_on_date(today, 15)),                      # clean
     ]
     # Two-days-ago: 2 records, 1 gap → 50%
     two_days_ago_records = [
-        _record(timestamp=(now - timedelta(days=2, hours=1)).isoformat()),
-        _record(timestamp=(now - timedelta(days=2, hours=2)).isoformat(), event_type="gap"),
+        _record(timestamp=_on_date(two_days_ago, 10)),
+        _record(timestamp=_on_date(two_days_ago, 14), event_type="gap"),
     ]
     model = DashboardModel(today_records + two_days_ago_records)
 
