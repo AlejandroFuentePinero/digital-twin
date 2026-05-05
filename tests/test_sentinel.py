@@ -88,11 +88,13 @@ def test_format_metrics_overview_includes_every_metric_label():
     overview = format_metrics_overview(models, priors)
 
     for label in (
+        "Answered with substance",
         "Gap rate", "Deflection rate", "Refusal rate",
         "Guardrail rejection rate", "Retry-exhaustion rate",
-        "Classifier low-confidence", "Classifier confident-failure",
-        "Classifier branch distribution", "Classifier multi-label",
+        "Classifier low-confidence",
+        "Classifier branch distribution",
         "Classifier mean confidence",
+        "Classifier mean confidence by branch",
         "Unique sessions", "Avg questions per session",
         "Turns/session", "Contact-conversion",
         "Tool calls / TECHNICAL turn", "Tool-call success",
@@ -158,21 +160,23 @@ def test_format_metrics_overview_renders_none_as_em_dash():
 
 
 def test_format_metrics_overview_applies_status_class_to_thresholded_metric():
-    """A thresholded metric in the alert band gets the `alert` CSS class on
-    its value cell — colour-by-status replaces the old badge pill."""
+    """A Tier A thresholded metric in the alert band gets the `alert` CSS
+    class on its value cell — colour-by-status replaces the old badge pill.
+    Post-#48 Tier B metrics (gap_rate, etc.) no longer carry per-cell value
+    status; only Tier A metrics do (refusal_rate, retry_exhausted_rate,
+    contact_conversion_rate, tool_call_success_rate, latency_p95_total)."""
     from interaction_log import InteractionRecord
 
+    # 4 refused records — refusal_rate = 100%, well above the 3% warning band → alert.
     bad = _record_dict()
-    bad["event_type"] = "gap"
+    bad["event_type"] = "refused"
     records = [
         InteractionRecord.model_validate(bad), InteractionRecord.model_validate(bad),
-        InteractionRecord.model_validate(bad), InteractionRecord.model_validate(_record_dict()),
+        InteractionRecord.model_validate(bad), InteractionRecord.model_validate(bad),
     ]
     models, priors = _models_and_priors(records)
     overview = format_metrics_overview(models, priors)
 
-    # gap_rate ≈ 75% across every window → divergence is False but value cells
-    # carry the `alert` class.
     assert "metric-value alert" in overview or "alert" in overview
 
 

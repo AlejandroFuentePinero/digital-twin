@@ -78,7 +78,15 @@ from failure_feed import (
 from interaction_log import InteractionRecord
 from kb_corpus import CoverageEntry, compute_coverage, load_sections
 from log_reader import HFReader, LocalReader, LogReader
-from metric_status import THRESHOLDS, WoWDelta, metric_status, wow_delta
+from metric_status import (
+    THRESHOLDS,
+    TIER_B_METRICS,
+    WoWDelta,
+    metric_status,
+    shift_status,
+    tier_of,
+    wow_delta,
+)
 
 
 # Leftmost column = most recent. Operator opens Sentinel to check "what happened
@@ -1095,8 +1103,15 @@ def _fmt_attempts_distribution(d: dict[str, float]) -> str:
 
 
 def _status_class(metric_name: str | None, value: float | None) -> str:
-    """CSS class for the metric value cell — drives the colour treatment."""
+    """CSS class for the metric value cell — drives the colour treatment.
+
+    Only Tier A (value-on-band) drives per-cell colour; Tier B's shift
+    status is row-level (the per-cell values are context for the shift, not
+    independently classifiable as healthy/warning/alert). Tier C / unknown
+    → no class. Post-#48 tier framework."""
     if metric_name is None:
+        return ""
+    if tier_of(metric_name) != "A":
         return ""
     return metric_status(metric_name, value) or ""
 
@@ -1166,35 +1181,79 @@ def _delta_inline(
 # wrote the metric definitions. Metric grids elsewhere keep the technical
 # names; this map is banner-only.
 FRIENDLY_BANNER_LABELS: dict[str, str] = {
+    # Tier A — value-on-band
+    "refusal_rate":                 "Refused to answer",
+    "retry_exhausted_rate":         "Retries exhausted",
+    "contact_conversion_rate":      "Contact form submitted",
+    "tool_call_success_rate":       "Tool calls succeeded",
+    "latency_p95_total":            "Slow responses",
+    # Tier B — shift-on-band (banner reads "shifted" semantically; same
+    # plain-language label, but the badge is shift-driven)
     "gap_rate":                     "Unknown answers",
     "deflection_rate":              "Deflected to story",
-    "refusal_rate":                 "Refused to answer",
     "guardrail_rejection_rate":     "Quality-check rejections",
-    "retry_exhausted_rate":         "Retries exhausted",
     "low_confidence_rate":          "Uncertain classifications",
-    "confident_failure_rate":       "Misclassified questions",
-    "latency_p95_total":            "Slow responses",
-    "technical_tool_call_rate":     "Tool calls per TECHNICAL turn",
-    "contact_conversion_rate":      "Contact form submitted",
+    "mean_classification_confidence": "Classifier confidence",
+    "answered_with_substance_rate": "Substantive answers",
+    "mean_turns_per_session":       "Avg questions per session",
     "turns_per_session_median":     "Conversation depth",
+    "contact_offer_rate":           "Contact form offered",
+    "technical_tool_call_rate":     "Tool calls per TECHNICAL turn",
 }
 
 
 def _status_summary(model: DashboardModel) -> dict[str, list[str]]:
-    """Aggregate the headline window's metric statuses into 3 buckets.
+    """Aggregate metric statuses into 3 buckets for the page-level banner.
 
     Returns ``{"alert": [...], "warning": [...], "healthy": [...]}`` of
-    *friendly* metric labels (banner-readable, not technical)."""
+    *friendly* metric labels (banner-readable, not technical).
+
+    Combines two kinds of status (post-#48 tier framework):
+    - **Tier A** (in `THRESHOLDS`): value-on-band against the headline
+      window. Crossing band IS the failure event.
+    - **Tier B** (in `TIER_B_METRICS`): shift-on-band across the
+      (7d↔30d) and (30d↔90d) window pairs. Worst of either comparison
+      drives the bucket.
+
+    Tier C / unregistered metrics never appear in the banner — they're
+    pure orientation reflections of system state."""
     buckets: dict[str, list[str]] = {"alert": [], "warning": [], "healthy": []}
-    for metric, getter in METRIC_GETTERS.items():
-        if metric not in THRESHOLDS:
-            continue
-        value = getter(model)
-        status = metric_status(metric, value)
+
+    def _push(metric: str, status: str | None) -> None:
         if status is None:
-            continue
-        buckets[status].append(FRIENDLY_BANNER_LABELS.get(metric, METRIC_LABELS.get(metric, metric)))
+            return
+        buckets[status].append(
+            FRIENDLY_BANNER_LABELS.get(metric, METRIC_LABELS.get(metric, metric))
+        )
+
+    for metric, getter in METRIC_GETTERS.items():
+        t = tier_of(metric)
+        if t == "A":
+            _push(metric, metric_status(metric, getter(model)))
+        elif t == "B":
+            v_7 = getter(model.for_window(7))
+            v_30 = getter(model.for_window(30))
+            v_90 = getter(model.for_window(90))
+            s = _worst_status([
+                shift_status(v_7, v_30),
+                shift_status(v_30, v_90),
+            ])
+            _push(metric, s)
+        # Tier C / unknown: never surfaced in banner.
     return buckets
+
+
+def _worst_status(statuses: list[str | None]) -> str | None:
+    """Reduce a list of statuses to the worst (alert > warning > healthy).
+    Returns None if every input is None."""
+    s = [x for x in statuses if x is not None]
+    if not s:
+        return None
+    if "alert" in s:
+        return "alert"
+    if "warning" in s:
+        return "warning"
+    return "healthy"
 
 
 def format_status_banner(summary: dict[str, list[str]]) -> str:
@@ -1256,6 +1315,7 @@ def _all_attempts_rejected(record_attempts) -> bool:
 METRIC_SPECS: list[tuple[str, list[tuple]]] = [
     ("Outcome", [
         ("Total interactions",         None,                          lambda m: m.total_interactions, str),
+        ("Answered with substance",    "answered_with_substance_rate", lambda m: m.answered_with_substance_rate, _fmt_pct),
         ("Gap rate",                   "gap_rate",                    lambda m: m.gap_rate, _fmt_pct),
         ("Deflection rate",            "deflection_rate",             lambda m: m.deflection_rate, _fmt_pct),
         ("Refusal rate",               "refusal_rate",                lambda m: m.refusal_rate, _fmt_pct),
@@ -1265,26 +1325,25 @@ METRIC_SPECS: list[tuple[str, list[tuple]]] = [
     ]),
     ("Routing", [
         ("Classifier branch distribution",         None,                          lambda m: m.branch_distribution, _fmt_branches),
-        ("Classifier mean confidence",             None,                          lambda m: m.mean_classification_confidence, lambda v: _fmt_num(v, 2)),
+        ("Classifier mean confidence",             "mean_classification_confidence", lambda m: m.mean_classification_confidence, lambda v: _fmt_num(v, 2)),
+        ("Classifier mean confidence by branch",   None,                          lambda m: m.mean_confidence_by_branch, _fmt_branches),
         ("Classifier low-confidence rate (<0.7)",  "low_confidence_rate",         lambda m: m.low_confidence_rate(), _fmt_pct),
-        ("Classifier confident-failure rate (≥0.8 & failed)", "confident_failure_rate", lambda m: m.confident_failure_rate(), _fmt_pct),
-        ("Classifier multi-label rate",            None,                          lambda m: m.multi_label_rate, _fmt_pct),
     ]),
     ("Engagement", [
         ("Unique sessions",            None,                          lambda m: m.unique_sessions, str),
-        ("Avg questions per session",  None,                          lambda m: m.mean_turns_per_session, lambda v: _fmt_num(v, 2)),
+        ("Avg questions per session",  "mean_turns_per_session",      lambda m: m.mean_turns_per_session, lambda v: _fmt_num(v, 2)),
         ("Turns/session (median)",     "turns_per_session_median",    lambda m: m.turns_per_session_median, _fmt_num),
-        ("Contact-offer rate",         None,                          lambda m: m.contact_offer_rate, _fmt_pct),
+        ("Contact-offer rate",         "contact_offer_rate",          lambda m: m.contact_offer_rate, _fmt_pct),
         ("Contact-conversion rate",    "contact_conversion_rate",     lambda m: m.contact_conversion_rate, _fmt_pct),
     ]),
     ("Tool use", [
         ("Tool calls (count)",         None,                          lambda m: m.tool_call_count, str),
-        # technical_tool_call_rate is orientation only — see metric_status.py
-        # for the denominator caveat (not every TECHNICAL turn warrants a
-        # tool call). Renamed from technical_tool_uptake_rate in PRD #41
-        # slice 3 to drop the normative "uptake" framing.
-        ("Tool calls / TECHNICAL turn", None,                         lambda m: m.technical_tool_call_rate, _fmt_pct),
-        ("Tool-call success rate",     None,                          lambda m: m.tool_call_success_rate, _fmt_pct),
+        # technical_tool_call_rate is Tier B post-#48 — shift-detected,
+        # not threshold-alerted. The denominator caveat (LIMITATIONS::P8)
+        # is what kept it out of THRESHOLDS; the new tier framework is
+        # explicit about it.
+        ("Tool calls / TECHNICAL turn", "technical_tool_call_rate",   lambda m: m.technical_tool_call_rate, _fmt_pct),
+        ("Tool-call success rate",     "tool_call_success_rate",      lambda m: m.tool_call_success_rate, _fmt_pct),
     ]),
     ("Latency", [
         ("classifier",                 None,                          lambda m: m.latency_with_share("classifier"), _fmt_latency_row),
@@ -1311,19 +1370,19 @@ SECTION_CAPTIONS: dict[str, str] = {
 # pins the two together so a label rename can't silently drop a description.
 METRIC_GLOSSARY: dict[str, str] = {
     # Outcome
-    "Total interactions":                                  "Count of all logged turns in the window — pure volume signal.",
-    "Gap rate":                                            "Share of turns where the system either acknowledged it didn't have the information (canonical gap phrase) or produced a structured gap-aware response about an absent skill.",
-    "Deflection rate":                                     "Share of turns where the system politely redirected an out-of-scope question (general coding help, trivia, opinions) rather than answering.",
-    "Refusal rate":                                        "Share of turns that bottomed out into the canned-refusal copy after 3 rejected guardrail attempts.",
-    "Guardrail rejection rate":                            "Share of turns where the guardrail rejected at least one attempt — composite over fabrication, scope, tone, injection, dishonest gap.",
-    "Retry-exhaustion rate":                               "Share of turns that consumed all 3 generation attempts — superset of refusal_rate; the gap is barely-accepted turns.",
-    "Attempts distribution":                               "Share of turns by attempt count (1 / 2 / 3+) — fills the middle between first-attempt-pass and retry-exhausted.",
+    "Total interactions":                                  "Count of all logged turns in the window — pure volume signal (Tier C).",
+    "Answered with substance":                             "Share of turns the producer classified as substantive answers (event_type='answered'). Completes the 4-bucket Outcome partition: gap + deflected + refused + answered = 100%. Tier B — shift-detected.",
+    "Gap rate":                                            "Share of turns where the system either acknowledged it didn't have the information (canonical gap phrase) or produced a structured gap-aware response about an absent skill. Tier B — shift-detected.",
+    "Deflection rate":                                     "Share of turns where the system politely redirected an out-of-scope question (general coding help, trivia, opinions) rather than answering. Tier B — shift-detected.",
+    "Refusal rate":                                        "Share of turns that bottomed out into the canned-refusal copy after 3 rejected guardrail attempts. Tier A — value alert (mechanism IS failure).",
+    "Guardrail rejection rate":                            "Share of turns where the guardrail rejected at least one attempt — composite over fabrication, scope, tone, injection, dishonest gap. Tier B — shift-detected.",
+    "Retry-exhaustion rate":                               "Share of turns that consumed all 3 generation attempts — superset of refusal_rate; the gap is barely-accepted turns. Tier A — value alert.",
+    "Attempts distribution":                               "Share of turns by attempt count (1 / 2 / 3+) — fills the middle between first-attempt-pass and retry-exhausted. Tier C — orientation chip.",
     # Routing
-    "Classifier branch distribution":                      "Fraction of turns routed to each branch (GENERIC / GAP / TECHNICAL / BEHAVIOURAL / LOGISTICAL) — orientation only.",
-    "Classifier mean confidence":                          "Average classifier confidence across the window — direct read of how sure the classifier is on average.",
-    "Classifier low-confidence rate (<0.7)":               "Share of turns where the classifier itself flagged uncertainty — catches misroutes the classifier admits to.",
-    "Classifier confident-failure rate (≥0.8 & failed)":   "Share of turns where the classifier was sure (≥0.8) and the system still failed — catches misroutes the classifier missed.",
-    "Classifier multi-label rate":                         "Fraction of turns where the classifier returned more than one branch label — validates whether composition routing fires (currently dormant by design).",
+    "Classifier branch distribution":                      "Fraction of turns routed to each branch (GENERIC / GAP / TECHNICAL / BEHAVIOURAL / LOGISTICAL). Tier C — orientation chip.",
+    "Classifier mean confidence":                          "Average classifier confidence across the window — direct read of how sure the classifier is on average. Tier B — shift-detected.",
+    "Classifier mean confidence by branch":                "Per-branch mean confidence chip — actionable read for 'which branch is the classifier wobbling on?'. Tier C — orientation chip.",
+    "Classifier low-confidence rate (<0.7)":               "Share of turns where the classifier itself flagged uncertainty — catches misroutes the classifier admits to. Tier B — shift-detected.",
     # Engagement
     "Unique sessions":                                     "Count of distinct chat sessions — volume orientation.",
     "Avg questions per session":                           "Mean turns per session — companion to the median, more sensitive to deeply-engaged outliers.",
@@ -1399,21 +1458,38 @@ def _is_divergent(values: list[str]) -> bool:
 
 
 def _row_severity(metric_name: str | None, raws: list) -> str:
-    """Worst per-window status across the three windows — drives the row's
-    visual treatment. Orientation metrics (no threshold) → 'orientation'.
+    """Worst per-row status — drives the row's visual treatment.
 
-    Worst-status ranking: alert > warning > healthy. A metric that's healthy
-    on 7d but alerted on Global gets the alert row treatment so the operator
-    can't miss it."""
+    Tier-aware (post-#48):
+    - **Tier A:** worst per-window value-status across `raws` (a metric
+      that's healthy on 7d but alerted on Global gets the alert row).
+    - **Tier B:** worst shift-status across (raws[0] vs raws[1]) and
+      (raws[1] vs raws[2]) — the recent-vs-broader and broader-vs-longest
+      window comparisons. The metric value alone is meaningless; the
+      *shift* between windows IS the signal.
+    - **Tier C / unknown:** orientation (no badge).
+
+    Worst-status ranking: alert > warning > healthy."""
     if metric_name is None:
         return "orientation"
-    statuses = {metric_status(metric_name, v) for v in raws}
-    if "alert" in statuses:
-        return "alert"
-    if "warning" in statuses:
-        return "warning"
-    if "healthy" in statuses:
-        return "healthy"
+    t = tier_of(metric_name)
+    if t == "A":
+        statuses = {metric_status(metric_name, v) for v in raws}
+        if "alert" in statuses:
+            return "alert"
+        if "warning" in statuses:
+            return "warning"
+        if "healthy" in statuses:
+            return "healthy"
+        return "orientation"
+    if t == "B":
+        if len(raws) < 3:
+            return "orientation"
+        s = _worst_status([
+            shift_status(raws[0], raws[1]),
+            shift_status(raws[1], raws[2]),
+        ])
+        return s or "orientation"
     return "orientation"
 
 
@@ -2297,22 +2373,29 @@ METRIC_LABELS: dict[str, str] = {
     "refusal_rate": "Refusal rate",
     "guardrail_rejection_rate": "Guardrail rejection rate",
     "retry_exhausted_rate": "Retry-exhaustion rate",
+    "answered_with_substance_rate": "Answered with substance",
     "low_confidence_rate": "Low-confidence rate (<0.7)",
-    "confident_failure_rate": "Confident-failure rate (≥0.8 & failed)",
+    "mean_classification_confidence": "Classifier mean confidence",
     "latency_p95_total": "Total latency p95",
     "technical_tool_call_rate": "Tool calls / TECHNICAL turn",
+    "tool_call_success_rate": "Tool-call success rate",
     "contact_conversion_rate": "Contact-conversion rate",
+    "contact_offer_rate": "Contact-offer rate",
     "turns_per_session_median": "Turns/session (median)",
+    "mean_turns_per_session": "Avg questions per session",
 }
 
 THEMATIC_BLOCKS: dict[str, list[str]] = {
     "Outcome": [
-        "gap_rate", "deflection_rate", "refusal_rate",
-        "guardrail_rejection_rate", "retry_exhausted_rate",
+        "answered_with_substance_rate", "gap_rate", "deflection_rate",
+        "refusal_rate", "guardrail_rejection_rate", "retry_exhausted_rate",
     ],
-    "Routing": ["low_confidence_rate", "confident_failure_rate"],
-    "Engagement": ["turns_per_session_median", "contact_conversion_rate"],
-    "Tool use": ["technical_tool_call_rate"],
+    "Routing": ["mean_classification_confidence", "low_confidence_rate"],
+    "Engagement": [
+        "mean_turns_per_session", "turns_per_session_median",
+        "contact_offer_rate", "contact_conversion_rate",
+    ],
+    "Tool use": ["technical_tool_call_rate", "tool_call_success_rate"],
     "Latency": ["latency_p95_total"],
 }
 
@@ -2331,14 +2414,50 @@ BRANCH_BAR_ALPHA = 0.85
 
 
 
+# Per-metric unit registry for chart formatting / scaling. Independent of
+# THRESHOLDS post-#48: Tier B metrics (gap_rate, deflection_rate, etc.) are
+# no longer in THRESHOLDS but still need pp/ms unit info for their chart
+# labels and value formatting. Tier A metrics also resolve here for
+# consistency. Default fall-through is "" (raw number).
+METRIC_UNITS: dict[str, str] = {
+    # Rates (percentage points)
+    "gap_rate": "pp",
+    "deflection_rate": "pp",
+    "refusal_rate": "pp",
+    "guardrail_rejection_rate": "pp",
+    "retry_exhausted_rate": "pp",
+    "answered_with_substance_rate": "pp",
+    "low_confidence_rate": "pp",
+    "technical_tool_call_rate": "pp",
+    "tool_call_success_rate": "pp",
+    "contact_conversion_rate": "pp",
+    "contact_offer_rate": "pp",
+    # Latency (milliseconds)
+    "latency_p95_total": "ms",
+    # Raw numbers (no scale, no suffix)
+    "mean_classification_confidence": "",
+    "turns_per_session_median": "",
+    "mean_turns_per_session": "",
+}
+
+
+def _unit_for(metric: str) -> str:
+    """Resolve the metric's display unit. Falls back to THRESHOLDS for
+    backward compatibility, then to "" (raw number)."""
+    if metric in METRIC_UNITS:
+        return METRIC_UNITS[metric]
+    threshold = THRESHOLDS.get(metric)
+    if threshold is not None:
+        return threshold.unit
+    return ""
+
+
 def _y_axis_title(metric: str) -> str:
     label = METRIC_LABELS.get(metric, metric)
-    threshold = THRESHOLDS.get(metric)
-    if threshold is None:
-        return label
-    if threshold.unit == "pp":
+    unit = _unit_for(metric)
+    if unit == "pp":
         return f"{label} (%)"
-    if threshold.unit == "ms":
+    if unit == "ms":
         return f"{label} (s)"
     return label
 
@@ -2348,23 +2467,19 @@ def _scale_value(metric: str, value: float | None) -> float | None:
     ``ms`` → seconds (÷1000); other passes through."""
     if value is None:
         return None
-    threshold = THRESHOLDS.get(metric)
-    if threshold is None:
-        return value
-    if threshold.unit == "pp":
+    unit = _unit_for(metric)
+    if unit == "pp":
         return value * 100
-    if threshold.unit == "ms":
+    if unit == "ms":
         return value / 1000
     return value
 
 
 def _fmt_metric_value(metric: str, value: float | None) -> str:
-    threshold = THRESHOLDS.get(metric)
-    if threshold is None:
-        return _fmt_num(value)
-    if threshold.unit == "pp":
+    unit = _unit_for(metric)
+    if unit == "pp":
         return _fmt_pct(value)
-    if threshold.unit == "ms":
+    if unit == "ms":
         return _fmt_seconds(value)
     return _fmt_num(value)
 
