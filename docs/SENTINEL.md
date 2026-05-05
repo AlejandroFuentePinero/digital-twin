@@ -249,7 +249,7 @@ The Flags panel sits above Panel 1 and surfaces three automatically-detected ano
 - **What it measures:** the same question failing the same way, repeatedly, in a short window.
 - **What it proxies:** a recurring failure mode the system is reproducing rather than recovering from. Distinct from `new_cluster` (which is gap-only) — `repeat_failure` is deflection / refusal patterns.
 - **Why exclude `gap`:** gap turns are handled by `new_cluster` + the clustering batch; surfacing them here would double-count across two flags.
-- **Target panel:** Failure Feed (`#failure-feed-section`). Post-#43 the feed surfaces `deflected` rows at the lowest severity tier so the click-through from this flag lands on real records.
+- **Target panel:** Failure Feed (`#failure-feed-section`). Post-#43 the feed surfaces `deflected` rows at the lowest severity tier so the click-through from this flag lands on real records. Post-#49 the feed visually splits **Failures** (refused, retry-exhausted) from **Outcomes** (rejected-then-recovered, gap, deflected) — the click-through from `repeat_failure` may land in either sub-section depending on which mode triggered the trip-wire (`event_type='refused'` → Failures; `event_type='deflected'` → Outcomes). Both are reachable from the same panel; the operator drills as before.
 - **Runbook:** filter the Failure Feed by the question text + read the underlying records' `guardrail_feedback`; then attribute via the matching runbook (`guardrail_rejection_rate` for refusals; `gap_rate` for deflections). (Replay was deleted in Session 38; the canary-set workflow under PRD #39 covers the broader regression-catch use case at population level.)
 
 ---

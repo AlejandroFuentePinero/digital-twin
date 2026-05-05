@@ -5,6 +5,69 @@
 
 ---
 
+## Session 49 (2026-05-05) — Failure Feed tier split: Failures sub-section vs Outcomes sub-section; same conflation Session 48 fixed for live metric labels, applied to the Failure Feed panel
+
+**Status:** Polish on PRD `#41` extending the Session 48 tier framework into the Failure Feed UI. Audit doc lands first per project discipline; renderer split + tier mapping + tests + doc updates follow. Suite at **522 passing** (+7 net from Session 48's 515 — 4 new `tier_for_mode` / `FAILURE_MODE_TIER` tests, 3 new `format_feed_summary` rendering tests). The Failure Feed now visually separates *strict failures* (refused, retry-exhausted — system delivered nothing or burned its budget) from *outcome shapes* (rejected-then-recovered, gap, deflected — correct system behaviour worth scanning for patterns). Same data flow; only the renderer regroups.
+
+### What shipped
+
+| Layer | Change |
+|---|---|
+| Audit | `docs/audits/failure-feed-tier-split.md` — strict-failure vs outcome-shape mode partition; ripple inventory across `failure_feed` / `sentinel` / SENTINEL.md / tests; predicted visual; risk register |
+| Code | `src/failure_feed.py` — new `FAILURE_MODE_TIER: dict[str, str]` mapping each of the 5 modes to `"failure"` (refused, retry-exhausted) or `"outcome"` (rejected-then-recovered, gap, deflected). New `tier_for_mode(mode) -> str` helper; defaults to `"outcome"` on unknown (fail-soft — an unrecognised mode shouldn't be flagged as a strict failure). Data flow unchanged: `classify_failure` still returns one of the 5 mode strings; `select_failures` still returns a single flat `list[FailureRow]`; `failure_mode_counts` still per-mode |
+| Code | `src/sentinel.py::format_feed_summary` rewritten — renders two visually-separated sub-sections (`Failures` block + `Outcomes` block), each with its own `{tier} · {N} total · {n} {friendly mode} · ...` shape. Sub-sections only render when their tier has ≥1 record (no empty "Failures: 0 total" headings). Per-mode chip colours unchanged |
+| Code | `src/sentinel.py` CSS — new `.feed-section-heading` (uppercase tier label); `.feed-summary.failures` (heading colour-coded with `--alert`) and `.feed-summary.outcomes` (heading muted; dashed border-top separator) |
+| Tests | `tests/test_failure_feed.py` — 4 new tests: `tier_for_mode` returns `failure` for refused/retry-exhausted; returns `outcome` for the other 3; defaults to `outcome` on unknown; `FAILURE_MODE_TIER` partitions every entry of `FAILURE_MODES` (forcing function — defends against a future mode addition slipping through without explicit tier framing) |
+| Tests | `tests/test_sentinel.py` — 3 new tests for the tiered `format_feed_summary`: renders both sub-sections with right per-tier totals; omits a tier sub-section when its records=0; returns empty string on empty rows |
+| Docs | `docs/SENTINEL.md::repeat_failure` — flag's target panel description updated to note the post-#49 visual split (click-through may land in either Failures or Outcomes depending on which mode triggered the flag) |
+
+### Decisions made
+
+**1. Two sub-sections inside one panel, not two separate panels.** Same data, same drilldown affordance, same per-mode dropdown filter, same `repeat_failure` click-through target. Only the visual grouping changes. This keeps the existing flag wiring intact (target panel is still Failure Feed; the operator lands on the right records regardless of which sub-section they're in).
+
+**2. Accordion stream below stays one stream, sorted by `_SEVERITY_RANK`.** The existing severity ordering already places failures first (refused=0, retry-exhausted=1) ahead of outcomes (rejected-then-recovered=2, gap=3, deflected=4). The summary block at the top provides the explicit tier framing; the accordion stream below benefits from the natural ordering. Adding visual dividers inside the accordion stream would require Gradio dynamic-update plumbing for limited extra value — pragma documented in the audit + Session 49 entry.
+
+**3. `tier_for_mode` defaults to `outcome` on unknown.** Fail-soft: a future mode addition slipping through without explicit `FAILURE_MODE_TIER` registration shouldn't inadvertently get `Failures` framing. The forcing-function test (`test_failure_mode_tier_partitions_every_failure_mode`) catches the omission at CI time.
+
+**4. Per-mode chip colours unchanged.** Pre-#49 each mode had its own colour (refused=red, retry-exhausted=orange, rejected-then-recovered=amber, gap=blue, deflected=teal). The tier split adds two sub-section *headings* (one alert-red, one muted) but keeps the per-mode chip colours so operator at-a-glance reads on individual chips don't change.
+
+**5. Empty tier sub-sections collapse.** When a tier has 0 records (e.g. only outcomes, no strict failures), only the populated sub-section renders. Prevents cluttering the panel with empty "Failures: 0 total" headings on stable traffic.
+
+### Predicted visual on the local log (~13 records firing in the Failure Feed)
+
+```
+Failure Feed                                 [filter bar: branch / mode / window / search]
+
+FAILURES · 2 total · 1 refused · 1 retry-exhausted
+
+OUTCOMES · 11 total · 5 rejected-then-recovered · 5 gap · 1 deflected
+
+[accordion stream — naturally severity-ordered: refused first, then retry-exhausted,
+ then rejected-then-recovered, gap, deflected]
+```
+
+At low N (~13 records) the visual cost is two sub-section heading lines + a dashed separator. At high N the value compounds: operator scans the panel and immediately knows "2 of 200 are real failures; the other 198 are background-noise outcome shapes worth scanning for patterns."
+
+### Live smoke verification
+
+- 522 / 522 tests pass.
+- `tier_for_mode` returns the right tier for every entry in `FAILURE_MODES`.
+- `format_feed_summary` renders `>Failures<` + `>Outcomes<` sub-section headings; each carries its own `N total` count.
+- Empty-tier sub-section omitted on outcome-only data.
+
+### Outstanding (start of next session)
+
+- **Re-freeze canary baseline** (operator-gated) — unchanged from Sessions 47/48. PRD `#41` closes when this lands.
+- **Tier B band tuning** — placeholders 7%/15% are first-pass; recalibrate after a month of v4 traffic.
+- **Failure Feed accordion stream divider** (deferred per audit § 6 pragma) — could add visual sub-section dividers inside the accordion stream if operator workflow shows the summary-only split is insufficient; not gated on Phase 5.
+- **No PR opened, no push.** Session 49 commits land on top of Session 48's; operator batches pushes.
+
+### Next session entry-point
+
+Same as Session 48: either the operator runs `--freeze-baseline` (closes PRD `#41` + `#39`), or Phase 5 prep starts. The dashboard now structurally separates failures from shapes everywhere — Live tabs (Session 48) and Failure Feed (Session 49). Phase 5 alerts will be much easier to triage as real-vs-noise.
+
+---
+
 ## Session 48 (2026-05-05) — Live observability tier polish: separate alerting (Tier A) from shift detection (Tier B) from orientation (Tier C); remove two useless metrics
 
 **Status:** Polish on PRD `#41` informed by Session 47 Q&A. Audit doc lands first per project discipline; code + tests + operator-facing copy follow. Suite at **515 passing** (+12 net from Session 47's 503 — new shift_status / tier_of tests, new property tests, two property tests removed). The Live Metrics tab now structurally separates *mechanism-IS-failure* metrics (Tier A — value alerts) from *behavioural shift* metrics (Tier B — relative-change alerts on window pairs) from *deterministic reflection* metrics (Tier C — orientation, no badges). Two useless metrics removed entirely: `confident_failure_rate` (semantic conflation of correct gap-acks with misroutes; ~62% of records that fired the alert on the local log were correct system behaviour) and `multi_label_rate` (always 0% in live data; composition routing dormant by design per ADR-0003).
