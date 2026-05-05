@@ -264,11 +264,20 @@ def test_low_confidence_rate_counts_records_below_default_threshold():
     assert model.low_confidence_rate(threshold=0.6) == 0.25  # 1 of 4 below 0.6
 
 
-def test_confident_failure_rate_counts_high_confidence_failures():
+def test_confident_failure_rate_counts_high_confidence_gap_refused_or_retry():
     """confident_failure_rate counts records where confidence >= 0.8 AND a failure signal fires
-    (knew_answer=False OR any rejected attempt OR event_type='refused'). This catches the
-    misroutes that low_confidence_rate cannot — the system was certain and still failed.
-    Per issue #35 'Detection gap'."""
+    (event_type in {gap, refused} OR any rejected attempt). The metric catches misroutes that
+    low_confidence_rate is blind to — the system was certain and still failed. Per issue #35
+    'Detection gap'.
+
+    Forcing function for the slice 3 v4 contract (PRD #41):
+    - A confident GAP-branch record with a substantive answer (event_type='gap',
+      knew_answer=True) MUST count. The pre-#42 ``not knew_answer`` proxy missed it
+      (knew_answer=True → not counted); the v4 contract counts it because the producer
+      classified it as a gap.
+    - A confident deflected record MUST NOT count. A correctly-handled out-of-scope
+      redirect is not a failure for this metric (slice 2 audit § 2 framing).
+    """
     rejected_then_accepted = [
         {"answer": "bad", "is_acceptable": False, "guardrail_feedback": "fix"},
         {"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""},
@@ -276,14 +285,25 @@ def test_confident_failure_rate_counts_high_confidence_failures():
     accepted = [{"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""}]
 
     records = [
-        _r(classification_confidence=0.95, knew_answer=True, attempts=accepted),                     # confident success — not counted
-        _r(classification_confidence=0.95, knew_answer=False, attempts=accepted),                     # confident gap — counted
-        _r(classification_confidence=0.95, knew_answer=True, attempts=rejected_then_accepted),       # confident retry — counted
-        _r(classification_confidence=0.95, knew_answer=True, event_type="refused", attempts=accepted),  # confident refusal — counted
-        _r(classification_confidence=0.50, knew_answer=False, attempts=accepted),                     # low-conf gap — NOT counted (different metric)
+        # confident success — not counted
+        _r(classification_confidence=0.95, event_type="answered", attempts=accepted),
+        # confident gap with phrase (knew_answer=False because GAP_PHRASE in answer) — counted
+        _r(classification_confidence=0.95, event_type="gap", knew_answer=False, attempts=accepted),
+        # confident GAP-branch with substantive answer — counted
+        # (forcing function: pre-#42 proxy missed this; v4 contract counts it)
+        _r(classification_confidence=0.95, event_type="gap", knew_answer=True, attempts=accepted),
+        # confident retry — counted (rejected attempt before acceptance)
+        _r(classification_confidence=0.95, event_type="answered", attempts=rejected_then_accepted),
+        # confident refusal — counted
+        _r(classification_confidence=0.95, event_type="refused", attempts=accepted),
+        # confident deflection — NOT counted (deflected is not a failure mode for this metric)
+        _r(classification_confidence=0.95, event_type="deflected", attempts=accepted),
+        # low-confidence gap — NOT counted (different metric)
+        _r(classification_confidence=0.50, event_type="gap", knew_answer=False, attempts=accepted),
     ]
     model = DashboardModel(records)
-    assert model.confident_failure_rate() == 0.6  # 3 of 5
+    assert model.confident_failure_rate() == 4 / 7  # 4 of 7
+
     # Threshold parameter overridable
     assert model.confident_failure_rate(threshold=0.99) == 0.0
 
@@ -428,9 +448,12 @@ def test_for_window_propagates_provided_session_ids_to_filtered_model():
     assert windowed.contact_conversion_rate == 0.5
 
 
-def test_technical_tool_uptake_rate_is_tool_use_share_of_technical_turns():
-    """technical_tool_uptake_rate = count(branch=TECHNICAL & tool_calls!=[]) / count(branch=TECHNICAL).
-    Live: 6/9 = 66.7% — LIMITATIONS::P8 first measurement. None when no TECHNICAL turns."""
+def test_technical_tool_call_rate_is_tool_call_share_of_technical_turns():
+    """technical_tool_call_rate = count(branch=TECHNICAL & tool_calls!=[]) / count(branch=TECHNICAL).
+    Descriptive — rate at which TECHNICAL turns invoke a tool; None when no TECHNICAL turns.
+    Renamed from ``technical_tool_uptake_rate`` in PRD #41 slice 3 — "uptake" implied a target
+    the system isn't trying to hit; "call rate" is purely descriptive (parallel to
+    ``tool_call_count`` and ``tool_call_success_rate``)."""
     model = DashboardModel(
         [
             _r(branch="TECHNICAL", tool_calls=[{"name": "fetch_project_readme", "args": {}, "status": "success", "attempt_index": 0}]),
@@ -439,10 +462,10 @@ def test_technical_tool_uptake_rate_is_tool_use_share_of_technical_turns():
             _r(branch="GENERIC", tool_calls=[]),  # excluded — not a TECHNICAL turn
         ]
     )
-    assert model.technical_tool_uptake_rate == 2 / 3
+    assert model.technical_tool_call_rate == 2 / 3
 
     no_technical = DashboardModel([_r(branch="GENERIC"), _r(branch="GAP")])
-    assert no_technical.technical_tool_uptake_rate is None
+    assert no_technical.technical_tool_call_rate is None
 
 
 def test_tool_call_success_rate_is_share_of_tool_calls_marked_success():
@@ -777,7 +800,7 @@ def test_branch_match_rate_compares_observed_branch_to_corpus_expected():
 def test_tool_uptake_on_warranted_uses_clean_denominator():
     """tool_uptake_on_warranted(corpus) is uptake over canary records whose corpus
     entry sets requires_tool=True. The denominator is the warranted subset only —
-    fixes LIMITATIONS::P8 (technical_tool_uptake_rate's noisy denominator)."""
+    fixes LIMITATIONS::P8 (technical_tool_call_rate's noisy denominator)."""
     from canary_corpus import CanaryQuestion
 
     corpus = [

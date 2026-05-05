@@ -211,7 +211,14 @@ class DashboardModel:
         return len(sessions_offered & sessions_provided) / len(sessions_offered)
 
     @property
-    def technical_tool_uptake_rate(self) -> float | None:
+    def technical_tool_call_rate(self) -> float | None:
+        """Share of TECHNICAL turns that invoked at least one tool call.
+
+        Descriptive — direction-of-change orientation, not a target. Pre-#42
+        was named ``technical_tool_uptake_rate``; "uptake" implied a target the
+        system isn't trying to hit (PRD #41 slice 3). Denominator is "all
+        TECHNICAL", not "TECHNICAL warranting a tool" — see LIMITATIONS::P8.
+        """
         technical = [r for r in self.records if r.branch == "TECHNICAL"]
         if not technical:
             return None
@@ -233,7 +240,7 @@ class DashboardModel:
     def tool_uptake_on_warranted(self, corpus) -> float | None:
         """Fraction of canary records WHOSE CORPUS ENTRY sets ``requires_tool=True``
         that actually invoked a tool. Clean denominator — fixes
-        LIMITATIONS::P8 (the live ``technical_tool_uptake_rate`` denominator
+        LIMITATIONS::P8 (the live ``technical_tool_call_rate`` denominator
         includes branch-routed records that don't warrant a tool)."""
         warranted_questions = {q.question for q in corpus if q.requires_tool}
         warranted = [r for r in self.records if r.question in warranted_questions]
@@ -244,7 +251,7 @@ class DashboardModel:
     @property
     def tool_call_count(self) -> int:
         """Total number of tool invocations across all records — volume signal
-        in the Tool use block. Pairs with ``technical_tool_uptake_rate``
+        in the Tool use block. Pairs with ``technical_tool_call_rate``
         (rate) and ``tool_call_success_rate`` (quality)."""
         return sum(len(r.tool_calls) for r in self.records)
 
@@ -268,12 +275,14 @@ class DashboardModel:
     def confident_failure_rate(self, threshold: float = HIGH_CONFIDENCE_THRESHOLD) -> float:
         # Surfaces the failures `low_confidence_rate` is blind to: the
         # classifier was sure, but the turn still failed. A failure here is
-        # any of (gap | retry | refusal). Issue #35 'Detection gap'.
+        # any of (gap | refused | guardrail-rejected attempt). Deflected is
+        # NOT a failure: a confident deflection on an out-of-scope question
+        # is correct system behaviour (slice 2 audit § 2). Issue #35
+        # 'Detection gap'; v4 contract per PRD #41 slice 3.
         def _failed(r: InteractionRecord) -> bool:
             return (
-                not r.knew_answer
+                r.event_type in {"gap", "refused"}
                 or any(not a.get("is_acceptable", True) for a in r.attempts)
-                or r.event_type == "refused"
             )
         return self._rate_of(lambda r: r.classification_confidence >= threshold and _failed(r))
 
@@ -374,7 +383,7 @@ METRIC_GETTERS: dict[str, Callable[["DashboardModel"], float | None]] = {
     "low_confidence_rate": lambda m: m.low_confidence_rate(),
     "confident_failure_rate": lambda m: m.confident_failure_rate(),
     "latency_p95_total": lambda m: m.latency_percentiles("total").get(95),
-    "technical_tool_uptake_rate": lambda m: m.technical_tool_uptake_rate,
+    "technical_tool_call_rate": lambda m: m.technical_tool_call_rate,
     "contact_conversion_rate": lambda m: m.contact_conversion_rate,
     "turns_per_session_median": lambda m: m.turns_per_session_median,
 }
