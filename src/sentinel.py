@@ -114,6 +114,7 @@ TAB_METRICS = "tab-metrics"
 TAB_TRENDS = "tab-trends"
 TAB_CANARY = "tab-canary"
 TAB_FAILURES = "tab-failures"
+TAB_KB_COVERAGE = "tab-kb-coverage"
 
 # Sparklines render the last N canary runs as a tiny inline trend so each
 # metric row carries its own trajectory cell. 12 fits the natural cadence:
@@ -833,7 +834,8 @@ footer { display: none !important; }
 /* ---- Section header hierarchy ----
    Two levels:
    - .section-header-major — top-of-tab landmarks (Flags, Health overview,
-     Failure Feed, Gap Clusters, Deflection summary, KB Source Coverage).
+     Failure Feed, Gap Clusters, Deflection summary; KB Source Coverage
+     lives on its own tab post-Session 50).
      Reads as "you've entered a new area."
    - .section-header — sub-section inside a major area (Outcome, Routing,
      Engagement, Tool use, Latency under Health overview; the per-block
@@ -3126,6 +3128,11 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                     format_deflection_panel(read_summary("deflection", DEFAULT_SUMMARIES_DIR))
                 )
 
+            # KB Source Coverage lives on its own tab (post-Session 50). Pre-#50
+            # it was a section under Failures; the move surfaces it as a
+            # first-class operator surface for KB-coverage health rather than
+            # a sub-section read after the failure drilldown.
+            with gr.Tab("KB Coverage", id=TAB_KB_COVERAGE):
                 gr.Markdown("<div class='section-header-major'>KB Source Coverage</div>")
                 kb_coverage_md = gr.Markdown(
                     format_kb_coverage_panel(_kb_coverage_entries(model.records))

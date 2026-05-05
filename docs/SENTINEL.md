@@ -401,9 +401,9 @@ If deeper investigation is needed for a specific metric, the workflow is: read t
 
 ---
 
-## KB Source Coverage panel (Session 40)
+## KB Coverage tab (Session 40 panel; promoted to its own tab in Session 50)
 
-Lives at the bottom of the Failures tab below Deflection summary. Surfaces three buckets of `(source_file, section_heading)` pairs:
+Dedicated tab between Failures and Canary (post-#50). Pre-#50 the panel sat at the bottom of the Failures tab below Deflection summary; it was promoted to a first-class tab because KB-coverage health is operator-actionable independent of failure drilldown — the operator opens the tab to ask "is the KB well-utilised?" not "what failed?". Surfaces three buckets of `(source_file, section_heading)` pairs:
 
 - **Never retrieved** (count = 0, alert ribbon) — sections in the canonical KB that have not appeared in any retrieval over the loaded window. Pruning candidates or content-rewrite candidates if they look load-bearing.
 - **Retrieved** (count > 0, healthy ribbon) — sections that show up in `retrieved_chunks`, sorted ascending by frequency so the rarely-used sections sit at the top of the bucket.

@@ -5,6 +5,30 @@
 
 ---
 
+## Session 50 (2026-05-05) — KB Coverage promoted to its own Sentinel tab
+
+**Status:** Small UX move — KB Source Coverage panel promoted from a sub-section of the Failures tab to a first-class `KB Coverage` tab. Suite at **522 passing** (no test delta — the move is purely UI placement). New tab sits between Failures and (visually) where the operator next wants to scan KB-utilisation health independent of failure drilldown.
+
+### What shipped
+
+- `src/sentinel.py` — new `TAB_KB_COVERAGE = "tab-kb-coverage"` constant. KB Source Coverage panel rendering moved out of the Failures tab into a new `gr.Tab("KB Coverage", id=TAB_KB_COVERAGE)`. CSS docstring's tab-landmark list updated to note KB Source Coverage now lives on its own tab.
+- `docs/SENTINEL.md` — section heading renamed `KB Source Coverage panel` → `KB Coverage tab` with rationale callout (operator opens the tab to ask "is the KB well-utilised?", not "what failed?"). Pre-#50 location preserved for historical context.
+
+### Decisions
+
+**1. New tab, not a relocation within an existing tab.** The panel's question ("which KB sections are unused / off-canon?") is structurally different from "what failed?". Bundling them under Failures conflated KB hygiene with per-turn diagnostics. Promoting to a tab is the cleanest framing.
+
+**2. No flag re-routing required.** No flag in `FLAG_TARGET_TAB` points at KB coverage today. The new tab is purely additive in routing.
+
+**3. The widget reference (`kb_coverage_md`) stays in the existing `_refresh` outputs list.** The widget moved tabs but the refresh wiring is unchanged — Gradio re-renders the markdown regardless of which tab it lives on.
+
+### Outstanding
+
+- Same as Session 49: canary baseline re-freeze (operator-gated), Tier B band tuning placeholders.
+- 45 commits ahead of `origin/main` after Session 50's commits land.
+
+---
+
 ## Session 49 (2026-05-05) — Failure Feed tier split: Failures sub-section vs Outcomes sub-section; same conflation Session 48 fixed for live metric labels, applied to the Failure Feed panel
 
 **Status:** Polish on PRD `#41` extending the Session 48 tier framework into the Failure Feed UI. Audit doc lands first per project discipline; renderer split + tier mapping + tests + doc updates follow. Suite at **522 passing** (+7 net from Session 48's 515 — 4 new `tier_for_mode` / `FAILURE_MODE_TIER` tests, 3 new `format_feed_summary` rendering tests). The Failure Feed now visually separates *strict failures* (refused, retry-exhausted — system delivered nothing or burned its budget) from *outcome shapes* (rejected-then-recovered, gap, deflected — correct system behaviour worth scanning for patterns). Same data flow; only the renderer regroups.
