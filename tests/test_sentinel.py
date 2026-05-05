@@ -22,6 +22,7 @@ from sentinel import (
     branch_legend_html,
     build_app,
     format_failure_drilldown,
+    format_feed_summary,
     format_header,
     format_metrics_glossary,
     format_metrics_overview,
@@ -1092,3 +1093,74 @@ def test_format_metrics_glossary_renders_one_row_per_metric_with_description():
         assert html.escape(label) in glossary_html, (
             f"glossary missing rendered label {label!r}"
         )
+
+
+# ----- format_feed_summary tier split (Session 49) --------------------------
+
+
+def test_format_feed_summary_renders_two_tier_sub_sections():
+    """Post-#49 the summary renders two visually-separated sub-sections —
+    Failures (refused, retry-exhausted) and Outcomes (rejected-then-recovered,
+    gap, deflected). Each shows its own total + per-mode chips."""
+    from failure_feed import FailureRow
+
+    def _row(failure_mode: str) -> FailureRow:
+        return FailureRow(
+            timestamp="2026-05-05T00:00:00+00:00",
+            branch="GENERIC",
+            failure_mode=failure_mode,
+            question="q?",
+            attempt_count=1,
+            classification_confidence=0.9,
+            record=None,  # not used by format_feed_summary
+        )
+
+    rows = [
+        _row("refused"),
+        _row("retry-exhausted"),
+        _row("gap"),
+        _row("gap"),
+        _row("deflected"),
+    ]
+    counts = {
+        "refused": 1, "retry-exhausted": 1, "rejected-then-recovered": 0,
+        "gap": 2, "deflected": 1,
+    }
+    summary = format_feed_summary(rows, counts)
+
+    # Two sub-section headings (case-insensitive uppercase per the CSS rule)
+    assert ">Failures<" in summary, f"missing Failures sub-section heading: {summary!r}"
+    assert ">Outcomes<" in summary, f"missing Outcomes sub-section heading: {summary!r}"
+
+    # Per-tier totals: Failures=2 (refused + retry-exhausted); Outcomes=3 (gap+gap+deflected)
+    assert "2 total" in summary, f"missing Failures total in: {summary!r}"
+    assert "3 total" in summary, f"missing Outcomes total in: {summary!r}"
+
+
+def test_format_feed_summary_omits_tier_with_zero_records():
+    """When a tier has no records (e.g. only outcomes, no strict failures),
+    only the populated sub-section renders. Avoids cluttering with empty
+    'Failures: 0 total' headings."""
+    from failure_feed import FailureRow
+
+    rows = [
+        FailureRow(
+            timestamp="2026-05-05T00:00:00+00:00", branch="GAP",
+            failure_mode="gap", question="q?", attempt_count=1,
+            classification_confidence=0.9, record=None,
+        ),
+    ]
+    counts = {
+        "refused": 0, "retry-exhausted": 0, "rejected-then-recovered": 0,
+        "gap": 1, "deflected": 0,
+    }
+    summary = format_feed_summary(rows, counts)
+
+    assert ">Outcomes<" in summary
+    assert ">Failures<" not in summary, "should not render an empty Failures sub-section"
+
+
+def test_format_feed_summary_returns_empty_string_on_no_rows():
+    """Empty rows → empty output; UI renders the no-failures-match copy
+    elsewhere."""
+    assert format_feed_summary([], {}) == ""

@@ -74,6 +74,7 @@ from failure_feed import (
     failure_mode_counts,
     group_by_session,
     select_failures,
+    tier_for_mode,
 )
 from interaction_log import InteractionRecord
 from kb_corpus import CoverageEntry, compute_coverage, load_sections
@@ -477,6 +478,27 @@ body, .gradio-container {
     padding: 8px 0 16px;
     color: var(--text-secondary);
     font-size: 0.92em;
+}
+.feed-summary.failures {
+    padding-bottom: 8px;
+}
+.feed-summary.outcomes {
+    padding-top: 4px;
+    border-top: 1px dashed var(--border);
+}
+.feed-summary .feed-section-heading {
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-right: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.85em;
+}
+.feed-summary.failures .feed-section-heading {
+    color: var(--alert);
+}
+.feed-summary.outcomes .feed-section-heading {
+    color: var(--text-secondary);
 }
 .feed-summary .feed-summary-total {
     font-weight: 600;
@@ -1666,30 +1688,43 @@ def _failure_accordion_label(row: FailureRow) -> str:
 
 
 def format_feed_summary(rows: list[FailureRow], counts: dict[str, int]) -> str:
-    """Per-mode counts row above the feed.
+    """Per-tier counts above the feed (Session 49 split).
 
-    'Total · 8 unknown answer · 5 rejected then recovered · 1 retry exhausted
-    · 1 refused' — the mode counts use the friendly labels so the operator
-    sees the underlying-field mapping at a glance, and each count is colored
-    by its severity for at-a-glance scan."""
+    Two sub-section summaries: **Failures** (refused, retry-exhausted —
+    modes where the metric IS the failure event) and **Outcomes**
+    (rejected-then-recovered, gap, deflected — modes where the metric
+    IS a system-output shape worth scanning, not a defect). Same data
+    flow as before; the regrouping is display-only.
+
+    Each sub-section: '{tier} · {N} total · {n} {friendly mode} · ...'
+    with per-mode chips coloured by severity for at-a-glance scan.
+    Sub-sections only render when their tier has ≥1 record."""
     total = len(rows)
     if total == 0:
         return ""
-    parts = [
-        f"<span class='feed-summary-total'>{total} failures</span>"
-    ]
-    # Sort the count breakdown by mode rank so the most-actionable modes
-    # (refused → retry-exhausted → rejected-then-recovered → gap) appear first.
-    from failure_feed import _SEVERITY_RANK as _MODE_RANK  # per-mode sort order
-    sorted_modes = sorted(counts.items(), key=lambda kv: _MODE_RANK.get(kv[0], 99))
-    for mode, n in sorted_modes:
-        if n == 0:
-            continue
-        friendly = FAILURE_MODE_LABELS.get(mode, mode).split(" (")[0]
-        parts.append(
-            f"<span class='feed-summary-mode {mode}'>{n} {html.escape(friendly)}</span>"
-        )
-    return "<div class='feed-summary'>" + "".join(parts) + "</div>"
+    from failure_feed import _SEVERITY_RANK as _MODE_RANK
+
+    def _tier_block(tier: str, label: str, css_class: str) -> str:
+        tier_modes = [m for m in counts if tier_for_mode(m) == tier]
+        tier_total = sum(counts[m] for m in tier_modes)
+        if tier_total == 0:
+            return ""
+        parts = [
+            f"<span class='feed-section-heading'>{label}</span>",
+            f"<span class='feed-summary-total'>{tier_total} total</span>",
+        ]
+        sorted_modes = sorted(tier_modes, key=lambda m: _MODE_RANK.get(m, 99))
+        for mode in sorted_modes:
+            n = counts[mode]
+            if n == 0:
+                continue
+            friendly = FAILURE_MODE_LABELS.get(mode, mode).split(" (")[0]
+            parts.append(
+                f"<span class='feed-summary-mode {mode}'>{n} {html.escape(friendly)}</span>"
+            )
+        return f"<div class='feed-summary {css_class}'>" + "".join(parts) + "</div>"
+
+    return _tier_block("failure", "Failures", "failures") + _tier_block("outcome", "Outcomes", "outcomes")
 
 
 def format_failure_drilldown(record: InteractionRecord) -> str:
