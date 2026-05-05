@@ -13,14 +13,19 @@ Companion to:
 
 ## How to read this doc
 
-For each metric, four things matter:
+Sentinel sorts metrics into three tiers (post-#48 polish):
 
-1. **Definition** — exact formula on the `InteractionRecord` schema.
-2. **What it measures** vs. **what it proxies** — many headline numbers are *composites* over several distinct failure modes. Movement up or down is a *signal* to investigate, not a verdict on what failed.
-3. **Thresholds** — healthy / warning / alert bands. Source of each is noted (eval baseline, live baseline, informed guess) so you can re-tune as the system evolves.
-4. **Confidence** — most metrics get noisy at low N (~30 records). Treat trends, not single-day values, as load-bearing until volume rises.
+| Tier | Treatment | Failure semantic |
+|---|---|---|
+| **A — Mechanism IS failure** | Threshold on value + status badge + banner alert. Value crossing the band IS the failure event (page-at-3am). | Refusal, retry-exhaustion, conversion drop, tool error, latency past UX bar. |
+| **B — Behavioural shift signal** | No value threshold. Shift-status across window pairs (7d↔30d, 30d↔90d) drives the badge: relative change ≥**15% = alert**, ≥**7% = warning**. The metric value alone is meaningless — depends on traffic mix; the *shift* signals behavioural drift worth investigation. | Gap rate / deflection rate moved sharply, classifier confidence wobbled, engagement shifted, tool-call ratio changed. |
+| **C — Deterministic reflection** | Number only. No badge, no delta-alerts. | Pure volume / distribution — total interactions, unique sessions, branch distribution, attempts distribution, per-stage latencies (diagnostic context for the Tier A total p95). |
 
-When a metric goes red, the matching **runbook** at the bottom of this doc tells you which panels to check next and which code module the fix likely lives in.
+For each per-metric entry below: **Definition** (exact formula), **Tier**, **What it measures** vs **what it proxies**, and (Tier A only) **Thresholds** + source. Most metrics are noisy at low N (~30 records); treat trends rather than single-day values until volume rises.
+
+When a Tier A metric goes red OR a Tier B metric fires a shift alert, the matching **runbook** at the bottom of this doc tells you which panels to check next and which code module the fix likely lives in.
+
+**Tier B band caveat:** the 15% / 7% relative-change defaults are placeholders. PRD #41 § *Open questions deferred* explicitly defers drift-threshold tuning until first real data informs reasonable values. Recalibrate after a month of operator usage shows where the noise / signal line sits.
 
 ---
 
@@ -28,44 +33,49 @@ When a metric goes red, the matching **runbook** at the bottom of this doc tells
 
 ### Outcome block
 
-#### `gap_rate`
+#### `answered_with_substance_rate` (Tier B)
+
+- **Definition:** `count(event_type == "answered") / total`.
+- **What it measures:** the share of turns the producer classified as substantive answers. Completes the 4-bucket Outcome partition: answered + gap + deflected + refused = 100%.
+- **What it proxies:** the system's "delivery rate" of substantive content. Falling sharply ⇒ shift toward gaps / deflections / refusals; rising sharply ⇒ traffic shape pulled toward answerable shapes.
+- **Source signal:** producer's `event_type` value, read directly.
+- **Tier B alerting:** shift fires on relative change between (7d, 30d) and (30d, 90d) windows; ≥7% warning, ≥15% alert. No absolute target — substance share depends on traffic mix.
+
+#### `gap_rate` (Tier B)
 
 - **Definition:** `count(event_type == "gap") / total`.
 - **What it measures:** the share of turns where the system either acknowledged it didn't have the information (canonical gap phrase) or produced a structured gap-aware response about an absent skill (broader-skill reframe + active-learning).
-- **What it proxies:** KB / skill-coverage. Rising `gap_rate` → recruiters are probing skills the system can't speak to with substance.
+- **What it proxies:** KB / skill-coverage. Rising `gap_rate` ⇒ recruiters are probing skills the system can't speak to with substance.
 - **Source signal:** the producer (`pipeline.py` → `event_classifier.classify_event_type`) emits `event_type='gap'` for every GAP-branch turn (branch policy) and for any non-GAP turn whose answer carries the canonical `GAP_PHRASE`. `LogReader` smart-normalizes pre-v4 records carrying the gap phrase so historical records read consistently. No proxies, no `knew_answer` reads.
-- **Thresholds (post-#42 — recalibration pending):** the historical thresholds (healthy ≤ 10%, warning ≤ 15%) were calibrated against the pre-fix proxy that under-counted gaps. Post-#42 the metric reads materially higher on healthy traffic because constructive GAP-branch gap-aware responses now count (correctly) — the predicted live value sits around 40–45% on a typical recruiter-traffic mix. **Hold off on alerting from these thresholds** until a week of post-#42 traffic accumulates and the operator sets a new healthy band. Treat current thresholds as historical context, not actionable.
-- **Confidence:** at N < 30, ±2pp noise floor. Treat single-day jumps as preliminary.
+- **Tier B alerting:** shift-on-band, no absolute threshold. The pre-#48 healthy ≤10% / warning ≤15% bands were calibrated against a pre-#42 proxy that under-counted gaps; honest post-#42 gap rate predicts ~44% on healthy traffic, with no normative target. Shift framing is the right one — operator drills into Cluster Gaps when a sharp shift fires.
 - **Routing-vs-coverage attribution:** a "gap" can also be a *routing* failure (a TECHNICAL question classified to GENERIC may emit the gap phrase even though the README the model needed sits in the tool registry). Drill into Failure Feed to attribute.
 
-#### `deflection_rate`
+#### `deflection_rate` (Tier B)
 
 - **Definition:** `count(event_type == "deflected") / total`.
 - **What it measures:** the share of turns where the system politely redirected an out-of-scope question (general coding help, trivia, opinions) instead of answering.
-- **What it proxies:** scope-discipline + recruiter-traffic shape. Rising rate → more out-of-scope traffic, or the routing is sending more questions through LOGISTICAL / GENERIC than usual. Falling to zero on healthy traffic → suspect the producer rule has drifted (the static prompt-drift test in `tests/test_composer.py` is the forcing function for the prompt↔producer contract).
-- **Source signal:** the producer emits `event_type='deflected'` for every LOGISTICAL-branch turn (branch policy) and for any non-LOGISTICAL turn whose answer begins with one of the canonical phrases in `rules.DEFLECTION_MARKERS`. The composer prompt instructs the model to use that phrasing on out-of-scope redirects in LOGISTICAL / BEHAVIOURAL / GENERIC; the producer reads the same constant. Adding a new deflection shape is one edit (in `rules.py`) — the prompt rule and the classifier pick it up automatically.
-- **Thresholds (post-#42 — recalibration pending):** the historical thresholds (healthy ≤ 5%, warning ≤ 10%) assumed the metric was always near zero because the producer never emitted the value. Post-#42 the predicted live value is around 5–10% on a typical recruiter-traffic mix; revisit thresholds once a week of traffic accumulates.
-- **Confidence:** moderate post-#42 — explicit producer signal, no proxy.
+- **What it proxies:** scope-discipline + recruiter-traffic shape. Rising rate ⇒ more out-of-scope traffic, or the routing is sending more questions through LOGISTICAL / GENERIC than usual. Falling to zero on healthy traffic ⇒ suspect the producer rule has drifted (the static prompt-drift test in `tests/test_composer.py` is the forcing function for the prompt↔producer contract).
+- **Source signal:** the producer emits `event_type='deflected'` for every LOGISTICAL-branch turn (branch policy) and for any non-LOGISTICAL turn whose answer begins with one of the canonical phrases in `rules.DEFLECTION_MARKERS`.
+- **Tier B alerting:** shift-on-band. No absolute target — depends on traffic mix.
 
-#### `refusal_rate`
+#### `refusal_rate` (Tier A)
 
 - **Definition:** `count(event_type == "refused") / total`.
 - **What it measures:** the share of turns that bottomed out into the canned refusal ("Please reach out to Alejandro directly...").
 - **What it proxies:** guardrail-loop exhaustion. The system tried `MAX_ATTEMPTS=3` times and the guardrail rejected every attempt.
-- **Proxy caveats:** a refusal can be the right outcome (genuine adversarial probe). Don't treat all refusals as failures — open Failure Feed and read the question.
+- **Proxy caveats:** a refusal can be the right outcome (genuine adversarial probe). Don't treat all refusals as failures — open Failure Feed and read the question. But: refusal *rate* climbing across many turns IS a system event worth alerting on, even if individual refusals are correct.
 - **Thresholds:** healthy ≤ 1%, warning ≤ 3%, alert above. *Source:* live baseline (1.2% → just above healthy).
 - **Confidence:** moderate; this is an explicit signal, not a proxy.
 
-#### `guardrail_rejection_rate`
+#### `guardrail_rejection_rate` (Tier B)
 
 - **Definition:** `count(records where any attempt has is_acceptable == False) / total`.
 - **What it measures:** the share of turns where the guardrail rejected at least one generation attempt.
 - **What it proxies:** *composite* of fabrication, scope violation, tone breach, injection attempt, dishonest-gap rejection, plus citation discipline (post-Session 27).
 - **Proxy caveats:** **the most common reading mistake.** A 10pp jump does NOT mean fabrication doubled. Drill into Failure Feed and inspect `guardrail_feedback` text to attribute. If most rejections cite "fabrication" the fix is generator-side (rules.py); if "scope violation" it's branch composition; if "tone" it's profile content.
-- **Thresholds:** healthy ≤ 15%, warning ≤ 25%, alert above. *Source:* eval R2 baseline ≈ 11% + headroom for live noise.
-- **Confidence:** moderate; the composite nature blurs the signal.
+- **Tier B alerting:** shift-on-band. Pre-#48 was Tier A with healthy ≤15% / warning ≤25% bands; demoted because the value depends entirely on traffic-mix and rule-fire mix — high values can mean the guardrail is *working* (catching probes), not failing. Sharp shifts are still worth investigating.
 
-#### `retry_exhausted_rate`
+#### `retry_exhausted_rate` (Tier A)
 
 - **Definition:** `count(records where len(attempts) >= MAX_ATTEMPTS) / total`. (`MAX_ATTEMPTS = 3`.)
 - **What it measures:** the share of turns that consumed all 3 generation attempts. Includes both refused outcomes AND eventually-accepted-on-attempt-3 outcomes.
@@ -99,30 +109,31 @@ When a metric goes red, the matching **runbook** at the bottom of this doc tells
 - **What it proxies:** classifier health. Direct read; pairs with the rate-style `low_confidence_rate` and `confident_failure_rate`.
 - **No threshold** — orientation. The thresholded `low_confidence_rate` and `confident_failure_rate` carry the alerting; this is for context.
 
-#### `low_confidence_rate(threshold=0.7)`
+#### `mean_classification_confidence` (Tier B)
+
+- **Definition:** `mean(classification_confidence for r in records)`.
+- **What it measures:** average classifier confidence across the window.
+- **What it proxies:** classifier health. Direct read; pairs with the rate-style `low_confidence_rate` and the per-branch breakdown below.
+- **Tier B alerting:** shift-on-band. The absolute value isn't normative ("0.85 is healthy" depends on traffic mix); a sharp shift IS the signal worth investigating.
+
+#### `mean_confidence_by_branch` (Tier C — orientation chip)
+
+- **Definition:** per-branch mean of `classification_confidence`, rendered as a single chip row (`GENERIC: 0.85 · GAP: 0.78 · TECHNICAL: 0.91 · ...`).
+- **What it measures:** which branch the classifier is most / least sure of on average.
+- **What it proxies:** per-branch routing fragility. The actionable Routing-block read for "which branch is the classifier wobbling on?" The global `mean_classification_confidence` (Tier B above) hides this.
+- **No badge** — orientation chip; per-branch values aren't independently classifiable as healthy / unhealthy. The operator scans the chip and drills into Failure Feed if a branch reads conspicuously low.
+
+#### `low_confidence_rate(threshold=0.7)` (Tier B)
 
 - **Definition:** `count(classification_confidence < 0.7) / total`.
 - **What it measures:** the share of turns where the classifier said it wasn't sure.
-- **What it proxies:** mis-routing (uncertain variant). Rising rate → the classifier's prompt may need tightening (LIMITATIONS::O6).
-- **Proxy caveats:** does NOT catch *confident* failures — those require `confident_failure_rate`. Use both.
-- **Thresholds:** healthy ≤ 10%, warning ≤ 20%, alert above. *Source:* live baseline (5.9%) + tolerance.
+- **What it proxies:** mis-routing (uncertain variant). Rising rate ⇒ the classifier's prompt may need tightening (LIMITATIONS::O6).
+- **Tier B alerting:** shift-on-band. Pre-#48 was Tier A (healthy ≤10% / warning ≤20%); the band wasn't structurally interpretable as health (low-confidence rate is shape, not failure — the classifier admitting uncertainty is the system working honestly). Sharp shifts ARE worth investigating.
 - **Confidence:** high — direct read from classifier output.
 
-#### `confident_failure_rate(threshold=0.8)`
-
-- **Definition:** `count(classification_confidence >= 0.8 AND (knew_answer == False OR any rejected attempt OR event_type == "refused")) / total`.
-- **What it measures:** turns where the classifier was sure and the system still failed.
-- **What it proxies:** the misroutes that `low_confidence_rate` is blind to. Per Session 28 senior-engineer audit, this metric is the headline misroute signal.
-- **Proxy caveats:** unionises three failure shapes; like `guardrail_rejection_rate`, drill into Failure Feed to attribute.
-- **Thresholds:** healthy ≤ 3%, warning ≤ 7%, alert above. *Source:* live baseline (15.3% — currently in alert) + informed guess.
-- **Confidence:** moderate-to-high; composite, but the components are all explicit.
-
-#### `multi_label_rate`
-
-- **Definition:** `count(len(classifier_labels) > 1) / count(classifier_labels populated)`.
-- **What it measures:** the fraction of turns where the classifier returned more than one branch label (composition routing).
-- **What it proxies:** whether composition is firing in practice.
-- **No threshold** — orientation. Today this is 0% in live data, validating ADR-0003's note that composition is "essentially dormant."
+#### Removed in #48
+- **`confident_failure_rate`** removed: the metric conflated correct gap-acks with misroutes (~62% of records that fired the alert on the local log were correct system behaviour). The signals it was reaching for are covered by `refusal_rate` (Tier A) + per-record drilldown via Failure Feed.
+- **`multi_label_rate`** removed: always 0% in live data (composition routing dormant by design per ADR-0003). Reintroduce if composition routing ever lands.
 
 ### Engagement block
 
@@ -184,12 +195,12 @@ When a metric goes red, the matching **runbook** at the bottom of this doc tells
 - **Denominator caveat (LIMITATIONS::P8):** denominator is "all TECHNICAL", not "TECHNICAL warranting a tool". The canary-side `tool_uptake_on_warranted(corpus)` is the surface with the clean denominator (only canary questions with `requires_tool=True`); the live metric is a coarse aggregate by design. Both are kept — they answer different questions.
 - **No threshold.** Orientation only — no badge, no warning. The rate renders for the operator on the Metrics tab and on Trend Explorer; pair it with `tool_call_count` (volume) and `tool_call_success_rate` (quality) for a full read of the tool surface.
 
-#### `tool_call_success_rate`
+#### `tool_call_success_rate` (Tier A)
 
 - **Definition:** `count(tool_calls[*].status == "success") / count(tool_calls[*])`.
 - **What it measures:** the fraction of tool invocations that returned successfully.
 - **What it proxies:** registry health, file integrity. Should be ~100% (tools are local file reads).
-- **No threshold** — orientation. A drop signals registry rot or `data/readmes/` file disappearance; investigate immediately.
+- **Thresholds (post-#48):** healthy ≥ 0.99, warning ≥ 0.95, alert below. *Source:* design intent — tools are local file reads, so any drop below 99% signals registry rot, file disappearance, or a refactor that moved the file path. Promoted to Tier A in #48 because the metric IS the failure mode (tool failures don't have a "shape" reading; they're broken).
 
 ### Latency block
 
