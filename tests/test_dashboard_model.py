@@ -776,50 +776,89 @@ def test_dashboard_model_include_canary_keeps_both_subsets():
     assert model.total_interactions == 2
 
 
-def test_branch_match_rate_compares_observed_branch_to_corpus_expected():
-    """branch_match_rate(corpus) is the canary-only classifier-correctness signal:
-    fraction of canary records whose `branch` equals `corpus[id].expected_branch`."""
+def test_outcome_accuracy_is_fraction_of_records_with_outcome_matching_expected():
+    """outcome_accuracy(corpus) is the headline canary correctness signal post-#45:
+    fraction of canary records whose derived outcome equals the corpus's
+    expected_outcome. Replaces the pre-#45 branch_match_rate (mechanism →
+    outcome contract)."""
     from canary_corpus import CanaryQuestion
 
     corpus = [
-        CanaryQuestion(id="C001", question="q1", expected_branch="TECHNICAL",
-                       expected_event_type="answered", expected_chunk_sources=[],
-                       expected_keywords=[], category="x", requires_tool=False),
-        CanaryQuestion(id="C002", question="q2", expected_branch="GAP",
-                       expected_event_type="gap", expected_chunk_sources=[],
-                       expected_keywords=[], category="x", requires_tool=False),
+        CanaryQuestion(id="C001", question="q1",
+                       expected_outcome="answered_with_substance",
+                       expected_keywords=[], must_not_appear=[],
+                       expected_chunk_sources=[], category="x"),
+        CanaryQuestion(id="C002", question="q2",
+                       expected_outcome="gap_acknowledged",
+                       expected_keywords=[], must_not_appear=[],
+                       expected_chunk_sources=[], category="x"),
     ]
     records = [
-        _canary_record(branch="TECHNICAL", question="q1"),
-        _canary_record(branch="TECHNICAL", question="q2"),  # mis-route → mismatch
+        _canary_record(question="q1", event_type="answered"),
+        _canary_record(question="q2", event_type="answered"),  # answered when should have gap'd
     ]
     model = DashboardModel(records, include_canary=True, only_canary=True)
-    assert model.branch_match_rate(corpus) == 0.5
+    assert model.outcome_accuracy(corpus) == 0.5
 
 
-def test_tool_uptake_on_warranted_uses_clean_denominator():
-    """tool_uptake_on_warranted(corpus) is uptake over canary records whose corpus
-    entry sets requires_tool=True. The denominator is the warranted subset only —
-    fixes LIMITATIONS::P8 (technical_tool_call_rate's noisy denominator)."""
+def test_keyword_coverage_is_share_of_expected_keywords_present_on_substantive_answers():
+    """keyword_coverage(corpus) aggregates per-record keyword hits across canary
+    records whose corpus question is answered_with_substance + has expected_keywords.
+    Other outcomes are skipped (gap-acknowledgement coverage is a tautology — the
+    gap phrase contract gates correctness via derive_outcome instead)."""
     from canary_corpus import CanaryQuestion
 
     corpus = [
-        CanaryQuestion(id="C001", question="needs tool", expected_branch="TECHNICAL",
-                       expected_event_type="answered", expected_chunk_sources=[],
-                       expected_keywords=[], category="x", requires_tool=True),
-        CanaryQuestion(id="C002", question="no tool", expected_branch="BEHAVIOURAL",
-                       expected_event_type="answered", expected_chunk_sources=[],
-                       expected_keywords=[], category="x", requires_tool=False),
+        CanaryQuestion(id="C001", question="q1",
+                       expected_outcome="answered_with_substance",
+                       expected_keywords=["MAE", "29.95"], must_not_appear=[],
+                       expected_chunk_sources=[], category="x"),
+        CanaryQuestion(id="C002", question="q2",
+                       expected_outcome="gap_acknowledged",
+                       expected_keywords=["I don't have"], must_not_appear=[],
+                       expected_chunk_sources=[], category="x"),
     ]
     records = [
-        _canary_record(question="needs tool", branch="TECHNICAL").model_copy(
-            update={"tool_calls": [{"name": "fetch_project_readme", "args": {},
-                                    "status": "success", "attempt_index": 0}]}
+        _canary_record(question="q1", event_type="answered").model_copy(
+            update={"attempts": [{"answer": "Final MAE 29.95.",
+                                  "is_acceptable": True, "guardrail_feedback": ""}]},
         ),
-        _canary_record(question="no tool", branch="BEHAVIOURAL"),  # excluded from denom
+        _canary_record(question="q2", event_type="gap").model_copy(
+            update={"attempts": [{"answer": "I don't have hands-on with that.",
+                                  "is_acceptable": True, "guardrail_feedback": ""}]},
+        ),
     ]
     model = DashboardModel(records, include_canary=True, only_canary=True)
-    assert model.tool_uptake_on_warranted(corpus) == 1.0
+    # only q1 contributes (q2 is gap_acknowledged); q1 has 2/2 keywords → 1.0
+    assert model.keyword_coverage(corpus) == 1.0
+
+
+def test_red_flag_rate_is_fraction_of_records_with_must_not_appear_substring_hit():
+    """red_flag_rate(corpus) is the fabrication-detection signal post-#45:
+    fraction of canary records whose answer text contains any per-question
+    must_not_appear substring."""
+    from canary_corpus import CanaryQuestion
+
+    corpus = [
+        CanaryQuestion(id="C001", question="q1",
+                       expected_outcome="gap_acknowledged",
+                       expected_keywords=[],
+                       must_not_appear=["I have used kdb"],
+                       expected_chunk_sources=[], category="x"),
+        CanaryQuestion(id="C002", question="q2",
+                       expected_outcome="answered_with_substance",
+                       expected_keywords=[], must_not_appear=[],
+                       expected_chunk_sources=[], category="x"),
+    ]
+    records = [
+        _canary_record(question="q1", event_type="gap").model_copy(
+            update={"attempts": [{"answer": "Yes, I have used kdb at scale.",
+                                  "is_acceptable": True, "guardrail_feedback": ""}]},
+        ),
+        _canary_record(question="q2", event_type="answered"),
+    ]
+    model = DashboardModel(records, include_canary=True, only_canary=True)
+    assert model.red_flag_rate(corpus) == 0.5
 
 
 def test_event_counts_buckets_records_by_event_type():

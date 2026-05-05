@@ -57,9 +57,9 @@ THRESHOLDS: dict[str, Threshold] = {
     # in PRD #41 slice 3) is orientation-only — no threshold. The denominator
     # (`all TECHNICAL`) includes turns that legitimately don't need a tool call
     # — meta-questions about the system, generic skills questions, follow-ups
-    # whose context is already in scope. The canary-side
-    # ``tool_uptake_on_warranted(corpus)`` (LIMITATIONS::P8) is the surface
-    # with the clean denominator.
+    # whose context is already in scope. Post-#45 the canary surface measures
+    # outcome quality directly (`outcome_accuracy` / `keyword_coverage` /
+    # `red_flag_rate`); the live metric stays a coarse aggregate by design.
     "contact_conversion_rate": Threshold(healthy=0.10, warning=0.05, higher_is_better=True),
     "turns_per_session_median": Threshold(healthy=2.0, warning=1.5, higher_is_better=True, unit=""),
 }
