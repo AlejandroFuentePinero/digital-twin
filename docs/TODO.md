@@ -3,8 +3,8 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-05 (Session 50 — KB Coverage panel promoted to its own Sentinel tab; small UX move on top of Sessions 48/49.)
-**Current phase:** **Observability rework complete (PRD `#41`) + Live tier polish complete + Failure Feed tier split complete + KB Coverage on its own tab.** Phase 5 (break the live system) blocks on canary baseline re-freeze. Suite at **522 passing**.
+**Last updated:** 2026-05-05 (Session 51 — Canary trajectory view: Benchmark | +1 | +2 | +3. Tab health blocks reshaped from snapshot-vs-baseline to per-run-vs-baseline trajectory.)
+**Current phase:** **Observability rework complete (PRD `#41`) + Live tier polish complete + Failure Feed tier split complete + KB Coverage on its own tab + Canary trajectory view.** Phase 5 (break the live system) blocks on canary baseline re-freeze. Suite at **529 passing**.
 
 **Locked next-step order:**
 1. **Establish canary benchmark** — re-run `uv run python src/canary_runner.py --freeze-baseline` against the fixed v4 producer + relabelled corpus. Operator action; gated on credit availability. Expected baseline targets per `#45` Definition of Done: outcome accuracy ≥95%, red_flag_rate=0%, keyword coverage at or above pre-`#45` substantive subset (~85%). Runbook in `docs/audits/slice-4-canary-recalibration.md` § 9. Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39) stays open until this completes; closes PRD `#41`.

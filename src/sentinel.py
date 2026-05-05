@@ -47,7 +47,12 @@ from cluster_gaps import (
 import cluster_gaps
 import canary_runner
 import summarize_failures
-from canary_baseline import DEFAULT_BASELINE_PATH, read_baseline, resolve_baseline_records
+from canary_baseline import (
+    DEFAULT_BASELINE_PATH,
+    read_baseline,
+    resolve_baseline_records,
+    runs_after_baseline,
+)
 from canary_corpus import DEFAULT_CORPUS_PATH, load_canaries
 from canary_drift import (
     CanaryDriftFlag,
@@ -739,11 +744,12 @@ body, .gradio-container {
 }
 
 /* Canary health sections — same .section-block + .metric-row visual
-   language as the Metrics tab, retuned to 3 columns (Metric | Current |
-   Δ baseline) instead of the Metrics tab's label + 4 windowed values. */
+   language as the Metrics tab. Post-#51 the trajectory view renders 5
+   columns (Metric | Benchmark | +1 | +2 | +3) instead of the pre-#51
+   (Metric | Current | Δ baseline) shape. */
 .canary-section { margin: 8px 0; }
 .metric-row.canary-row {
-    grid-template-columns: 2fr 1fr 1fr;
+    grid-template-columns: 2.4fr repeat(4, 1fr);
 }
 .canary-row .metric-suffix {
     margin-left: 8px;
@@ -2065,36 +2071,70 @@ def _delta_ms(current: float | None, baseline: float | None) -> str:
     return f"<span class='{cls}'>{sign}{delta / 1000:+.2f}s</span>"
 
 
-def _canary_metric_row(label: str, current_html: str, delta_html: str,
-                       *, suffix: str = "") -> str:
-    """Mirror of the Metrics tab `.metric-row` shape — same grid, same
-    colour palette, same row heights — but with 2 right-aligned cells
-    (Current | Δ baseline) instead of 4 windowed values."""
+CANARY_TRAJECTORY_SLOTS = 3   # +1, +2, +3 post-baseline runs in the trajectory view
+EM_DASH_CELL = "<span class='delta'>—</span>"
+
+
+def _canary_metric_row(label: str, cells: list[str], *, suffix: str = "") -> str:
+    """Render one canary trajectory row.
+
+    `cells` is exactly ``1 + CANARY_TRAJECTORY_SLOTS`` formatted strings —
+    [Benchmark, +1, +2, +3] — matching the 5-column grid post-#51. Empty
+    slots should pre-render as ``EM_DASH_CELL`` so the row layout doesn't
+    collapse when fewer than 3 post-baseline runs exist.
+    """
     suffix_html = (
         f"<span class='metric-suffix'>{suffix}</span>" if suffix else ""
+    )
+    cell_htmls = "".join(
+        f"<div class='metric-value'>{c}</div>" for c in cells
     )
     return (
         "<div class='metric-row canary-row'>"
         f"<div class='metric-label'>{label}{suffix_html}</div>"
-        f"<div class='metric-value'>{current_html}</div>"
-        f"<div class='metric-value canary-delta-cell'>{delta_html}</div>"
+        f"{cell_htmls}"
         "</div>"
     )
 
 
 def _canary_section(title: str, rows_html: str) -> str:
-    """Mirror of the Metrics tab `.section-block` container."""
+    """Mirror of the Metrics tab `.section-block` container — header row
+    carries the trajectory column labels (Benchmark | +1 | +2 | +3)."""
+    plus_headers = "".join(
+        f"<div class='col-header numeric'>+{i + 1}</div>"
+        for i in range(CANARY_TRAJECTORY_SLOTS)
+    )
     return (
         "<div class='section-block canary-section'>"
         f"<div class='section-title'>{title}</div>"
         "<div class='metric-row header canary-row'>"
         "<div class='col-header'>Metric</div>"
-        "<div class='col-header numeric'>Current</div>"
-        "<div class='col-header numeric'>Δ baseline</div>"
+        "<div class='col-header numeric'>Benchmark</div>"
+        f"{plus_headers}"
         "</div>"
         f"{rows_html}"
         "</div>"
     )
+
+
+def _trajectory_cells(
+    formatter,
+    benchmark_value,
+    post_run_values: list,
+) -> list[str]:
+    """Build the 4-cell trajectory series for one metric row.
+
+    `formatter` receives a value (or None) and returns the formatted string
+    for display. `benchmark_value` is the baseline-run value (em-dash when
+    no baseline). `post_run_values` is a list of up to N values, in
+    chronological order, padded with em-dash when fewer than N exist."""
+    cells = [formatter(benchmark_value) if benchmark_value is not None else EM_DASH_CELL]
+    for i in range(CANARY_TRAJECTORY_SLOTS):
+        if i < len(post_run_values) and post_run_values[i] is not None:
+            cells.append(formatter(post_run_values[i]))
+        else:
+            cells.append(EM_DASH_CELL)
+    return cells
 
 
 def format_canary_health_blocks(
@@ -2103,130 +2143,164 @@ def format_canary_health_blocks(
     all_records: list[InteractionRecord],
     corpus,
     flags: list[CanaryDriftFlag],
+    post_baseline_runs: list[list[InteractionRecord]] | None = None,
 ) -> str:
-    """Three health sections (Drift / Quality / Latency) following the
-    Metrics tab visual language. Each row: `Metric | Current | Δ baseline`.
+    """Three health sections (Drift / Quality / Latency) — trajectory view.
 
-    Trend column dropped for v1 — sparklines need ≥2 historical canary runs
-    to be meaningful, and they will return as a follow-up once the operator
-    has accumulated a few weeks of canary history.
+    Each row renders 5 columns: Metric | Benchmark | +1 | +2 | +3, where +N
+    is the Nth canary run that happened after the baseline was frozen.
+    Empty slots (fewer than CANARY_TRAJECTORY_SLOTS post-baseline runs
+    exist) render as em-dash placeholders. Pre-#51 the layout was
+    (Current | Δ baseline) for the latest-run snapshot; the trajectory
+    view shows the temporal arc instead.
 
-    Cold-start safe — when `baseline_records` is empty, all delta cells
-    degrade to `—` instead of crashing."""
-    if not latest_run_records:
+    `post_baseline_runs` is a list of up to CANARY_TRAJECTORY_SLOTS record
+    lists, one per +N run in chronological order. When None or empty
+    (cold-start / freshly-frozen baseline) all +N columns render em-dash.
+
+    Cold-start safe — when `baseline_records` is empty, every cell degrades
+    to em-dash instead of crashing."""
+    if not latest_run_records and not (post_baseline_runs or []):
+        # Nothing to render even on a blank trajectory — no canary records on disk.
         return ""
 
-    latest_model = DashboardModel(
-        latest_run_records, include_canary=True, only_canary=True,
-    )
     baseline_model = DashboardModel(
         baseline_records, include_canary=True, only_canary=True,
     ) if baseline_records else None
 
-    def _baseline(fn):
+    post_baseline_runs = post_baseline_runs or []
+    post_models = [
+        DashboardModel(records, include_canary=True, only_canary=True)
+        for records in post_baseline_runs
+    ]
+
+    def _benchmark(fn):
         return fn(baseline_model) if baseline_model is not None else None
 
-    def _baseline_with_corpus(fn):
+    def _benchmark_with_corpus(fn):
         return fn(baseline_model, corpus) if baseline_model is not None else None
 
-    from collections import Counter
-    severity_counts = Counter(f.severity for f in flags)
+    def _post_values(fn) -> list:
+        return [fn(m) for m in post_models]
+
+    def _post_values_with_corpus(fn) -> list:
+        return [fn(m, corpus) for m in post_models]
+
+    # Plain-number formatter for drift counts (no scaling).
+    def _fmt_int(v):
+        return EM_DASH_CELL if v is None else str(v)
 
     # ---- Drift ------------------------------------------------------------
+    # Drift counts compare each post-baseline run vs the baseline. The
+    # benchmark column reads em-dash (drift against itself is structurally 0;
+    # rendering that would be misleading).
+    from collections import Counter
+
+    def _drift_counts_for_run(run_records: list[InteractionRecord]) -> tuple[int, int, int]:
+        """Returns (total, major, minor) drift flags for one post-baseline run."""
+        if not run_records or not baseline_records:
+            return (0, 0, 0)
+        from canary_drift import detect_drift
+        run_flags = detect_drift(run_records, baseline_records, corpus)
+        sev = Counter(f.severity for f in run_flags)
+        return (len(run_flags), sev.get("major", 0), sev.get("minor", 0))
+
+    per_run_drift = [_drift_counts_for_run(r) for r in post_baseline_runs]
+    total_drift_post = [t for t, _, _ in per_run_drift]
+    major_drift_post = [m for _, m, _ in per_run_drift]
+    minor_drift_post = [n for _, _, n in per_run_drift]
+
     drift_rows = (
         _canary_metric_row(
-            "Total drift flags", str(len(flags)),
-            "<span class='delta'>—</span>",
+            "Total drift flags",
+            _trajectory_cells(_fmt_int, None, total_drift_post),
         )
         + _canary_metric_row(
-            "Major drift", str(severity_counts.get("major", 0)),
-            "<span class='delta'>—</span>",
+            "Major drift",
+            _trajectory_cells(_fmt_int, None, major_drift_post),
         )
         + _canary_metric_row(
-            "Minor drift", str(severity_counts.get("minor", 0)),
-            "<span class='delta'>—</span>",
+            "Minor drift",
+            _trajectory_cells(_fmt_int, None, minor_drift_post),
         )
     )
 
     # ---- Quality ----------------------------------------------------------
-    pass_rate = (
-        1 - latest_model.guardrail_rejection_rate
-        if latest_model.records else None
-    )
-    pass_rate_baseline = (
-        1 - baseline_model.guardrail_rejection_rate
-        if baseline_model and baseline_model.records else None
-    )
-    outcome_accuracy = latest_model.outcome_accuracy(corpus)
-    keyword_coverage = latest_model.keyword_coverage(corpus)
-    red_flag_rate = latest_model.red_flag_rate(corpus)
+    def _pass_rate(model: DashboardModel | None) -> float | None:
+        if model is None or not model.records:
+            return None
+        return 1 - model.guardrail_rejection_rate
 
     quality_rows = (
         _canary_metric_row(
-            "First-attempt pass rate", _fmt_pct(pass_rate),
-            _delta_cell(pass_rate, pass_rate_baseline, lower_is_better=False),
+            "First-attempt pass rate",
+            _trajectory_cells(_fmt_pct, _pass_rate(baseline_model), [_pass_rate(m) for m in post_models]),
         )
         + _canary_metric_row(
-            "Outcome accuracy", _fmt_pct(outcome_accuracy),
-            _delta_cell(
-                outcome_accuracy,
-                _baseline_with_corpus(lambda m, c: m.outcome_accuracy(c)),
-                lower_is_better=False,
+            "Outcome accuracy",
+            _trajectory_cells(
+                _fmt_pct,
+                _benchmark_with_corpus(lambda m, c: m.outcome_accuracy(c)),
+                _post_values_with_corpus(lambda m, c: m.outcome_accuracy(c)),
             ),
             suffix="vs expected_outcome",
         )
         + _canary_metric_row(
-            "Keyword coverage", _fmt_pct(keyword_coverage),
-            _delta_cell(
-                keyword_coverage,
-                _baseline_with_corpus(lambda m, c: m.keyword_coverage(c)),
-                lower_is_better=False,
+            "Keyword coverage",
+            _trajectory_cells(
+                _fmt_pct,
+                _benchmark_with_corpus(lambda m, c: m.keyword_coverage(c)),
+                _post_values_with_corpus(lambda m, c: m.keyword_coverage(c)),
             ),
             suffix="substantive answers",
         )
         + _canary_metric_row(
-            "Red-flag rate", _fmt_pct(red_flag_rate),
-            _delta_cell(
-                red_flag_rate,
-                _baseline_with_corpus(lambda m, c: m.red_flag_rate(c)),
+            "Red-flag rate",
+            _trajectory_cells(
+                _fmt_pct,
+                _benchmark_with_corpus(lambda m, c: m.red_flag_rate(c)),
+                _post_values_with_corpus(lambda m, c: m.red_flag_rate(c)),
             ),
             suffix="must_not_appear hits",
         )
         + _canary_metric_row(
-            "Gap rate", _fmt_pct(latest_model.gap_rate),
-            _delta_cell(
-                latest_model.gap_rate, _baseline(lambda m: m.gap_rate),
+            "Gap rate",
+            _trajectory_cells(
+                _fmt_pct,
+                _benchmark(lambda m: m.gap_rate),
+                _post_values(lambda m: m.gap_rate),
             ),
         )
         + _canary_metric_row(
-            "Refusal rate", _fmt_pct(latest_model.refusal_rate),
-            _delta_cell(
-                latest_model.refusal_rate,
-                _baseline(lambda m: m.refusal_rate),
+            "Refusal rate",
+            _trajectory_cells(
+                _fmt_pct,
+                _benchmark(lambda m: m.refusal_rate),
+                _post_values(lambda m: m.refusal_rate),
             ),
         )
         + _canary_metric_row(
             "Mean classification confidence",
-            _fmt_num(latest_model.mean_classification_confidence, ndigits=3),
-            _delta_cell(
-                latest_model.mean_classification_confidence,
-                _baseline(lambda m: m.mean_classification_confidence),
-                as_pct=False, lower_is_better=False,
+            _trajectory_cells(
+                lambda v: _fmt_num(v, 3),
+                _benchmark(lambda m: m.mean_classification_confidence),
+                _post_values(lambda m: m.mean_classification_confidence),
             ),
         )
         + _canary_metric_row(
             "Tool call success rate",
-            _fmt_pct(latest_model.tool_call_success_rate),
-            _delta_cell(
-                latest_model.tool_call_success_rate,
-                _baseline(lambda m: m.tool_call_success_rate),
-                lower_is_better=False,
+            _trajectory_cells(
+                _fmt_pct,
+                _benchmark(lambda m: m.tool_call_success_rate),
+                _post_values(lambda m: m.tool_call_success_rate),
             ),
         )
     )
 
     # ---- Latency ----------------------------------------------------------
-    def _stage_p95(model, stage):
+    def _stage_p95(model: DashboardModel | None, stage: str) -> float | None:
+        if model is None or not model.records:
+            return None
         return model.latency_percentiles(stage).get(95)
 
     latency_stages = [
@@ -2238,13 +2312,13 @@ def format_canary_health_blocks(
     ]
     latency_rows = ""
     for label, stage in latency_stages:
-        cur = _stage_p95(latest_model, stage)
-        base = (
-            _stage_p95(baseline_model, stage)
-            if baseline_model and baseline_model.records else None
-        )
         latency_rows += _canary_metric_row(
-            label, _fmt_seconds(cur), _delta_ms(cur, base),
+            label,
+            _trajectory_cells(
+                _fmt_seconds,
+                _stage_p95(baseline_model, stage),
+                [_stage_p95(m, stage) for m in post_models],
+            ),
         )
 
     return (
@@ -2364,12 +2438,21 @@ def _build_canary_drift_state(
     *,
     corpus_path: Path = DEFAULT_CORPUS_PATH,
     baseline_path: Path = DEFAULT_BASELINE_PATH,
-) -> tuple[list[CanaryDriftFlag], list[InteractionRecord], dict | None, list]:
+) -> tuple[
+    list[CanaryDriftFlag],
+    list[InteractionRecord],
+    dict | None,
+    list,
+    list[list[InteractionRecord]],
+]:
     """Resolve drift between the latest canary run and the frozen baseline.
 
-    Returns ``(flags, latest_run_records, baseline_pointer, corpus)``. Each
-    can be empty / None on cold start; the caller renders the appropriate
-    placeholder."""
+    Returns ``(flags, latest_run_records, baseline_pointer, corpus,
+    post_baseline_run_records)``. The fifth tuple element (added in #51) is
+    a list of up to CANARY_TRAJECTORY_SLOTS record lists, one per +N run in
+    chronological order — feeds the trajectory view in
+    ``format_canary_health_blocks``. Each can be empty / None on cold
+    start; the caller renders the appropriate placeholder."""
     try:
         corpus = load_canaries(corpus_path)
     except (FileNotFoundError, ValueError):
@@ -2379,15 +2462,23 @@ def _build_canary_drift_state(
     latest_records: list[InteractionRecord] = runs[-1][1] if runs else []
 
     pointer = read_baseline(baseline_path)
-    baseline_records = resolve_baseline_records(
-        [r for r in all_records if r.is_canary],
-        baseline_path,
+    canary_only = [r for r in all_records if r.is_canary]
+    baseline_records = resolve_baseline_records(canary_only, baseline_path)
+
+    # Post-baseline trajectory runs (Session 51 — +1 / +2 / +3).
+    post_run_ids = runs_after_baseline(
+        canary_only, n=CANARY_TRAJECTORY_SLOTS, path=baseline_path,
     )
+    by_run: dict[str, list[InteractionRecord]] = {}
+    for r in canary_only:
+        if r.run_id in post_run_ids:
+            by_run.setdefault(r.run_id, []).append(r)
+    post_baseline_runs = [by_run.get(rid, []) for rid in post_run_ids]
 
     flags: list[CanaryDriftFlag] = []
     if latest_records and baseline_records and corpus:
         flags = detect_drift(latest_records, baseline_records, corpus)
-    return flags, latest_records, pointer, corpus
+    return flags, latest_records, pointer, corpus, post_baseline_runs
 
 
 def _build_flags(model: DashboardModel) -> list[Flag]:
@@ -2981,14 +3072,16 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                     initial_latest_run,
                     initial_pointer,
                     canary_corpus,
+                    initial_post_baseline_runs,
                 ) = _build_canary_drift_state(reader.read())
 
                 canary_banner_md = gr.Markdown(format_canary_drift_summary(
                     initial_pointer, initial_latest_run, initial_drift_flags
                 ))
                 # Three thematic health blocks per the issue #39 spec —
-                # Drift / Quality / Latency, each with Current | Δ baseline |
-                # Trend (12-run sparkline) columns. The glance view; sit
+                # Drift / Quality / Latency, post-#51 each renders a 5-column
+                # trajectory: Metric | Benchmark | +1 | +2 | +3 (the 3
+                # canary runs that came after the frozen baseline). Sits
                 # immediately under the banner so the operator reads health
                 # before scrolling.
                 initial_baseline_records = resolve_baseline_records(
@@ -2998,6 +3091,7 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 canary_blocks_md = gr.Markdown(format_canary_health_blocks(
                     initial_latest_run, initial_baseline_records,
                     initial_all_records, canary_corpus, initial_drift_flags,
+                    post_baseline_runs=initial_post_baseline_runs,
                 ))
                 # Stratified summary chips — drift counts grouped by branch,
                 # category, and kind. Different signal from the blocks (which
@@ -3214,6 +3308,7 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
             all_records = reader.read()
             (
                 drift_flags, latest_run_recs, baseline_pointer, corpus,
+                post_baseline_run_recs,
             ) = _build_canary_drift_state(all_records)
             canary_banner_html = format_canary_drift_summary(
                 baseline_pointer, latest_run_recs, drift_flags,
@@ -3225,6 +3320,7 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
             canary_blocks_html = format_canary_health_blocks(
                 latest_run_recs, canary_baseline_recs,
                 all_records, corpus, drift_flags,
+                post_baseline_runs=post_baseline_run_recs,
             )
             canary_stratified_html = format_canary_stratified(drift_flags, corpus)
             canary_drift_html = (
@@ -3297,7 +3393,7 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
         # Canary "show all" toggle — re-renders the per-question table with
         # the toggle's value passed through. Defaults to drifting-only.
         def _refresh_canary_table(show_all):
-            (drift_flags, _latest, _ptr, corpus) = _build_canary_drift_state(
+            (drift_flags, _latest, _ptr, corpus, _post) = _build_canary_drift_state(
                 reader.read()
             )
             return format_canary_per_question_table(

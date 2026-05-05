@@ -310,6 +310,16 @@ N major · M minor · benchmark YYYY-MM-DD (sha {abc1234}) → latest canary run
 - **latest run date + sha** — when the most recent canary batch ran and on which commit. SHA pair gives drift attribution at one glance.
 - **No baseline frozen yet** — the banner falls back to "no benchmark frozen — use `uv run python src/canary_runner.py --freeze-baseline` or the Re-baseline button". Cold-start safe.
 
+### Trajectory view (Session 51)
+
+The Drift / Quality / Latency health blocks render a 5-column trajectory per metric: **Metric | Benchmark | +1 | +2 | +3**. `+N` is the Nth canary run that happened after the baseline was frozen. Pre-#51 the layout was `(Current | Δ baseline)` for the latest-run snapshot; the trajectory view shows the temporal arc instead — operator scans across runs to spot whether drift is accumulating, stabilising, or shrinking.
+
+**Empty slots:** when fewer than 3 post-baseline runs have happened, the missing `+N` columns render as em-dash placeholders (`—`). On a freshly-frozen baseline, all three `+N` columns are empty until the operator runs `canary_runner.py` again.
+
+**Re-baseline behaviour:** automatic. Promoting a new run to baseline (via `--freeze-baseline` CLI or the Sentinel "Re-baseline" button) means `+N` resets to empty slots; the trajectory fills as new runs accumulate.
+
+**Drift counts in the Drift block:** the Benchmark column reads em-dash by construction (drift against itself is structurally zero). Each `+N` column carries the drift-flag count for that run vs the frozen baseline — so the operator sees `+1: 1 major / 2 minor`, `+2: 3 major / 4 minor`, `+3: 5 major / 6 minor` and can read "drift accumulating run-over-run" at a glance.
+
 ### Eight drift kinds × two severity tiers
 
 | Kind | Major when | Minor when |

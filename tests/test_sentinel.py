@@ -1164,3 +1164,70 @@ def test_format_feed_summary_returns_empty_string_on_no_rows():
     """Empty rows → empty output; UI renders the no-failures-match copy
     elsewhere."""
     assert format_feed_summary([], {}) == ""
+
+
+# ----- canary trajectory view (Session 51) ----------------------------------
+
+
+def test_format_canary_health_blocks_renders_four_column_trajectory():
+    """Post-#51 the canary health blocks render 5 columns per row:
+    Metric | Benchmark | +1 | +2 | +3. Empty +N slots fill with em-dash."""
+    from sentinel import format_canary_health_blocks
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+
+    def _rec(run_id: str, event_type: str = "answered", days_ago: int = 0):
+        return InteractionRecord.model_validate({
+            "timestamp": (now - timedelta(days=days_ago)).isoformat(),
+            "session_id": "canary",
+            "turn_index": 0,
+            "question": "q1",
+            "event_type": event_type,
+            "branch": "GENERIC",
+            "classification_confidence": 0.9,
+            "attempts": [{"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""}],
+            "retrieved_chunks": [],
+            "tool_calls": [],
+            "latency_ms": {"classifier": 0, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 1000},
+            "knew_answer": True,
+            "is_canary": True,
+            "run_id": run_id,
+        })
+
+    baseline = [_rec("run-base", days_ago=30)]
+    plus1 = [_rec("run-1", days_ago=20)]
+    # Two post-baseline runs only — +3 slot must render em-dash.
+
+    html = format_canary_health_blocks(
+        latest_run_records=plus1,
+        baseline_records=baseline,
+        all_records=baseline + plus1,
+        corpus=[],
+        flags=[],
+        post_baseline_runs=[plus1],
+    )
+
+    # All four column headers present
+    assert ">Benchmark<" in html
+    assert ">+1<" in html
+    assert ">+2<" in html
+    assert ">+3<" in html
+    # Em-dash placeholders for the empty +2 / +3 slots
+    assert "—" in html
+
+
+def test_format_canary_health_blocks_returns_empty_when_no_records():
+    """Cold start (no canary records, no baseline) → empty string. Sentinel
+    UI renders the no-baseline-frozen banner separately."""
+    from sentinel import format_canary_health_blocks
+
+    html = format_canary_health_blocks(
+        latest_run_records=[],
+        baseline_records=[],
+        all_records=[],
+        corpus=[],
+        flags=[],
+        post_baseline_runs=[],
+    )
+    assert html == ""

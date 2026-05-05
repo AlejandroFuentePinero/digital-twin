@@ -5,6 +5,54 @@
 
 ---
 
+## Session 51 (2026-05-05) — Canary trajectory view: Benchmark | +1 | +2 | +3
+
+**Status:** Canary tab health blocks reshaped from `(Current | Δ baseline)` two-column snapshot to `(Benchmark | +1 | +2 | +3)` four-column trajectory. Suite at **529 passing** (+7 net from Session 50's 522 — 5 new `runs_after_baseline` tests + 2 new trajectory rendering tests).
+
+### What shipped
+
+- `src/canary_baseline.py` — new `runs_after_baseline(records, n=3, path=...)` returning chronologically-ordered `run_id`s of canary runs that happened after the baseline pointer's `frozen_at` timestamp. Caps at N. Cold-start safe (empty when no pointer / no post-baseline runs / pointer missing required fields).
+- `src/sentinel.py::_canary_metric_row` — reshaped to take a `cells: list[str]` parameter (4 cells per row: Benchmark + 3 post-baseline) instead of the pre-#51 `(current_html, delta_html)` pair.
+- `src/sentinel.py::_canary_section` — header row carries `Metric | Benchmark | +1 | +2 | +3` instead of `Metric | Current | Δ baseline`.
+- New `_trajectory_cells(formatter, benchmark_value, post_run_values)` helper — builds the 4-cell series with em-dash padding for missing slots.
+- `src/sentinel.py::format_canary_health_blocks` rewritten — accepts `post_baseline_runs` parameter; computes per-run DashboardModel + per-run drift counts; renders trajectory rows for every Drift / Quality / Latency metric.
+- `src/sentinel.py::_build_canary_drift_state` extended return tuple — fifth element is `post_baseline_run_records: list[list[InteractionRecord]]`. All three call sites updated.
+- CSS — `.metric-row.canary-row` grid template-columns updated to `2.4fr repeat(4, 1fr)` for the 5-column shape.
+- `docs/SENTINEL.md` Canary tab — new "Trajectory view (Session 51)" subsection explaining the 4-column layout, empty-slot behaviour, re-baseline behaviour, and the Drift block's benchmark-column em-dash semantics.
+
+### Decisions
+
+**1. `+N` is chronological from baseline, not "last 3" overall.** "Last 3 runs" against a stale baseline could drift the operator's mental anchor — they'd see the most recent runs but lose the comparison continuity. `+N from baseline` keeps the comparison anchor stable: the operator always reads "trajectory since I locked the baseline," and re-baseline cleanly resets the trajectory.
+
+**2. Cap at N=3 (configurable via `CANARY_TRAJECTORY_SLOTS`).** 3 fits the visual layout cleanly (5 columns including label + benchmark); enough to spot trend (3 data points after the anchor); doesn't grow unboundedly as runs accumulate. Operator-tuneable if needed via the constant.
+
+**3. Benchmark column shows the baseline run's metric value; post-baseline columns show each subsequent run's value.** Each cell is a metric snapshot; the operator visually compares across cells. No delta cell, no colour-coding for shift — pure value rendering. Keeps the read clean.
+
+**4. Drift block's benchmark column reads em-dash, not zero.** Drift against itself is structurally zero; rendering "0" would be misleading (operator could read it as "no drift detected" rather than "no comparison made"). Em-dash is the honest read for "n/a here."
+
+**5. Empty `+N` slots render em-dash, never blank/zero.** Same rationale: missing data is semantically distinct from measured-zero. The em-dash placeholder makes the empty slot visually obvious.
+
+**6. Per-run drift detection runs at refresh time, not cached.** With 3 post-baseline runs × ~150 records each + drift detector re-evaluation, sub-millisecond per refresh. No caching layer needed; cache complexity isn't worth the perf delta at this scale.
+
+### Live smoke verification
+
+- 529 / 529 tests pass.
+- `runs_after_baseline` returns `[]` against the current local log (baseline pointer is stale post-#45 strip; no post-baseline runs exist). Canary tab degrades cleanly to all-em-dash trajectory + the existing "no benchmark frozen" banner.
+- Smoke-rendered `format_canary_health_blocks` with synthetic baseline + 2 post-baseline runs (no +3): all four column headers present; em-dash placeholders fill the empty +3 slot; drift counts trajectory renders.
+
+### Outstanding (start of next session)
+
+- **Re-freeze canary baseline** (operator-gated) — unchanged from Sessions 47–50. PRD `#41` closes when this lands; the trajectory view will start populating with real values as subsequent runs accumulate.
+- **Tier B band tuning** — unchanged.
+- **Visual polish for the trajectory view** — could add per-cell colour-coding when `+N` value drifts significantly from benchmark (mirroring the Tier B shift bands). Deferred until operator usage shows whether plain values are sufficient.
+- **No PR opened, no push.** Branch ahead of `origin/main`.
+
+### Next session entry-point
+
+Same as Session 50: either operator runs `--freeze-baseline` (closes PRD `#41` + `#39` + populates the trajectory view), or Phase 5 prep starts. The Canary tab is now temporally aware — trajectory across runs replaces single-run snapshots.
+
+---
+
 ## Session 50 (2026-05-05) — KB Coverage promoted to its own Sentinel tab
 
 **Status:** Small UX move — KB Source Coverage panel promoted from a sub-section of the Failures tab to a first-class `KB Coverage` tab. Suite at **522 passing** (no test delta — the move is purely UI placement). New tab sits between Failures and (visually) where the operator next wants to scan KB-utilisation health independent of failure drilldown.
