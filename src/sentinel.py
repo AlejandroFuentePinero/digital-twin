@@ -1928,7 +1928,7 @@ def _delta_cell(current: float | None, baseline: float | None,
                 *, as_pct: bool = True, lower_is_better: bool = True) -> str:
     """`Δ baseline` cell — colour-coded delta. `lower_is_better=True` for
     rates / latency (delta>0 is degrading); `False` for things where higher
-    is better (pass rate, branch_match_rate)."""
+    is better (pass rate, outcome_accuracy)."""
     if current is None or baseline is None:
         return "<span class='delta'>—</span>"
     delta = current - baseline
@@ -2044,13 +2044,40 @@ def format_canary_health_blocks(
         1 - baseline_model.guardrail_rejection_rate
         if baseline_model and baseline_model.records else None
     )
-    branch_match = latest_model.branch_match_rate(corpus)
-    tool_uptake = latest_model.tool_uptake_on_warranted(corpus)
+    outcome_accuracy = latest_model.outcome_accuracy(corpus)
+    keyword_coverage = latest_model.keyword_coverage(corpus)
+    red_flag_rate = latest_model.red_flag_rate(corpus)
 
     quality_rows = (
         _canary_metric_row(
             "First-attempt pass rate", _fmt_pct(pass_rate),
             _delta_cell(pass_rate, pass_rate_baseline, lower_is_better=False),
+        )
+        + _canary_metric_row(
+            "Outcome accuracy", _fmt_pct(outcome_accuracy),
+            _delta_cell(
+                outcome_accuracy,
+                _baseline_with_corpus(lambda m, c: m.outcome_accuracy(c)),
+                lower_is_better=False,
+            ),
+            suffix="vs expected_outcome",
+        )
+        + _canary_metric_row(
+            "Keyword coverage", _fmt_pct(keyword_coverage),
+            _delta_cell(
+                keyword_coverage,
+                _baseline_with_corpus(lambda m, c: m.keyword_coverage(c)),
+                lower_is_better=False,
+            ),
+            suffix="substantive answers",
+        )
+        + _canary_metric_row(
+            "Red-flag rate", _fmt_pct(red_flag_rate),
+            _delta_cell(
+                red_flag_rate,
+                _baseline_with_corpus(lambda m, c: m.red_flag_rate(c)),
+            ),
+            suffix="must_not_appear hits",
         )
         + _canary_metric_row(
             "Gap rate", _fmt_pct(latest_model.gap_rate),
@@ -2066,15 +2093,6 @@ def format_canary_health_blocks(
             ),
         )
         + _canary_metric_row(
-            "Branch match rate", _fmt_pct(branch_match),
-            _delta_cell(
-                branch_match,
-                _baseline_with_corpus(lambda m, c: m.branch_match_rate(c)),
-                lower_is_better=False,
-            ),
-            suffix="canary-only",
-        )
-        + _canary_metric_row(
             "Mean classification confidence",
             _fmt_num(latest_model.mean_classification_confidence, ndigits=3),
             _delta_cell(
@@ -2082,15 +2100,6 @@ def format_canary_health_blocks(
                 _baseline(lambda m: m.mean_classification_confidence),
                 as_pct=False, lower_is_better=False,
             ),
-        )
-        + _canary_metric_row(
-            "Tool uptake on warranted", _fmt_pct(tool_uptake),
-            _delta_cell(
-                tool_uptake,
-                _baseline_with_corpus(lambda m, c: m.tool_uptake_on_warranted(c)),
-                lower_is_better=False,
-            ),
-            suffix="clean denominator",
         )
         + _canary_metric_row(
             "Tool call success rate",
@@ -2134,7 +2143,7 @@ def format_canary_health_blocks(
 
 def format_canary_stratified(flags: list[CanaryDriftFlag], corpus) -> str:
     """Stratified summary chips: drift counts grouped three ways — by
-    expected_branch, by category, and by drift kind. Lets the operator scan
+    expected_outcome, by category, and by drift kind. Lets the operator scan
     'where is drift concentrated?' before scrolling cards. Renders an
     empty-state line when no drift fired."""
     if not flags:
@@ -2143,12 +2152,11 @@ def format_canary_stratified(flags: list[CanaryDriftFlag], corpus) -> str:
             "No drift this run."
             "</div>"
         )
-    from collections import Counter
 
     summary = stratified_summary(flags, corpus)
-    by_branch = summary["by_branch"]
+    by_outcome = summary["by_outcome"]
     by_category = summary["by_category"]
-    by_kind = Counter(f.kind for f in flags)
+    by_kind = summary["by_drift_kind"]
 
     def _chips(items):
         return " · ".join(
@@ -2158,7 +2166,7 @@ def format_canary_stratified(flags: list[CanaryDriftFlag], corpus) -> str:
 
     return (
         "<div class='canary-stratified'>"
-        f"<div><span class='canary-stratified-label'>By branch:</span> {_chips(by_branch.items())}</div>"
+        f"<div><span class='canary-stratified-label'>By outcome:</span> {_chips(by_outcome.items())}</div>"
         f"<div><span class='canary-stratified-label'>By category:</span> {_chips(by_category.items())}</div>"
         f"<div><span class='canary-stratified-label'>By kind:</span> {_chips(by_kind.items())}</div>"
         "</div>"
@@ -2209,7 +2217,7 @@ def format_canary_per_question_table(
             f"<tr class='canary-row sev-{top_severity}'>"
             f"<td><code>{html.escape(q.id)}</code></td>"
             f"<td>{html.escape(q.question)}</td>"
-            f"<td>{html.escape(q.expected_branch)}</td>"
+            f"<td>{html.escape(q.expected_outcome)}</td>"
             f"<td>{html.escape(kind_summary)}</td>"
             f"<td class='canary-sev'>{top_severity}</td>"
             "</tr>"
@@ -2223,7 +2231,7 @@ def format_canary_per_question_table(
     return (
         "<table class='canary-table'>"
         "<thead><tr>"
-        "<th>ID</th><th>Question</th><th>Expected branch</th>"
+        "<th>ID</th><th>Question</th><th>Expected outcome</th>"
         "<th>Drift kinds</th><th>Severity</th>"
         "</tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
