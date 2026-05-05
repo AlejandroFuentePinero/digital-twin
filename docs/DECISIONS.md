@@ -5,6 +5,80 @@
 
 ---
 
+## Session 45 (2026-05-05) — Observability rework slice 2 shipped (`#43`): Failure Feed + Gap Clusters now read `event_type` directly
+
+**Status:** Slice 2 of PRD `#41` shipped end-to-end. Audit doc lands first per the audit-first discipline; code + tests + operator-facing copy follow. Suite at **484 passing** (+5 net from Session 44's 479). The Failure surfaces — `failure_feed`, `cluster_gaps`, `summarize_failures`, `flag_detector` — no longer read the `knew_answer` proxy; the contract is `event_type` directly. Slice 3 (Metrics tab cleanup + last `knew_answer` reader removal) is the next entry-point.
+
+### What shipped
+
+| Layer | Change |
+|---|---|
+| Audit | `docs/audits/slice-2-failure-feed.md` — field-reader inventory, predicted behaviour, fixtures, workarounds removed, plus the binding decision on the deferred deflected-in-failure-feed open question |
+| Code | `failure_feed.classify_failure` rewritten on `event_type`; `FAILURE_MODES` + `FAILURE_MODE_LABELS` + `FAILURE_MODE_SEVERITY` + `_SEVERITY_RANK` gain `deflected` entry (lowest severity tier); `gap` label drops the `(knew_answer=false)` parenthetical |
+| Code | `flag_detector._REPEAT_FAILURE_EVENTS` audited and kept as `{"deflected", "refused"}`; comment refreshed to point at the v4 producer rule + slice-2 audit rather than the writer-parity caveat |
+| Code | `sentinel.py` CSS gains `feed-summary-mode.deflected` (teal) so the new mode renders distinctly in the per-mode summary chip |
+| Tests | Fixture migration across `test_failure_feed.py` / `test_cluster_gaps.py` / `test_summarize_failures.py` / `test_sentinel.py` — every `knew_answer=False` site that simulated a gap turn switched to `event_type='gap'`. Five new tests added (deflected mode + severity-rank ordering + the v4 contract forcing function — a record with `event_type='gap'` AND `knew_answer=True` is still a gap) |
+| Docs | `docs/SENTINEL.md` runbook rewritten: `gap_rate` jump filter, `confident_failure_rate` filter, `repeat_failure` description. New "Post-#43 cluster-batch caveat" subsection on archiving a baseline snapshot before the next batch run to keep `detect_new_cluster` honest. `CONTEXT.md::Interaction log` legacy note refreshed (only `dashboard_model.confident_failure_rate` remaining as a `knew_answer` reader; slice 3 finishes) |
+
+### Decision made — the deferred open question
+
+PRD `#41` § *Intermediate-state expectations* deferred: *should `event_type='deflected'` records appear in the Failure Feed?* Slice 2's audit § 2 resolves it.
+
+**Yes, with a low-severity disposition.** `deflected` joins `FAILURE_MODES` as a fifth entry, ranked at the lowest severity tier (rank 4 — below `gap`'s 3). Friendly label: `"deflected (out-of-scope redirect)"` — honest about the outcome, not pejorative.
+
+Three forces drove the decision:
+
+1. **The repeat-failure flag's click-target is `failure_feed`.** When the trip-wire fires on 3+ identical deflections of the same question, the operator clicks through expecting to land on those records. Filtering deflected rows out breaks that affordance.
+2. **The existing taxonomy already has an "informational" tier.** `_SEVERITY_RANK` parks `gap` last with comment *"informational, not a defect"*. Deflected slots into the same bucket — a correctly-handled out-of-scope hit isn't a defect, but the *pattern* matters for KB / branch-design decisions.
+3. **PRD user-story #5 frames the feed as a *failure-shape* surface, not a *defect* surface.** Surfacing every deflected turn lets the operator see "system deflected on this kind of question" patterns alongside refusals and gaps.
+
+Alternatives considered and rejected: (a) excluding deflected entirely (breaks the click-through, fragments the affordance); (b) hiding deflected behind the dropdown filter only (inconsistent with how `gap` is treated — both are informational); (c) renaming "failure feed" to "interaction feed" (out of scope; ripples through every reference).
+
+### Decision made — `_REPEAT_FAILURE_EVENTS` audit conclusion
+
+Kept as `{"deflected", "refused"}`. Rationale: the *repeat pattern* (3+ identical out-of-scope hits in a week) is operator-actionable (suggests a missing branch, a corpus pattern, or a spam category) even though *individual* deflections are correct system behaviour. The trip-wire stays meaningful; if the first weeks of v4 traffic show it firing on patterns that aren't actionable, revisit then.
+
+### Predicted live impact (per audit § 5)
+
+Computed against the local 99-record live log (all pre-v4):
+
+| Surface | Pre-#43 reading | Post-#43 reading (today) |
+|---|---|---|
+| `failure_feed.failure_mode_counts.gap` | 8 (proxy: `not knew_answer`) | 8 (`event_type=='gap'` after smart-normalize) |
+| `failure_feed.failure_mode_counts.deflected` | n/a — branch didn't exist | 0 (no v4 deflected records yet) |
+| `cluster_gaps.extract_gap_questions` | 8 | 8 |
+| `summarize_failures.select_records_for_group("deflection")` | 0 | 0 |
+
+**Slice 2 produces zero numerical change on the current log** — the contract switch is identity-preserving on pre-v4 records because slice 1's smart-normalize already aligned `not knew_answer` with `event_type=='gap'`. The convergence between dashboard `gap_rate` (~44% predicted) and failure-feed `gap` count documented in slice 1's audit § 5 happens *as v4 traffic accumulates*, not at slice-2 merge time.
+
+### Live smoke verification — matches audit § 5 exactly
+
+```
+failure_mode_counts: {refused: 1, gap: 8, deflected: 0,
+                      retry-exhausted: 1, rejected-then-recovered: 5}
+extract_gap_questions(99 records, days=None): 8
+select_records_for_group("deflection"): 0
+select_records_for_group("gap"): 8
+select_records_for_group("unacceptable"): 9
+```
+
+### Operator caveat — first cluster batch after slice 2
+
+The first `cluster_gaps.run_batch` after slice 2 + the first week of v4 producer traffic will produce visibly more / larger gap clusters than prior weeks. This is the metric becoming honest, not a regression. A side effect: `flag_detector.detect_new_cluster` may fire false `new_cluster` flags on the next batch run because the v4 GAP-branch population contains topics that didn't surface under the proxy. Operator action before the first post-#43 batch run: archive a fresh "baseline" snapshot under `data/logs/gap_clusters_archive/`. Or accept the noise on one run and move on. Documented in `SENTINEL.md`.
+
+### Outstanding (start of next session)
+
+- **Slice 3 — Metrics tab cleanup + remaining `knew_answer` legacy marking.** `dashboard_model.confident_failure_rate`'s `not r.knew_answer` disjunct removed; `technical_tool_uptake_rate` reframed as descriptive (drops the normative-threshold framing — "uptake" implies a target). `pipeline.py:206` `knew_answer` writer comment updated to mark legacy with v5-removal TODO.
+- **`CONTEXT.md` edits live in working tree (gitignored)** — `Interaction log` legacy note refreshed to reflect post-slice-2 state. Per Session 44 / commit `6c13221` `CONTEXT.md` is intentionally untracked.
+- **No PR opened, no push.** Slice-2 commits land on top of Session 44's; previous local commits still ahead. Total commits ahead pending the operator's batched push.
+- **Phase 5** still paused. Resumes after observability rework (slices 3/4) completes.
+
+### Next session entry-point
+
+Read PRD `#41` for the canonical scope. Read this Session 45 entry + slice-2 audit at `docs/audits/slice-2-failure-feed.md` for the implementation pattern. Pick up slice 3 by drafting the audit document at `docs/audits/slice-3-metrics-knew-answer.md` first, *then* implementing. The remaining `knew_answer` reader (`dashboard_model.confident_failure_rate` line 274) is small; the `technical_tool_uptake_rate` reframing is the chunkier piece — it touches `dashboard_model` + `sentinel.py` glossary + `SENTINEL.md` + (likely) test fixtures with normative threshold assertions.
+
+---
+
 ## Session 44 (2026-05-05) — Observability rework slice 1 shipped (`#42`): producer fix + Live tab cleanup
 
 **Status:** Slice 1 of PRD `#41` shipped end-to-end. 7 commits land on top of Session 43, audit doc lands first per the audit-first discipline. Suite at **479 passing** (+17 net from Session 43's 462). The producer now emits all four `event_type` values; the Live tab reads them directly. Slice 2 (Failure Feed + Gap Clusters rebuild) is the next entry-point.
