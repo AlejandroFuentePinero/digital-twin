@@ -149,6 +149,7 @@ graph LR
     canary_baseline["canary_baseline.py"]:::tooling
     canary_corpus["canary_corpus.py"]:::tooling
     canary_drift["canary_drift.py"]:::tooling
+    canary_outcome["canary_outcome.py"]:::tooling
     canary_runner["canary_runner.py"]:::tooling
     cluster_gaps["cluster_gaps.py"]:::tooling
     dashboard_model["dashboard_model.py"]:::tooling
@@ -183,10 +184,11 @@ graph LR
   app --> session_state
   app --> tools
   canary_baseline --> interaction_log
-  canary_corpus --> branches
-  canary_corpus --> interaction_log
+  canary_corpus --> canary_outcome
   canary_drift --> canary_corpus
+  canary_drift --> canary_outcome
   canary_drift --> interaction_log
+  canary_outcome --> interaction_log
   canary_runner --> canary_baseline
   canary_runner --> canary_corpus
   canary_runner --> interaction_log
@@ -268,8 +270,9 @@ graph LR
 | `app.py` | Gradio chat interface for the digital twin. |
 | `branches.py` | Branch registry for classify-then-route orchestration (ADR-0003). |
 | `canary_baseline.py` | Canary baseline pointer — frozen golden run_id (issue #39). |
-| `canary_corpus.py` | Canary corpus — pure data inventory (issue #39). |
-| `canary_drift.py` | Canary drift detector — pure functions over canary records (issue #39). |
+| `canary_corpus.py` | Canary corpus — pure data inventory (issue #39, recalibrated in PRD #41 / #45). |
+| `canary_drift.py` | Canary drift detector — pure functions over canary records (issue #39, |
+| `canary_outcome.py` | Canary outcome derivation — pure functions over (record, corpus question). |
 | `canary_runner.py` | Canary runner — replays the corpus through the current Pipeline (issue #39). |
 | `classifier.py` | Branch classifier (ADR-0003). |
 | `cluster_gaps.py` | Gap-clustering batch (issue #32). |

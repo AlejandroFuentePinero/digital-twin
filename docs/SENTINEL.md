@@ -251,25 +251,21 @@ Drift-focused panel between Trends and Failures. Closes the specific-question-re
 
 A 50-question canary corpus (`data/canaries/corpus.json`) is replayed through the live pipeline N=3 replicates per question. Each replay produces `InteractionRecord`s tagged `is_canary=True` and writes to the canonical `data/logs/interactions.jsonl` alongside live records. A frozen golden baseline (a designated past run) is the reference; drift fires per-question when the current run's aggregate diverges.
 
-> **Status (2026-05-04):** Baseline frozen. `run-20260504-121937-9af6fb` (sha `5ff42cc`) is the golden reference — 150 records, 50/50 distinct questions, 3 replicates each. Three real signals surfaced on day one and are queued for Phase 5 to address (see § "First baseline run — observed signals" below).
+The corpus contract is **outcome-shaped** (PRD #41 / `#45`): each question carries an `expected_outcome` ∈ `{answered_with_substance, gap_acknowledged, out_of_scope_redirect, refused}` plus a `must_not_appear` list of fabrication-detection phrases. Headline metrics are `outcome_accuracy` (correctness against `expected_outcome`), `keyword_coverage` (`expected_keywords` presence on substantive answers only), and `red_flag_rate` (`must_not_appear` substring hits). Pre-`#45` the contract was mechanism-shaped (`expected_branch` + `requires_tool` + `expected_event_type`); the recalibration moved every metric and drift kind onto the new contract end-to-end.
 
-### First baseline run — observed signals
+> **Status (2026-05-05):** Baseline pending re-freeze post-`#45`. The pre-`#45` baseline (`run-20260504-121937-9af6fb`, sha `5ff42cc`) was contaminated by the buggy pre-`#42` producer (only emitted 2 of 4 `event_type` values) and the pre-`#45` corpus contract (mechanism-shaped). Both layers fixed in slices 1–4 of PRD `#41`; the historical 226 canary records (150 baseline + 76 orphan) were stripped from `interactions.jsonl` and the baseline pointer is stale until the operator re-runs `uv run python src/canary_runner.py --freeze-baseline` against the fixed v4 producer. Expected baseline targets per `#45` Definition of Done: outcome accuracy ≥ 95%, red_flag_rate = 0%, keyword coverage at or above the pre-`#45` substantive subset (~85%).
 
-The first baseline run did its job: three predicted failure modes the `LIMITATIONS` register listed surfaced as concrete numbers. The dashboard's aggregate metrics could not catch any of these directly — that's exactly why the canary exists.
+### First baseline run — observed signals (historical, pre-`#45`)
 
-| Signal | Reading | Predicted by | Action |
-|---|---|---|---|
-| **Branch match rate 78.7%** | 11 / 50 questions misrouted; mean classification confidence 0.873 — confident wrong, not unsure wrong | `LIMITATIONS::O6` (specific-paper misroute to GENERIC) | Phase 5: classifier prompt tightening on the misrouted shapes |
-| **Tool uptake on warranted 38.5%** | 8 of ~13 `requires_tool=True` canary questions did NOT trigger `fetch_project_readme`; tool call success on the ones that fired = 100% (so it's uptake, not reliability) | `LIMITATIONS::P8` (TECHNICAL tool-uptake unmeasured) | Phase 5: tighten `tool_rules` "When to call" with sharper triggers; consider promoting "if visitor names a specific project, default to fetch unless unambiguously general" |
-| **Gap rate 6% (3/50)** | The corpus carries 8 gap-aimed questions (C006-C009 niche-tech + C019-C022 out-of-scope); only 3 emitted the gap phrase. **5 questions that should have honestly said "I don't have that" got answered instead.** | `LIMITATIONS::O1` (first-attempt fabrication on no-coverage probes) | Phase 5: read the 5 specific records; decide whether to tighten `rules.GAP_PHRASE` enforcement, add the question shapes to a curated negative-example list, or treat the bridging behaviour as acceptable on certain niche-tech probes |
+The pre-`#45` baseline run surfaced three signals which, in hindsight, were **all metric-design problems** rather than system errors:
 
-What was healthy on day one:
-- First-attempt pass rate **94.0%** (47 / 50 accepted on attempt 1 — guardrail discipline working).
-- Refusal rate **0%** (no canned-refusal bottom-out).
-- Tool call success rate **100%** (when the tool fires, it works).
-- Total p95 **24.7s** with guardrail at 13.9s = 56% share, matching the Session 40 "guardrail dominates" pattern.
+| Signal | Reading | Resolution |
+|---|---|---|
+| Branch match rate 78.7% | 11 / 50 questions "misrouted" against `expected_branch` | `expected_branch` was the wrong contract — Session 42's record review found every miss was a corpus-label dispute, not a system error. PRD `#41` slice 4 removed `branch_match_rate` entirely; correctness is now measured at outcome level. |
+| Tool uptake on warranted 38.5% | 8 of ~13 `requires_tool=True` canary questions did NOT trigger `fetch_project_readme` | `requires_tool` was the wrong contract — the system was correctly skipping the tool when the KB held the answer. PRD `#41` slice 4 removed `tool_uptake_on_warranted` entirely; the live `technical_tool_call_rate` keeps its descriptive role on the live tab (PRD `#41` slice 3). |
+| Gap rate 6% (3/50) | Only 3 of 8 gap-aimed questions emitted the canonical gap phrase | The pre-`#42` producer didn't emit `event_type='gap'` for constructive GAP-branch responses; PRD `#41` slice 1 fixed the producer rule, and `#45` re-derives the outcome from the post-fix `event_type` via `canary_outcome.derive_outcome`. The signal was real-but-noisy on pre-`#42` data; reads cleanly on v4. |
 
-The numbers above are the locked baseline — drift fires when *future* runs deviate. They are not promoted to Phase 5 fixes by the canary alone; the operator decides which to act on.
+The post-`#45` first baseline run will produce a new set of headline numbers under the recalibrated contract; the operator reads them as the new locked baseline rather than against the pre-`#45` table above.
 
 ### Live vs canary separation
 
@@ -303,17 +299,20 @@ N major · M minor · benchmark YYYY-MM-DD (sha {abc1234}) → latest canary run
 - **latest run date + sha** — when the most recent canary batch ran and on which commit. SHA pair gives drift attribution at one glance.
 - **No baseline frozen yet** — the banner falls back to "no benchmark frozen — use `uv run python src/canary_runner.py --freeze-baseline` or the Re-baseline button". Cold-start safe.
 
-### Five drift kinds × two severity tiers
+### Eight drift kinds × two severity tiers
 
 | Kind | Major when | Minor when |
 |---|---|---|
 | `branch_changed` | always | — |
-| `event_type_changed` | always | — |
+| `event_type_changed` | always (PRD `#41` user-story #26 — independent from outcome shifts) | — |
+| `outcome_changed` | always (post-`#45` headline drift kind) | — |
+| `keyword_coverage_dropped` | drop ≥ 0.5 baseline → current | drop ≥ 0.2 baseline → current |
+| `red_flag_emerged` | always (asymmetric: clearing a red flag is improvement, not drift) | — |
 | `retry_depth_changed` | crosses 1↔3+ boundary | delta ±1 within mid-band |
 | `chunk_set_changed` | Jaccard < 0.4 | Jaccard ∈ [0.4, 0.7) |
 | `latency_p95_regression` | median grew >50% | median grew >25% |
 
-Replicates are aggregated *first* (majority branch / event_type, median latency, intersected chunk-set, max attempts) and the drift detector compares aggregates per question. A flaky single-replicate retrieval doesn't move the baseline; the operator sees stable signal.
+Replicates are aggregated *first* (majority branch / event_type / outcome, median latency, intersected chunk-set, max attempts, median keyword coverage, OR'd red flag) and the drift detector compares aggregates per question. A flaky single-replicate retrieval doesn't move the baseline; the operator sees stable signal.
 
 ### Per-question drift table
 
@@ -347,10 +346,11 @@ The batch echoes the `run_id` on completion; that's the same id that lands on ev
 
 ### What the canary catches that the dashboard doesn't
 
-- **Specific-question regressions** at portfolio scale. The dashboard's aggregate metrics don't fire when a single recruiter question silently regresses from `answered` to `gap` or routes from `TECHNICAL` to `GENERIC` — the long-tail dilutes the signal. The canary fires per-question.
-- **Branch-mix shifts.** If recruiter traffic moves toward GENERIC questions and away from TECHNICAL, the system can quietly regress on TECHNICAL handling without `gap_rate` or `confident_failure_rate` moving. The canary's branch routing surface is locked across all 5 branches every run.
+- **Specific-question regressions** at portfolio scale. The dashboard's aggregate metrics don't fire when a single recruiter question silently regresses from `answered_with_substance` to `gap_acknowledged` or vice versa — the long-tail dilutes the signal. The canary fires per-question via `outcome_changed`.
+- **Branch-mix shifts.** If recruiter traffic moves toward GENERIC questions and away from TECHNICAL, the system can quietly regress on TECHNICAL handling without `gap_rate` or `confident_failure_rate` moving. The canary's per-question `branch_changed` drift kind locks routing stability across all 5 branches every run.
 - **Calibration ladder degradation.** C037–C040 probe gap-aware calibration. If the system stops emitting honest-gap markers and starts pure-gap or pure-claim, that's drift the dashboard's gap rate alone can't attribute.
-- **Tool uptake on tool-warranting questions.** `tool_uptake_on_warranted(corpus)` uses a clean denominator (only canary questions with `requires_tool=True`) — fixes `LIMITATIONS::P8`'s noisy denominator on the live `technical_tool_call_rate`.
+- **Substance loss on substantive answers.** `keyword_coverage(corpus)` aggregates per-question keyword presence on `answered_with_substance` records — a substantive answer that stops mentioning the load-bearing keywords (e.g. "MAE 29.95" disappears from the LLM Price Predictor answer) is a quality regression even when `outcome_accuracy` is unchanged. `keyword_coverage_dropped` per-question drift surfaces the same shift.
+- **Fabrication on absent-skill probes.** `red_flag_rate(corpus)` aggregates per-question `must_not_appear` substring hits — for gap / refused / out-of-scope corpus entries, a model that starts claiming experience with the absent skill (or actually divulges a refused payload) fires the metric and the per-question `red_flag_emerged` drift kind.
 
 ### What the canary does NOT catch
 
