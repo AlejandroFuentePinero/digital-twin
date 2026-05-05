@@ -418,7 +418,9 @@ The canary's drift detector compares each run against a **frozen golden baseline
 
 The canary runner replays 50 questions × 3 replicates = 150 sequential `pipeline.run()` calls. Per the issue spec ("fail loud over silent gaps"), there is **no per-question try/except** — any uncaught exception inside the loop propagates up and exits the batch. Records written before the failure remain in `data/logs/interactions.jsonl` with their `run_id`, but `freeze_baseline()` only runs *after* `run_batch()` returns successfully, so a failed batch leaves the log carrying a partial canary run that no baseline points at.
 
-**Observed: 2026-05-04 baseline-establishment attempt.** The first canary batch crashed at the 26th question's 2nd replicate after the Anthropic API returned `400 Bad Request — Your credit balance is too low to access the Anthropic API`. Tenacity exhausted its 5-retry policy (transient-infra retry, not credit-exhaustion-aware), the `BadRequestError` propagated through the guardrail call, the runner died, and `data/logs/interactions.jsonl` was left with **76 orphan canary records** sharing `run_id=run-20260504-115055-336112` and **no `baseline.json`** (the `--freeze-baseline` step never reached).
+**Observed: 2026-05-04 baseline-establishment attempt (Anthropic credit exhaustion).** The first canary batch crashed at the 26th question's 2nd replicate after the Anthropic API returned `400 Bad Request — Your credit balance is too low to access the Anthropic API`. Tenacity exhausted its 5-retry policy (transient-infra retry, not credit-exhaustion-aware), the `BadRequestError` propagated through the guardrail call, the runner died, and `data/logs/interactions.jsonl` was left with **76 orphan canary records** sharing `run_id=run-20260504-115055-336112` and **no `baseline.json`** (the `--freeze-baseline` step never reached).
+
+**Observed: 2026-05-05 baseline-establishment attempt (OpenAI quota exhaustion).** Session 55's first re-freeze attempt aborted at ~143/150 records on `openai.RateLimitError: Error code: 429 — insufficient_quota` from `retrieval.py:48` (`_embed` → OpenAI embeddings API). 143 orphan records under `run_id=run-20260505-124543-298c7d` left in place; baseline pointer untouched. Operator topped up OpenAI billing; second attempt completed cleanly (`run-20260505-132248-4aeb15`). **Failure mode is vendor-agnostic** — same shape (mid-batch abort + orphan records + untouched baseline pointer) whether the upstream is Anthropic credit, OpenAI quota, or any other API rate-limit / quota / outage. The pipeline calls OpenAI for embeddings + classifier + generator AND Anthropic for guardrail; pre-flight credit/quota checks must cover **both** vendors. The original 2026-05-04 pre-flight memo only flagged Anthropic; Session 55 expanded the runbook.
 
 **Why this is logged but not fixed today:**
 
@@ -428,7 +430,7 @@ The canary runner replays 50 questions × 3 replicates = 150 sequential `pipelin
 
 **Trip-wires (any one promotes priority):**
 
-1. The same shape recurs (≥3 baseline-establishment failures from credit / rate-limit / API outage causes within a quarter) — pattern, not anecdote.
+1. The same shape recurs (≥3 baseline-establishment failures from credit / rate-limit / API outage causes within a quarter) — pattern, not anecdote. **Counter: 2 occurrences (2026-05-04 Anthropic credit, 2026-05-05 OpenAI quota).**
 2. A canary run partially succeeds, the operator manually freezes the partial baseline because they didn't notice the early termination, and the next run fires false-positive drift on every question that wasn't replayed.
 3. The orphan-record count exceeds ~500 and starts noticeably bloating the log file.
 
