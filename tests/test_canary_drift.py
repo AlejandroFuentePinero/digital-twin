@@ -35,9 +35,17 @@ def _r(
     event_type: str = "answered",
     chunks: list[tuple[str, str]] | None = None,
     total_ms: int = 1000,
-    attempts: int = 1,
+    attempts: int | list[dict] = 1,
     git_sha: str = "sha-A",
 ) -> InteractionRecord:
+    if isinstance(attempts, int):
+        attempts_list = [
+            {"answer": "ok", "is_acceptable": (i == attempts - 1),
+             "guardrail_feedback": ""}
+            for i in range(attempts)
+        ]
+    else:
+        attempts_list = attempts
     return InteractionRecord.model_validate({
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "session_id": "canary",
@@ -46,11 +54,7 @@ def _r(
         "event_type": event_type,
         "branch": branch,
         "classification_confidence": 0.9,
-        "attempts": [
-            {"answer": "ok", "is_acceptable": (i == attempts - 1),
-             "guardrail_feedback": ""}
-            for i in range(attempts)
-        ],
+        "attempts": attempts_list,
         "retrieved_chunks": [
             {"source_file": sf, "section_heading": sh}
             for sf, sh in (chunks or [])
@@ -69,15 +73,16 @@ def _r(
 def _q(
     id: str = "C001",
     question: str = "q1",
-    branch: str = "TECHNICAL",
-    event_type: str = "answered",
-    requires_tool: bool = False,
+    expected_outcome: str = "answered_with_substance",
+    expected_keywords: list[str] | None = None,
+    must_not_appear: list[str] | None = None,
     category: str = "branch_routing",
 ) -> CanaryQuestion:
     return CanaryQuestion(
-        id=id, question=question, expected_branch=branch,
-        expected_event_type=event_type, expected_chunk_sources=[],
-        expected_keywords=[], category=category, requires_tool=requires_tool,
+        id=id, question=question, expected_outcome=expected_outcome,
+        expected_keywords=list(expected_keywords or []),
+        must_not_appear=list(must_not_appear or []),
+        expected_chunk_sources=[], category=category,
     )
 
 
@@ -337,23 +342,168 @@ def test_detect_drift_aggregates_replicates_before_comparing():
 # ----- stratified_summary ----------------------------------------------------
 
 
-def test_stratified_summary_groups_drift_counts_by_expected_branch_and_category():
-    """Stratified summary lets the operator scan 'which branch is drifting' /
-    'which category is drifting' as chips above the per-flag cards."""
+def test_stratified_summary_groups_drift_counts_by_expected_outcome_category_and_kind():
+    """Stratified summary lets the operator scan 'which outcome is drifting' /
+    'which category is drifting' / 'which kind is firing' as chips above the
+    per-flag cards. Post-#45 the by_branch group becomes by_outcome (the
+    corpus no longer asserts an expected_branch)."""
     corpus = [
-        _q(question="q1", branch="TECHNICAL", category="numerical_fidelity"),
-        _q(question="q2", branch="GAP", category="branch_routing_gap"),
+        _q(question="q1", expected_outcome="answered_with_substance",
+           category="numerical_fidelity"),
+        _q(question="q2", expected_outcome="gap_acknowledged",
+           category="branch_routing_gap"),
     ]
     flags = [
-        CanaryDriftFlag(question="q1", kind="branch_changed", severity="major",
+        CanaryDriftFlag(question="q1", kind="outcome_changed", severity="major",
                         headline="x", detail="x"),
         CanaryDriftFlag(question="q1", kind="latency_p95_regression",
                         severity="minor", headline="x", detail="x"),
-        CanaryDriftFlag(question="q2", kind="branch_changed", severity="major",
+        CanaryDriftFlag(question="q2", kind="outcome_changed", severity="major",
                         headline="x", detail="x"),
     ]
     summary = stratified_summary(flags, corpus)
-    assert summary["by_branch"]["TECHNICAL"] == 2
-    assert summary["by_branch"]["GAP"] == 1
+    assert summary["by_outcome"]["answered_with_substance"] == 2
+    assert summary["by_outcome"]["gap_acknowledged"] == 1
     assert summary["by_category"]["numerical_fidelity"] == 2
     assert summary["by_category"]["branch_routing_gap"] == 1
+    assert summary["by_drift_kind"]["outcome_changed"] == 2
+    assert summary["by_drift_kind"]["latency_p95_regression"] == 1
+
+
+# ----- detect_drift: outcome_changed (new in #45) ---------------------------
+
+
+def test_detect_drift_flags_outcome_change_as_major():
+    """An outcome shift (e.g. answered_with_substance → gap_acknowledged) is
+    the canary's headline correctness signal. Always major — drift on
+    outcome is the most operator-actionable kind on the surface."""
+    corpus = [_q(expected_outcome="answered_with_substance")]
+    baseline = [_r(event_type="answered", run_id="run-A")]
+    current = [_r(event_type="gap", run_id="run-B")]
+    flags = [f for f in detect_drift(current, baseline, corpus)
+             if f.kind == "outcome_changed"]
+    assert len(flags) == 1
+    assert flags[0].severity == "major"
+
+
+def test_detect_drift_silent_when_outcome_unchanged():
+    corpus = [_q(expected_outcome="answered_with_substance")]
+    baseline = [_r(event_type="answered", run_id="run-A")]
+    current = [_r(event_type="answered", run_id="run-B")]
+    flags = [f for f in detect_drift(current, baseline, corpus)
+             if f.kind == "outcome_changed"]
+    assert flags == []
+
+
+# ----- detect_drift: keyword_coverage_dropped (new in #45) ------------------
+
+
+def test_detect_drift_flags_keyword_coverage_minor_when_drop_in_minor_band():
+    """Drop ≥0.2 but <0.5 → minor. Baseline answer covers all 4 keywords
+    (1.0); current covers 3 of 4 (0.75) → drop of 0.25 → minor."""
+    corpus = [_q(
+        expected_outcome="answered_with_substance",
+        expected_keywords=["MAE", "29.95", "R²", "86.3"],
+    )]
+    baseline = [_r(
+        attempts=[{"answer": "MAE 29.95 with R² 86.3 at the ensemble.",
+                   "is_acceptable": True, "guardrail_feedback": ""}],
+        run_id="run-A",
+    )]
+    current = [_r(
+        attempts=[{"answer": "MAE 29.95 with R² landing materially above 80.",
+                   "is_acceptable": True, "guardrail_feedback": ""}],
+        run_id="run-B",
+    )]
+    flags = [f for f in detect_drift(current, baseline, corpus)
+             if f.kind == "keyword_coverage_dropped"]
+    assert len(flags) == 1
+    assert flags[0].severity == "minor"
+
+
+def test_detect_drift_flags_keyword_coverage_major_when_drop_exceeds_major_band():
+    """Drop ≥0.5 → major. Baseline covers all keywords (1.0); current covers
+    none (0.0) → drop of 1.0 → major."""
+    corpus = [_q(
+        expected_outcome="answered_with_substance",
+        expected_keywords=["MAE", "29.95"],
+    )]
+    baseline = [_r(
+        attempts=[{"answer": "MAE 29.95 final.", "is_acceptable": True,
+                   "guardrail_feedback": ""}],
+        run_id="run-A",
+    )]
+    current = [_r(
+        attempts=[{"answer": "Roughly thirty units of error.",
+                   "is_acceptable": True, "guardrail_feedback": ""}],
+        run_id="run-B",
+    )]
+    flags = [f for f in detect_drift(current, baseline, corpus)
+             if f.kind == "keyword_coverage_dropped"]
+    assert len(flags) == 1
+    assert flags[0].severity == "major"
+
+
+def test_detect_drift_silent_on_keyword_coverage_when_outcome_is_not_substantive():
+    """Coverage only computes for answered_with_substance outcomes — a
+    gap_acknowledged outcome doesn't get a coverage score, so the kind
+    cannot fire on it."""
+    corpus = [_q(expected_outcome="gap_acknowledged",
+                 expected_keywords=["I don't have"])]
+    baseline = [_r(event_type="gap", run_id="run-A",
+                   attempts=[{"answer": "I don't have hands-on with that.",
+                              "is_acceptable": True, "guardrail_feedback": ""}])]
+    current = [_r(event_type="gap", run_id="run-B",
+                  attempts=[{"answer": "Not something I've used.",
+                             "is_acceptable": True, "guardrail_feedback": ""}])]
+    flags = [f for f in detect_drift(current, baseline, corpus)
+             if f.kind == "keyword_coverage_dropped"]
+    assert flags == []
+
+
+# ----- detect_drift: red_flag_emerged (new in #45) --------------------------
+
+
+def test_detect_drift_flags_red_flag_emerged_when_baseline_clean_and_current_fabricates():
+    """Always major. Baseline carries no must_not_appear hit; current does
+    → fabrication regression worth surfacing."""
+    corpus = [_q(
+        expected_outcome="gap_acknowledged",
+        must_not_appear=["I have used kdb"],
+    )]
+    baseline = [_r(
+        event_type="gap", run_id="run-A",
+        attempts=[{"answer": "I don't have hands-on with kdb.",
+                   "is_acceptable": True, "guardrail_feedback": ""}],
+    )]
+    current = [_r(
+        event_type="gap", run_id="run-B",
+        attempts=[{"answer": "Yes, I have used kdb at scale.",
+                   "is_acceptable": True, "guardrail_feedback": ""}],
+    )]
+    flags = [f for f in detect_drift(current, baseline, corpus)
+             if f.kind == "red_flag_emerged"]
+    assert len(flags) == 1
+    assert flags[0].severity == "major"
+
+
+def test_detect_drift_silent_when_red_flag_clears_from_baseline_to_current():
+    """Asymmetric by design: baseline had a red flag, current cleared it →
+    system improvement, not drift to surface."""
+    corpus = [_q(
+        expected_outcome="gap_acknowledged",
+        must_not_appear=["I have used kdb"],
+    )]
+    baseline = [_r(
+        event_type="gap", run_id="run-A",
+        attempts=[{"answer": "I have used kdb briefly.",
+                   "is_acceptable": True, "guardrail_feedback": ""}],
+    )]
+    current = [_r(
+        event_type="gap", run_id="run-B",
+        attempts=[{"answer": "Not something I've worked with.",
+                   "is_acceptable": True, "guardrail_feedback": ""}],
+    )]
+    flags = [f for f in detect_drift(current, baseline, corpus)
+             if f.kind == "red_flag_emerged"]
+    assert flags == []
