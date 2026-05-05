@@ -238,7 +238,7 @@ The Flags panel sits above Panel 1 and surfaces three automatically-detected ano
 - **What it measures:** the same question failing the same way, repeatedly, in a short window.
 - **What it proxies:** a recurring failure mode the system is reproducing rather than recovering from. Distinct from `new_cluster` (which is gap-only) — `repeat_failure` is deflection / refusal patterns.
 - **Why exclude `gap`:** gap turns are handled by `new_cluster` + the clustering batch; surfacing them here would double-count across two flags.
-- **Target panel:** Failure Feed (`#failure-feed-section`).
+- **Target panel:** Failure Feed (`#failure-feed-section`). Post-#43 the feed surfaces `deflected` rows at the lowest severity tier so the click-through from this flag lands on real records.
 - **Runbook:** filter the Failure Feed by the question text + read the underlying records' `guardrail_feedback`; then attribute via the matching runbook (`guardrail_rejection_rate` for refusals; `gap_rate` for deflections). (Replay was deleted in Session 38; the canary-set workflow under PRD #39 covers the broader regression-catch use case at population level.)
 
 ---
@@ -283,6 +283,12 @@ Live and canary records share one file. The discriminator is the `is_canary` sch
 | `summarize_failures.run_batch` | filters `is_canary` before group selection | live records only |
 
 Legacy v1/v2 records on disk (no `is_canary` field at all) parse with the default `is_canary=False` — they continue flowing through the live tabs unchanged. Locked by `tests/test_log_reader.py::test_read_tolerates_pre_issue_39_records_lacking_canary_fields`.
+
+#### Post-#43 cluster-batch caveat
+
+The first `cluster_gaps.run_batch` after slice 2 of PRD #41 (`#43`) — combined with the first week of v4 producer traffic — will produce visibly more / larger gap clusters than prior weeks. This is the metric becoming honest, not a regression: the v4 producer emits `event_type='gap'` for the full GAP-branch population, including constructive gap-aware answers that the pre-#42 `not knew_answer` proxy missed. The clustering batch reads via `failure_feed.classify_failure`, which post-#43 keys on `event_type='gap'`, so the input set grows.
+
+A side effect: the *next* `flag_detector.detect_new_cluster` run may fire `new_cluster` flags for clusters that aren't actually new — they're newly-visible because the proxy was undercounting them. **Operator action before the first post-#43 batch run:** archive a fresh "baseline" snapshot under `data/logs/gap_clusters_archive/` so the false `new_cluster` flags clear on the run after that. (Or accept the noise on one run and move on.)
 
 The two LLM-calling batch processors (`cluster_gaps`, `summarize_failures`) read the canonical log directly via `LocalReader().read()` rather than through `DashboardModel`, so they need their own filter. Forcing functions: `tests/test_cluster_gaps.py::test_run_batch_excludes_canary_records_from_clustering` and `tests/test_summarize_failures.py::test_run_batch_excludes_canary_records_from_every_group` — both fail loudly if a future refactor drops the filter.
 
@@ -419,7 +425,7 @@ When a metric fires, here's where to look and where the fix likely lives.
 
 ### `gap_rate` jump
 
-1. **Open Failure Feed** (#31) and filter to `knew_answer == False`.
+1. **Open Failure Feed** (#31) and filter the Failure mode dropdown to `gap`.
 2. **Cluster the questions** in the Gap Clusters panel (#32) — is there a new theme? Re-run the batch (`uv run python src/cluster_gaps.py`) to refresh.
 3. If a known KB topic is the cause: fix is in `data/knowledge_base/`. Re-run `uv run python src/ingest.py` after edits.
 4. If routing failure (TECHNICAL questions hitting GENERIC and emitting gap): fix is in `classifier.py::SYSTEM_PROMPT`. See LIMITATIONS::O6.
@@ -427,7 +433,7 @@ When a metric fires, here's where to look and where the fix likely lives.
 
 ### `confident_failure_rate` jump
 
-1. **Open Failure Feed** filtered to `classification_confidence >= 0.8 AND (knew_answer == False OR refused)`.
+1. **Open Failure Feed** filtered to `classification_confidence >= 0.8` with the Failure mode dropdown set to `gap` or `refused`.
 2. **Inspect the questions** — are they all the same shape? (e.g. specific paper title, specific project metric.)
 3. If shape pattern is clear: fix is in `classifier.py::SYSTEM_PROMPT` (add a positive example) or `tool_rules` in `branches.py` (LIMITATIONS::O6 / O7).
 4. If varied: drill into individual records and use replay (#38) to confirm classifier output before the fix.
