@@ -5,6 +5,79 @@
 
 ---
 
+## Session 46 (2026-05-05) — Observability rework slice 3 shipped (`#44`): consumer-side `knew_answer` migration complete; live tool metric renamed to drop normative framing
+
+**Status:** Slice 3 of PRD `#41` shipped end-to-end. Audit doc lands first per the audit-first discipline; code + tests + operator-facing copy follow. Suite at **484 passing** (no net change from Session 45 — the `confident_failure_rate` test was rewritten in place; the `technical_tool_uptake_rate` test was renamed in place; nothing else moved). After this slice **zero** modules in `src/` read `knew_answer`; the live tool-call metric is descriptive, not normative. Slice 4 (canary recalibration — corpus relabel + `canary_outcome` deep module + 226-record strip + baseline re-freeze) is the next entry-point, blocked on operator credit availability.
+
+### What shipped
+
+| Layer | Change |
+|---|---|
+| Audit | `docs/audits/slice-3-metrics-knew-answer.md` — field-reader inventory for the last `knew_answer` reader + the `technical_tool_uptake_rate` rename, predicted behaviour, fixtures, workarounds removed, plus the rename-candidate analysis (selected `technical_tool_call_rate` over `_share` / `_use_rate` / `_invocation_rate` / `_branch_tool_call_rate`) |
+| Code | `dashboard_model.confident_failure_rate._failed` rewritten — `event_type in {"gap", "refused"}` replaces the `not r.knew_answer` disjunct; the trailing redundant `event_type == "refused"` clause collapses into the set membership; deflected explicitly does NOT count (correct out-of-scope redirect ≠ failure) |
+| Code | `dashboard_model.technical_tool_uptake_rate` renamed to **`technical_tool_call_rate`** — every reference updated: `METRIC_GETTERS` registry key, `sentinel.FRIENDLY_BANNER_LABELS` / `METRIC_SPECS` row + label / `METRIC_LABELS` / `THEMATIC_BLOCKS`, `metric_status.py` historical comment |
+| Code | `pipeline.py:204–208` writer comment refreshed: drops "slices 2 and 3 still migrating" half-state framing; lands "Consumer migration complete" + `TODO(v5)` removal pointer |
+| Tests | `test_confident_failure_rate_counts_high_confidence_failures` rewritten as `test_confident_failure_rate_counts_high_confidence_gap_refused_or_retry`. The new fixture carries two v4-specific discriminators: (a) confident + `event_type='gap'` + `knew_answer=True` (constructive GAP-branch turn) **MUST count** — pre-#42 proxy missed it; (b) confident + `event_type='deflected'` **MUST NOT count** — informational outcome, not a failure |
+| Tests | `test_technical_tool_uptake_rate_*` renamed to `test_technical_tool_call_rate_is_tool_call_share_of_technical_turns`; assertions updated to read the renamed property; docstring reframed |
+| Tests | `test_pipeline.py` comment refresh on the GAP-branch + refused-turn tests — drops the "proxied through `not knew_answer`" framing in favour of "v3-record consumer compat" |
+| Tests | `test_sentinel.py` overview-row label assertion + `test_dashboard_model.py::test_tool_uptake_on_warranted_*` docstring updated for the rename |
+| Docs | `docs/SENTINEL.md` — `technical_tool_call_rate` glossary entry rewritten (drops "uptake" / "no threshold (Session 39 demotion)" historical framing; lands one paragraph naming the property as descriptive direction-of-change orientation, not a target). Runbook header renamed. Canary-panel parenthetical mention renamed |
+| Docs | `docs/LIMITATIONS.md::P8` — every `technical_tool_uptake_rate` mention renamed to `technical_tool_call_rate`. Trip-wire #2 wording shifted from "Aggregate uptake rate" to "Aggregate call rate" |
+| Docs | `docs/TODO.md` — slice 3 entry consumed (next-step list now starts with slice 4); Last updated banner refreshed; suite count confirmed at 484 passing |
+| Docs | `CONTEXT.md::Interaction log` legacy note rewritten (working tree only — `CONTEXT.md` is gitignored per Session 44 / commit `6c13221`). Drops the "only remaining reader is `dashboard_model.confident_failure_rate`" half-sentence; lands "consumer migration is complete" with the post-slice-3 reader inventory |
+
+### Decisions made
+
+**1. The rename — `technical_tool_uptake_rate` → `technical_tool_call_rate`.** Five candidates reviewed in audit § 2 (`_call_rate`, `_share`, `_use_rate`, `_invocation_rate`, `_branch_tool_call_rate`). `_call_rate` selected because it is **parallel to the existing `tool_call_count` (volume) and `tool_call_success_rate` (quality)** — the triple becomes count / rate / success_rate, orthogonal axes over the same underlying tool-call event. "Call rate" is also a literal description (rate of tool calls per TECHNICAL turn), with no normative implication that "uptake" carried.
+
+**2. `confident_failure_rate` semantic carve-out for `deflected`.** A confident deflection on an out-of-scope question is **correct system behaviour** — a polite redirect is what the system is supposed to do for trivia / opinions / off-scope coding help. This mirrors slice 2 audit § 2's framing for the failure feed (deflected lands at the lowest severity tier, marked "informational, not a defect"). If a future grilling session decides confident deflections *are* operator-actionable (e.g. as a signal that the classifier is over-confident on out-of-scope routing), that's a new metric — not a quiet expansion of `confident_failure_rate`. Keep the contract narrow.
+
+**3. The canary-side `tool_uptake_on_warranted(corpus)` is NOT renamed in slice 3.** Out of scope by design — PRD #41 § *Slice 4* removes the entire `branch_match_rate` / `tool_uptake_on_warranted` pair as part of the canary recalibration (the new contract is `outcome_accuracy` / `keyword_coverage` / `red_flag_rate`). Renaming a metric in slice 3 only to delete it in slice 4 is patch-style anticipation; slice 4 owns its surface end-to-end. The audit § 1 / § 5 enumerate this exclusion explicitly.
+
+**4. `knew_answer` writer stays — slice 3 is consumer-side only.** Producer-side write at `pipeline.py:209` is preserved for v3-record consumer compat (anything reading the on-disk JSONL with old assumptions still gets the field). Removal is a future v5 schema bump tracked via the `TODO(v5)` pointer in the refreshed writer comment.
+
+**5. `confident_failure_rate` band stays at `healthy 0.03 / warning 0.07`.** The band was calibrated against the pre-v4 proxy and will likely read alert on healthy v4 traffic — same pattern as `gap_rate` after slice 1. Per the same operator-runbook discipline, the band is descriptive-not-actionable until a week of v4 traffic accumulates and the operator sets a new healthy band. No threshold change in this slice; documented in audit § 4 + this entry.
+
+**6. `metric_status.py` historical comment simplified.** The Session 39 demotion narrative is dropped from the comment block; the load-bearing caveat ("denominator includes turns that legitimately don't need a tool call") stays. Future maintainers reading the comment cold get the load-bearing reason; the historical trail is in `DECISIONS.md` for anyone who needs it.
+
+### Predicted behaviour change (per audit § 4 + § 5)
+
+Computed against the local 99-record live log (all pre-v4; slice 1's smart-normalize upgrades 8 records to `event_type='gap'`).
+
+| Surface | Pre-#44 reading | Post-#44 reading (today) |
+|---|---|---|
+| `dashboard_model.confident_failure_rate(0.8)` | unchanged across the slice on the current log — every pre-v4 record with `knew_answer=False` also has post-normalize `event_type='gap'` (same 8 records, GAP_PHRASE-bearing) and the lone refused record carries `event_type='refused'` directly | **identical numerical value** on the current log; the contract switches to read `event_type` directly |
+| `dashboard_model.technical_tool_call_rate` (renamed) | n/a | identical to pre-rename `technical_tool_uptake_rate` — definition body unchanged. **66.7%** on current log (last verified Session 39) |
+| Sentinel Metrics tab "Tool calls / TECHNICAL turn" row label | "Tool uptake (TECHNICAL)" | renamed; same value rendered |
+| Trends tab y-axis label | "Tool uptake (TECHNICAL)" | "Tool calls / TECHNICAL turn"; same data |
+
+**Slice 3 is identity-preserving on the current log.** The structural change matters: under the new `confident_failure_rate` contract, future v4 traffic where the producer emits `event_type='gap'` for GAP-branch responses *without* the canonical phrase will start counting toward the metric — same becoming-honest pattern as `gap_rate` after slice 1.
+
+### v4-traffic forecast
+
+Once v4 producer traffic accumulates, `confident_failure_rate` will likely climb meaningfully (Session 42's canary baseline indicated `branch_match_rate=78.7%` — the classifier is consistently confident on GAP-branch routing). Like `gap_rate` after slice 1, this is **the metric becoming honest, not a regression**. The healthy-band reset waits on a week of v4 data — same disposition as the slice-1 `gap_rate` callout.
+
+### Live smoke verification
+
+- 484 / 484 tests pass.
+- `git grep -nE "not r\\.knew_answer|not record\\.knew_answer" src/` → **0 hits** (only `dashboard_model.py:62` mentions the deleted proxy in a comment, which is documentation of the removal).
+- `git grep -nE "technical_tool_uptake_rate" src/ tests/` → **0 hits** (only explanatory rename callouts in docstrings/comments inside `dashboard_model.py:218`, `metric_status.py:56`, `sentinel.py:1284`, `tests/test_dashboard_model.py:454` remain — these are deliberate "renamed from X" pointers).
+- `docs/SENTINEL.md` / `docs/LIMITATIONS.md` / `docs/TODO.md` / `CONTEXT.md` — every operator-facing reference updated.
+- `docs/DECISIONS.md` historical entries (Sessions 39, 40, 42) intentionally kept on the old name per the project's historical-record convention (same pattern slice 1 used for `knew_answer` references in pre-#42 entries).
+
+### Outstanding (start of next session)
+
+- **Slice 4 — Canary recalibration.** New `canary_outcome` deep module (`derive_outcome(record, corpus_question) -> Outcome`); `corpus.json` relabel (drop `expected_branch` / `requires_tool` / `expected_event_type`; add `expected_outcome` / `must_not_appear`); `dashboard_model` swaps `branch_match_rate` / `tool_uptake_on_warranted` for `outcome_accuracy` / `keyword_coverage` / `red_flag_rate`; `canary_drift` adds `outcome_changed` / `keyword_coverage_dropped` / `red_flag_emerged` drift kinds; Sentinel canary tab UI swap; strip 226 historical canary records from `interactions.jsonl`; re-freeze baseline against fixed v4 producer. Audit-first: draft `docs/audits/slice-4-canary-recalibration.md` *before* code. Likely blocked on operator credit availability for the re-freeze run.
+- **`CONTEXT.md` edits live in working tree (gitignored)** — `Interaction log` entry rewritten to reflect post-slice-3 state.
+- **No PR opened, no push.** Slice-3 commits land on top of Session 45's; previous local commits still ahead. Total commits ahead pending the operator's batched push.
+- **Phase 5** still paused. Resumes after observability rework (slice 4 + canary re-freeze) completes.
+
+### Next session entry-point
+
+Read PRD `#41` for the canonical scope. Read this Session 46 entry + slice-3 audit at `docs/audits/slice-3-metrics-knew-answer.md` for the implementation pattern. Pick up slice 4 by drafting the audit document at `docs/audits/slice-4-canary-recalibration.md` first, *then* implementing — the canary surface is the broadest of the four slices (corpus relabel + new deep module + record strip + baseline re-freeze + drift-kind additions), so the audit's enumeration of fixture sites and predicted behaviour change is load-bearing.
+
+---
+
 ## Session 45 (2026-05-05) — Observability rework slice 2 shipped (`#43`): Failure Feed + Gap Clusters now read `event_type` directly
 
 **Status:** Slice 2 of PRD `#41` shipped end-to-end. Audit doc lands first per the audit-first discipline; code + tests + operator-facing copy follow. Suite at **484 passing** (+5 net from Session 44's 479). The Failure surfaces — `failure_feed`, `cluster_gaps`, `summarize_failures`, `flag_detector` — no longer read the `knew_answer` proxy; the contract is `event_type` directly. Slice 3 (Metrics tab cleanup + last `knew_answer` reader removal) is the next entry-point.

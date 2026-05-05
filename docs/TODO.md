@@ -3,15 +3,14 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-05 (Session 45 — `#43` slice 2 of PRD `#41` shipped; Failure Feed + Gap Clusters now read `event_type` directly)
-**Current phase:** **Observability rework in progress (PRD `#41`).** Slices 1 + 2 of 4 complete. Phase 5 (break the live system) paused until rework lands. Suite at **484 passing**.
+**Last updated:** 2026-05-05 (Session 46 — `#44` slice 3 of PRD `#41` shipped; consumer-side `knew_answer` migration complete; `technical_tool_uptake_rate` renamed to `technical_tool_call_rate`)
+**Current phase:** **Observability rework in progress (PRD `#41`).** Slices 1 + 2 + 3 of 4 complete. Phase 5 (break the live system) paused until rework lands. Suite at **484 passing**.
 
 **Locked next-step order:**
-1. **Slice 3 of PRD `#41`** — Metrics tab cleanup + remaining `knew_answer` legacy marking. Audit-first: draft `docs/audits/slice-3-metrics-knew-answer.md` *before* code. Removes the last `knew_answer` reader (`dashboard_model.confident_failure_rate`'s `not r.knew_answer` disjunct); reframes `technical_tool_uptake_rate` as descriptive (drops the normative-threshold framing — "uptake" implies a target). Marks `knew_answer` legacy in the `pipeline.py` writer comment with the v5-removal TODO.
-2. **Slice 4 of PRD `#41`** — Canary recalibration. New `canary_outcome` deep module; `corpus.json` relabel (drop `expected_branch`/`requires_tool`/`expected_event_type`; add `expected_outcome`/`must_not_appear`); strip 226 historical canary records and re-freeze baseline against fixed v4 producer.
-3. **Establish canary benchmark** — re-run `uv run python src/canary_runner.py --freeze-baseline` once slice 4 lands and credits are restored. Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39) stays open until this completes. See `LIMITATIONS::P14`.
-4. **Run Phase 5** (break the live system) against the recalibrated canary + dashboard. **Blocked on step 3.**
-5. **Iterate dashboard from Phase 5 findings**, not from polish instinct.
+1. **Slice 4 of PRD `#41`** — Canary recalibration. New `canary_outcome` deep module; `corpus.json` relabel (drop `expected_branch`/`requires_tool`/`expected_event_type`; add `expected_outcome`/`must_not_appear`); strip 226 historical canary records and re-freeze baseline against fixed v4 producer. Audit-first: draft `docs/audits/slice-4-canary-recalibration.md` *before* code.
+2. **Establish canary benchmark** — re-run `uv run python src/canary_runner.py --freeze-baseline` once slice 4 lands and credits are restored. Issue [#39](https://github.com/AlejandroFuentePinero/digital-twin/issues/39) stays open until this completes. See `LIMITATIONS::P14`.
+3. **Run Phase 5** (break the live system) against the recalibrated canary + dashboard. **Blocked on step 2.**
+4. **Iterate dashboard from Phase 5 findings**, not from polish instinct.
 
 **Audit-first discipline (slices 1–4):** every slice ships with a written audit at `docs/audits/slice-<N>-<name>.md` listing field readers, predicted behaviour change, fixtures requiring updates, and workarounds removed. Audit lands first; code change lands second; PR review verifies the change matches the audit.
 
