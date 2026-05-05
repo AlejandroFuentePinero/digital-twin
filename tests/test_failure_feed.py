@@ -73,9 +73,19 @@ def test_classify_failure_returns_refused_for_refused_event_type():
     assert classify_failure(_record(event_type="refused")) == "refused"
 
 
-def test_classify_failure_returns_gap_when_knew_answer_false():
-    """knew_answer=False (the live gap signal — see Session 28 inventory) is the 'gap' label."""
-    assert classify_failure(_record(knew_answer=False)) == "gap"
+def test_classify_failure_returns_gap_for_event_type_gap():
+    """event_type='gap' is the v4 producer's gap signal (see PRD #41 / slice 1
+    audit). The failure-feed contract reads event_type directly — the historical
+    `not knew_answer` proxy is gone."""
+    assert classify_failure(_record(event_type="gap")) == "gap"
+
+
+def test_classify_failure_returns_gap_when_event_type_gap_even_if_knew_answer_true():
+    """Forcing function for the slice-2 contract switch: a v4 record carrying
+    event_type='gap' on a constructive GAP-branch turn (knew_answer=True because
+    GAP_PHRASE isn't in the answer) is still a gap. The pre-#43 proxy would
+    have missed this; the new contract catches it."""
+    assert classify_failure(_record(event_type="gap", knew_answer=True)) == "gap"
 
 
 def test_classify_failure_returns_retry_exhausted_when_attempts_hit_max():
@@ -100,19 +110,60 @@ def test_classify_failure_returns_rejected_then_recovered_for_short_retry():
 
 
 def test_classify_failure_refused_takes_precedence_over_gap():
-    """A refused turn that also has knew_answer=False is labelled 'refused', not 'gap' —
-    the highest-severity outcome wins so the failure-mode dropdown is mutually exclusive."""
-    assert classify_failure(_record(event_type="refused", knew_answer=False)) == "refused"
+    """A turn that's both refused and event_type='gap' is labelled 'refused' —
+    the highest-severity outcome wins so the failure-mode dropdown is mutually
+    exclusive. (event_type itself can't be both, but the precedence rule still
+    matters for any future signal collisions.)"""
+    assert classify_failure(_record(event_type="refused")) == "refused"
 
 
 def test_classify_failure_gap_takes_precedence_over_retry_signals():
-    """If the model emitted the gap phrase, that's the headline failure regardless of attempt history.
-    Otherwise gap turns with retry would double-count under both labels."""
+    """If the producer classified this as a gap, that's the headline failure
+    regardless of attempt history — otherwise gap turns with retry would
+    double-count under both labels."""
     two_attempts = [
         {"answer": "bad", "is_acceptable": False, "guardrail_feedback": "fix"},
         {"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""},
     ]
-    assert classify_failure(_record(knew_answer=False, attempts=two_attempts)) == "gap"
+    assert classify_failure(_record(event_type="gap", attempts=two_attempts)) == "gap"
+
+
+def test_classify_failure_returns_deflected_for_deflected_event_type():
+    """Slice 2 adds 'deflected' as a fifth failure mode (lowest severity tier).
+    Surfaces individual deflected turns so the repeat_failure flag's
+    target='failure_feed' click-through lands on real records."""
+    assert classify_failure(_record(event_type="deflected")) == "deflected"
+
+
+def test_failure_mode_constants_include_deflected_and_rank_it_lowest():
+    """Slice-2 contract: 'deflected' joins the failure modes; severity rank
+    parks it below 'gap' so default sort surfaces actionable failures first.
+    Forcing function for the dropdown + accordion + per-mode summary chip."""
+    from failure_feed import FAILURE_MODES, FAILURE_MODE_LABELS, _SEVERITY_RANK
+
+    assert "deflected" in FAILURE_MODES
+    assert "deflected" in FAILURE_MODE_LABELS
+    assert _SEVERITY_RANK["deflected"] > _SEVERITY_RANK["gap"]
+    assert _SEVERITY_RANK["deflected"] > _SEVERITY_RANK["refused"]
+
+
+def test_failure_mode_label_for_gap_drops_knew_answer_proxy_reference():
+    """Post-#43 the 'gap' label is honest about the producer signal — no
+    `(knew_answer=false)` parenthetical leaking the legacy proxy into operator-
+    facing copy."""
+    from failure_feed import FAILURE_MODE_LABELS
+
+    assert "knew_answer" not in FAILURE_MODE_LABELS["gap"].lower()
+
+
+def test_classify_failure_deflected_takes_precedence_over_retry_signals():
+    """Mirrors the gap-precedence rule for deflected turns: the producer
+    classification wins over attempt history."""
+    two_attempts = [
+        {"answer": "bad", "is_acceptable": False, "guardrail_feedback": "fix"},
+        {"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""},
+    ]
+    assert classify_failure(_record(event_type="deflected", attempts=two_attempts)) == "deflected"
 
 
 # ----- select_failures -------------------------------------------------------
@@ -123,7 +174,7 @@ def test_select_failures_returns_only_failure_records_with_row_columns():
     dataframe columns: timestamp, branch, failure_mode, question, attempt_count, classification_confidence."""
     records = [
         _record(question="ok q"),                                              # clean — dropped
-        _record(question="gap q", knew_answer=False, branch="GAP",
+        _record(question="gap q", event_type="gap", branch="GAP",
                 classification_confidence=0.42),
     ]
     rows = select_failures(records)
@@ -140,8 +191,8 @@ def test_select_failures_returns_only_failure_records_with_row_columns():
 def test_select_failures_branch_filter_keeps_matching_branch():
     """branch='TECHNICAL' returns only TECHNICAL failures; branch='All' returns every failure."""
     records = [
-        _record(branch="GENERIC", knew_answer=False),
-        _record(branch="TECHNICAL", knew_answer=False),
+        _record(branch="GENERIC", event_type="gap"),
+        _record(branch="TECHNICAL", event_type="gap"),
         _record(branch="TECHNICAL", event_type="refused"),
     ]
     technical = select_failures(records, branch="TECHNICAL")
@@ -155,7 +206,7 @@ def test_select_failures_branch_filter_keeps_matching_branch():
 def test_select_failures_failure_mode_filter_keeps_matching_label():
     """failure_mode='gap' returns only gap-classified rows; 'All' returns every failure mode."""
     records = [
-        _record(knew_answer=False),                                  # gap
+        _record(event_type="gap"),                                  # gap
         _record(event_type="refused"),                               # refused
         _record(attempts=[
             {"answer": "bad", "is_acceptable": False, "guardrail_feedback": "f"},
@@ -175,9 +226,9 @@ def test_select_failures_question_search_is_case_insensitive_substring():
     (not just the truncated preview), so a needle deep in a long question still hits."""
     long_q = "x" * 100 + " AlejandrO " + "y" * 100
     records = [
-        _record(question="random thing", knew_answer=False),
-        _record(question=long_q, knew_answer=False),
-        _record(question="Bayesian models", knew_answer=False),
+        _record(question="random thing", event_type="gap"),
+        _record(question=long_q, event_type="gap"),
+        _record(question="Bayesian models", event_type="gap"),
     ]
     matches = select_failures(records, question_search="alejandro")
     assert len(matches) == 1
@@ -191,13 +242,13 @@ def test_select_failures_orders_rows_most_recent_first():
     """Rows are ordered by timestamp descending — the most recent failure is row 0,
     matching the issue spec: 'ordered most-recent first'."""
     older = _record(
-        timestamp="2026-04-01T00:00:00+00:00", knew_answer=False, question="oldest"
+        timestamp="2026-04-01T00:00:00+00:00", event_type="gap", question="oldest"
     )
     newest = _record(
-        timestamp="2026-05-01T00:00:00+00:00", knew_answer=False, question="newest"
+        timestamp="2026-05-01T00:00:00+00:00", event_type="gap", question="newest"
     )
     middle = _record(
-        timestamp="2026-04-15T00:00:00+00:00", knew_answer=False, question="middle"
+        timestamp="2026-04-15T00:00:00+00:00", event_type="gap", question="middle"
     )
     rows = select_failures([older, newest, middle])
     assert [row.record.question for row in rows] == ["newest", "middle", "oldest"]
@@ -207,7 +258,7 @@ def test_select_failures_truncates_long_questions_in_row_preview():
     """Long questions are truncated for the dataframe column with an ellipsis,
     keeping the row scannable; the full text is preserved on row.record.question."""
     long_q = "What does Alejandro think about " + "x" * 200
-    rows = select_failures([_record(question=long_q, knew_answer=False)])
+    rows = select_failures([_record(question=long_q, event_type="gap")])
     assert len(rows[0].question) <= QUESTION_PREVIEW_CHARS
     assert rows[0].question.endswith("…")
     assert rows[0].record.question == long_q  # full text preserved on the source record

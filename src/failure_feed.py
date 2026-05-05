@@ -37,15 +37,18 @@ class FailureRow:
 # Mutually-exclusive failure labels. Precedence (highest first): the most
 # severe / earliest-terminating outcome wins, so the failure-mode dropdown
 # can filter on a single label per row without double counting.
-FAILURE_MODES = ("refused", "gap", "retry-exhausted", "rejected-then-recovered")
+FAILURE_MODES = (
+    "refused", "gap", "deflected", "retry-exhausted", "rejected-then-recovered"
+)
 
 
-# Plain-English labels that telegraph the underlying record field — closes
-# the discoverability gap where an operator sees "gap" and doesn't realise
-# it means knew_answer=false. Used in the Failure Feed accordion summary.
+# Plain-English labels for the Failure Feed accordion summary + dropdown.
+# Honest about the outcome — `gap` and `deflected` are informational
+# (correct system behaviour, useful to surface for pattern-spotting).
 FAILURE_MODE_LABELS: dict[str, str] = {
     "refused":                  "refused (no answer)",
-    "gap":                      "unknown answer (knew_answer=false)",
+    "gap":                      "gap (couldn't answer)",
+    "deflected":                "deflected (out-of-scope redirect)",
     "retry-exhausted":          "retry exhausted (3+ attempts rejected)",
     "rejected-then-recovered":  "rejected then recovered (is_acceptable=false on early attempt)",
 }
@@ -60,16 +63,19 @@ FAILURE_MODE_SEVERITY: dict[str, str] = {
     "retry-exhausted":          "retry-exhausted",
     "rejected-then-recovered":  "rejected-then-recovered",
     "gap":                      "gap",
+    "deflected":                "deflected",
 }
 
 # Sort rank: refused first (system gave up), retry-exhausted next (3
 # rejected attempts), rejected-then-recovered (system fought back to OK),
-# gap last (honest "I don't know" — informational, not a defect).
+# gap and deflected last (informational — honest "I don't know" or correct
+# out-of-scope redirect, surfaced for pattern-spotting not as defects).
 _SEVERITY_RANK: dict[str, int] = {
     "refused":                  0,
     "retry-exhausted":          1,
     "rejected-then-recovered":  2,
     "gap":                      3,
+    "deflected":                4,
 }
 
 
@@ -101,11 +107,17 @@ def sort_feed(rows: "list[FailureRow]") -> "list[FailureRow]":
 
 
 def classify_failure(record: InteractionRecord) -> str | None:
-    """Return a failure-mode label for the record, or None if it isn't a failure."""
+    """Return a failure-mode label for the record, or None if it isn't a failure.
+
+    Post-#43 the contract reads ``event_type`` directly — the legacy
+    ``not knew_answer`` proxy is gone. ``deflected`` is treated as the
+    lowest-severity informational mode (see slice-2 audit § 2)."""
     if record.event_type == "refused":
         return "refused"
-    if not record.knew_answer:
+    if record.event_type == "gap":
         return "gap"
+    if record.event_type == "deflected":
+        return "deflected"
     rejected = any(not a.get("is_acceptable", True) for a in record.attempts)
     if not rejected:
         return None

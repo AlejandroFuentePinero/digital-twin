@@ -130,7 +130,7 @@ def test_format_metrics_overview_marks_diverging_cells_with_divergent_class():
     # also includes it, but 30d does too. To get genuine divergence I need a
     # record outside the 30d window. Use 50 days ago for the global-only one.
     bad7 = _record_dict()
-    bad7["knew_answer"] = False
+    bad7["event_type"] = "gap"
     bad7["timestamp"] = (now - timedelta(days=2)).isoformat()
     bad7["session_id"] = "s-7d"
     clean_old = _record_dict()
@@ -163,7 +163,7 @@ def test_format_metrics_overview_applies_status_class_to_thresholded_metric():
     from interaction_log import InteractionRecord
 
     bad = _record_dict()
-    bad["knew_answer"] = False
+    bad["event_type"] = "gap"
     records = [
         InteractionRecord.model_validate(bad), InteractionRecord.model_validate(bad),
         InteractionRecord.model_validate(bad), InteractionRecord.model_validate(_record_dict()),
@@ -215,7 +215,7 @@ def test_format_metrics_overview_inline_mode_marks_divergent_values_inline():
 
     now = datetime.now(timezone.utc)
     bad_recent = _record_dict()
-    bad_recent["knew_answer"] = False
+    bad_recent["event_type"] = "gap"
     bad_recent["timestamp"] = (now - timedelta(days=2)).isoformat()
     bad_recent["session_id"] = "s-recent"
     clean_old = _record_dict()
@@ -269,7 +269,7 @@ def test_format_metrics_overview_renders_deltas_muted_when_history_lt_14_days():
     now = datetime.now(timezone.utc)
     # 5 days of data — well under the 14-day threshold
     bad_recent = _record_dict()
-    bad_recent["knew_answer"] = False
+    bad_recent["event_type"] = "gap"
     bad_recent["timestamp"] = (now - timedelta(days=2)).isoformat()
     clean_recent = _record_dict()
     clean_recent["timestamp"] = (now - timedelta(days=5)).isoformat()
@@ -298,7 +298,7 @@ def test_format_metrics_overview_renders_deltas_with_direction_when_history_ge_1
     now = datetime.now(timezone.utc)
     # 20 days of data — comfortably above the threshold
     earliest = _record_dict()
-    earliest["knew_answer"] = False
+    earliest["event_type"] = "gap"
     earliest["timestamp"] = (now - timedelta(days=20)).isoformat()
     earliest["session_id"] = "old"
     recent = _record_dict()
@@ -367,7 +367,7 @@ def test_format_status_banner_counts_alert_warning_healthy_metrics():
     from interaction_log import InteractionRecord
 
     bad = _record_dict()
-    bad["knew_answer"] = False
+    bad["event_type"] = "gap"
     records = [
         InteractionRecord.model_validate(bad),
         InteractionRecord.model_validate(bad),
@@ -589,7 +589,7 @@ def test_format_session_view_renders_one_collapsible_per_turn_with_pass_fail_bad
     event_type, truncated question, and a PASS/FAIL badge derived from classify_failure."""
     records = [
         _record_for_session(0, question="clean turn"),                   # PASS
-        _record_for_session(1, question="bad turn", knew_answer=False),  # FAIL · gap
+        _record_for_session(1, question="bad turn", event_type="gap"),  # FAIL · gap
     ]
     [session] = group_by_session(records)
     md = format_session_view(session)

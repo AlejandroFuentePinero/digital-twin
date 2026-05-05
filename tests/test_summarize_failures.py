@@ -61,14 +61,14 @@ def _completion_returning(text: str):
 
 def test_select_records_for_group_gap_uses_classify_failure_precedence():
     """The 'gap' group is what failure_feed.classify_failure flags as 'gap' —
-    knew_answer=False without refused-precedence kicking in. Reusing the
+    event_type='gap' without refused-precedence kicking in. Reusing the
     canonical predicate avoids drift with Failure Feed and the cluster batch."""
     from summarize_failures import select_records_for_group
 
     records = [
-        _record(question="clean", knew_answer=True),
-        _record(question="gap q", knew_answer=False),
-        _record(question="refused q", event_type="refused", knew_answer=False),  # refused, NOT gap
+        _record(question="clean", event_type="answered"),
+        _record(question="gap q", event_type="gap"),
+        _record(question="refused q", event_type="refused"),  # refused, NOT gap
     ]
     selected = select_records_for_group(records, group="gap", days=None)
     assert [r.question for r in selected] == ["gap q"]
@@ -114,7 +114,7 @@ def test_select_records_for_group_deflection_uses_deflected_event_type():
         _record(question="answered", event_type="answered"),
         _record(question="deflected", event_type="deflected"),
         _record(question="refused", event_type="refused"),
-        _record(question="gap", knew_answer=False),
+        _record(question="gap", event_type="gap"),
     ]
     selected = select_records_for_group(records, group="deflection", days=None)
     assert [r.question for r in selected] == ["deflected"]
@@ -127,11 +127,11 @@ def test_select_records_for_group_window_filter_drops_records_outside_n_days():
 
     now = datetime.now(timezone.utc)
     fresh = _record(
-        question="recent gap", knew_answer=False,
+        question="recent gap", event_type="gap",
         timestamp=(now - timedelta(days=2)).isoformat(),
     )
     stale = _record(
-        question="old gap", knew_answer=False,
+        question="old gap", event_type="gap",
         timestamp=(now - timedelta(days=30)).isoformat(),
     )
     selected = select_records_for_group([fresh, stale], group="gap", days=7)
@@ -165,8 +165,8 @@ def test_failure_summarizer_calls_gpt_4_1_with_record_questions_and_returns_mark
     from summarize_failures import SUMMARIZER_MODEL, FailureSummarizer
 
     records = [
-        _record(question="Have you used AWS?", knew_answer=False),
-        _record(question="Do you know Spark?", knew_answer=False),
+        _record(question="Have you used AWS?", event_type="gap"),
+        _record(question="Do you know Spark?", event_type="gap"),
     ]
     expected_md = "## Cloud + distributed compute gaps\n\nTwo questions probe..."
     with patch(
@@ -257,7 +257,7 @@ def test_run_batch_writes_one_file_per_group_with_dated_names(tmp_path):
 
     records = [
         # gap turn
-        _record(question="Have you used Spark?", knew_answer=False),
+        _record(question="Have you used Spark?", event_type="gap"),
         # deflected turn
         _record(question="Tell me about a conflict", event_type="deflected"),
         # unacceptable turn (rejected then recovered)
@@ -326,7 +326,7 @@ def test_run_batch_excludes_canary_records_from_every_group(tmp_path):
     out_dir = tmp_path / "summaries"
 
     canary_records = [
-        _record(question="canary gap", knew_answer=False).model_copy(
+        _record(question="canary gap", event_type="gap").model_copy(
             update={"is_canary": True, "run_id": "run-A", "replicate_index": 0}
         ),
         _record(question="canary deflection", event_type="deflected").model_copy(

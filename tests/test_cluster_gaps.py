@@ -51,15 +51,15 @@ def _record(
 # ----- extract_gap_questions -------------------------------------------------
 
 
-def test_extract_gap_questions_keeps_records_with_knew_answer_false():
-    """The canonical gap signal in live data is knew_answer=False (per the
-    dashboard_model.gap_rate live-data note). extract_gap_questions surfaces
-    those questions for clustering."""
+def test_extract_gap_questions_keeps_records_with_event_type_gap():
+    """Post-#43 the canonical gap signal is event_type='gap' (the v4 producer
+    emits it directly). extract_gap_questions surfaces those questions for
+    clustering."""
     from cluster_gaps import extract_gap_questions
 
     records = [
-        _record(question="Have you written CUDA kernels?", knew_answer=False),
-        _record(question="Have you used kdb+/q?", knew_answer=False),
+        _record(question="Have you written CUDA kernels?", event_type="gap"),
+        _record(question="Have you used kdb+/q?", event_type="gap"),
     ]
     questions = extract_gap_questions(records, days=None)
     assert questions == [
@@ -69,16 +69,15 @@ def test_extract_gap_questions_keeps_records_with_knew_answer_false():
 
 
 def test_extract_gap_questions_drops_clean_and_refused_records():
-    """Clean answers (knew_answer=True) and refused turns are not gap signals
-    even if they look like they could be — failure_feed.classify_failure
+    """Answered and refused turns are not gap signals — failure_feed.classify_failure
     treats refused with higher precedence than gap, so clustering should not
     surface refused-question text."""
     from cluster_gaps import extract_gap_questions
 
     records = [
-        _record(question="clean q", knew_answer=True),
-        _record(question="refused q", knew_answer=False, event_type="refused"),
-        _record(question="gap q", knew_answer=False),
+        _record(question="clean q", event_type="answered"),
+        _record(question="refused q", event_type="refused"),
+        _record(question="gap q", event_type="gap"),
     ]
     assert extract_gap_questions(records, days=None) == ["gap q"]
 
@@ -92,12 +91,12 @@ def test_extract_gap_questions_window_filter_drops_records_outside_n_days():
     now = datetime.now(timezone.utc)
     fresh = _record(
         question="recent gap",
-        knew_answer=False,
+        event_type="gap",
         timestamp=(now - timedelta(days=2)).isoformat(),
     )
     stale = _record(
         question="old gap",
-        knew_answer=False,
+        event_type="gap",
         timestamp=(now - timedelta(days=30)).isoformat(),
     )
     assert extract_gap_questions([fresh, stale], days=7) == ["recent gap"]
@@ -247,16 +246,16 @@ def test_run_batch_reads_log_file_and_writes_clustered_output_json(tmp_path):
     now = datetime.now(timezone.utc)
     records = [
         # 3 gap turns within the window
-        _record(question="Have you used AWS?", knew_answer=False,
+        _record(question="Have you used AWS?", event_type="gap",
                 timestamp=(now - timedelta(days=1)).isoformat()),
-        _record(question="AWS Lambda?", knew_answer=False,
+        _record(question="AWS Lambda?", event_type="gap",
                 timestamp=(now - timedelta(days=2)).isoformat()),
-        _record(question="Have you used kdb+?", knew_answer=False,
+        _record(question="Have you used kdb+?", event_type="gap",
                 timestamp=(now - timedelta(days=3)).isoformat()),
         # Non-gap turn — should be ignored
         _record(question="clean q", knew_answer=True),
         # Old gap turn — outside the 7-day window
-        _record(question="ancient gap", knew_answer=False,
+        _record(question="ancient gap", event_type="gap",
                 timestamp=(now - timedelta(days=30)).isoformat()),
     ]
     log_path.write_text("\n".join(r.model_dump_json() for r in records) + "\n")
@@ -299,7 +298,7 @@ def test_run_batch_writes_dated_snapshot_into_archive_dir(tmp_path):
     out_path = tmp_path / "gap_clusters.json"
     archive_dir = tmp_path / "archive"
 
-    record = _record(question="Have you used AWS?", knew_answer=False)
+    record = _record(question="Have you used AWS?", event_type="gap")
     log_path.write_text(record.model_dump_json() + "\n")
 
     response_json = json.dumps({
@@ -357,10 +356,10 @@ def test_run_batch_excludes_canary_records_from_clustering(tmp_path):
     log_path = tmp_path / "interactions.jsonl"
     out_path = tmp_path / "gap_clusters.json"
 
-    live_gap = _record(question="live gap question", knew_answer=False)
+    live_gap = _record(question="live gap question", event_type="gap")
     canary_gap = _record(
         question="C006 — kdb+/q canary",
-        knew_answer=False,
+        event_type="gap",
     ).model_copy(update={
         "is_canary": True,
         "run_id": "run-canary-A",
