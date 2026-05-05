@@ -1233,3 +1233,46 @@ def test_format_canary_health_blocks_returns_empty_when_no_records():
         post_baseline_runs=[],
     )
     assert html == ""
+
+
+# ----- Tier B history gate (Session 54) -------------------------------------
+
+
+def test_row_severity_tier_b_returns_orientation_when_history_below_gate():
+    """Tier B shift-on-band requires >=14 days of data history. Below the
+    gate, the row falls through to orientation (no badge) rather than firing
+    cold-start spurious alerts on tight window overlap. Mirrors the existing
+    delta-mute gate _delta_inline applies."""
+    from sentinel import _row_severity
+
+    # Three raws that WOULD trigger an alert (440% relative change 7d→30d)
+    # if the gate didn't fire.
+    raws = [1.0, 0.185, 0.058]
+
+    # Below 14-day gate → orientation
+    assert _row_severity("gap_rate", raws, history_days=10) == "orientation"
+    # At/above 14-day gate → alert (the shift fires)
+    assert _row_severity("gap_rate", raws, history_days=14) == "alert"
+    assert _row_severity("gap_rate", raws, history_days=30) == "alert"
+
+
+def test_row_severity_tier_b_default_history_zero_treats_as_below_gate():
+    """Default history_days=0 keeps Tier B suppressed — important because
+    callers that forget to pass history_days shouldn't accidentally surface
+    spurious shift alerts."""
+    from sentinel import _row_severity
+
+    raws = [1.0, 0.185, 0.058]  # would fire alert if gate disabled
+    assert _row_severity("gap_rate", raws) == "orientation"
+
+
+def test_row_severity_tier_a_unaffected_by_history_gate():
+    """Tier A value-on-band semantics don't depend on data history (a
+    refusal rate above 3% is a failure regardless of how long the log
+    spans). Gate must NOT suppress Tier A."""
+    from sentinel import _row_severity
+
+    # 4 refused records → refusal_rate well above 3% warning band → alert
+    raws = [1.0, 1.0, 1.0]
+    assert _row_severity("refusal_rate", raws, history_days=0) == "alert"
+    assert _row_severity("refusal_rate", raws, history_days=10) == "alert"

@@ -1240,14 +1240,20 @@ def _status_summary(model: DashboardModel) -> dict[str, list[str]]:
 
     Combines two kinds of status (post-#48 tier framework):
     - **Tier A** (in `THRESHOLDS`): value-on-band against the headline
-      window. Crossing band IS the failure event.
+      window. Crossing band IS the failure event. Always evaluated.
     - **Tier B** (in `TIER_B_METRICS`): shift-on-band across the
       (7d↔30d) and (30d↔90d) window pairs. Worst of either comparison
-      drives the bucket.
+      drives the bucket. Gated on ``history_days >=
+      MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA`` (Session 54) — under 14 days
+      of data the comparison is structurally noisy (windows overlap
+      heavily), so Tier B is suppressed from the banner rather than
+      firing cold-start spurious alerts.
 
     Tier C / unregistered metrics never appear in the banner — they're
     pure orientation reflections of system state."""
     buckets: dict[str, list[str]] = {"alert": [], "warning": [], "healthy": []}
+    history_days = _data_history_days(model.records)
+    tier_b_eligible = history_days >= MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA
 
     def _push(metric: str, status: str | None) -> None:
         if status is None:
@@ -1260,7 +1266,7 @@ def _status_summary(model: DashboardModel) -> dict[str, list[str]]:
         t = tier_of(metric)
         if t == "A":
             _push(metric, metric_status(metric, getter(model)))
-        elif t == "B":
+        elif t == "B" and tier_b_eligible:
             v_7 = getter(model.for_window(7))
             v_30 = getter(model.for_window(30))
             v_90 = getter(model.for_window(90))
@@ -1270,6 +1276,7 @@ def _status_summary(model: DashboardModel) -> dict[str, list[str]]:
             ])
             _push(metric, s)
         # Tier C / unknown: never surfaced in banner.
+        # Tier B with insufficient history: suppressed (cold-start safety).
     return buckets
 
 
@@ -1487,16 +1494,22 @@ def _is_divergent(values: list[str]) -> bool:
     return len(set(values)) > 1
 
 
-def _row_severity(metric_name: str | None, raws: list) -> str:
+def _row_severity(
+    metric_name: str | None, raws: list, history_days: int = 0,
+) -> str:
     """Worst per-row status — drives the row's visual treatment.
 
     Tier-aware (post-#48):
     - **Tier A:** worst per-window value-status across `raws` (a metric
       that's healthy on 7d but alerted on Global gets the alert row).
+      Always evaluated — value-band semantics don't depend on data history.
     - **Tier B:** worst shift-status across (raws[0] vs raws[1]) and
-      (raws[1] vs raws[2]) — the recent-vs-broader and broader-vs-longest
-      window comparisons. The metric value alone is meaningless; the
-      *shift* between windows IS the signal.
+      (raws[1] vs raws[2]). Gated on `history_days >=
+      MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA` (Session 54) — under 14 days
+      of data the comparison is structurally noisy (the windows overlap
+      heavily), so Tier B falls through to orientation rather than firing
+      cold-start spurious alerts. Mirrors the gate `_delta_inline` already
+      applies to the WoW delta arrows.
     - **Tier C / unknown:** orientation (no badge).
 
     Worst-status ranking: alert > warning > healthy."""
@@ -1514,6 +1527,8 @@ def _row_severity(metric_name: str | None, raws: list) -> str:
         return "orientation"
     if t == "B":
         if len(raws) < 3:
+            return "orientation"
+        if history_days < MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA:
             return "orientation"
         s = _worst_status([
             shift_status(raws[0], raws[1]),
@@ -1642,7 +1657,7 @@ def format_metrics_overview(
         for spec in specs:
             label, metric_name, getter, formatter = spec
             raws = [getter(m) for m in models]
-            severity = _row_severity(metric_name, raws)
+            severity = _row_severity(metric_name, raws, history_days=history_days)
             annotated.append((severity, spec))
         annotated.sort(key=lambda pair: _SEVERITY_RANK.get(pair[0], 99))
 
