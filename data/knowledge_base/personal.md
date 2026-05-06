@@ -61,7 +61,7 @@ Drawn to any domain with hidden structure that rewards careful analysis — game
 - Communicates clearly in writing; produces documentation and technical reports to the standard expected in peer-reviewed work (explicit assumptions, clear methods, honest limitations).
 - Comfortable with ambiguity and open-ended problems — has spent years on research questions with no guaranteed answers. Does not need a defined spec to start working.
 - Prefers feedback over silence; adjusts quickly when told something isn't working.
-- Works well in small, high-trust teams where output matters more than process. Has also worked largely independently (PhD) and in international collaborations across time zones.
+- Strongest in small-to-medium high-trust teams where output matters more than process; also open to larger teams when the problems are genuinely interesting and engaging. Has worked largely independently (PhD) and in international collaborations across time zones.
 
 ---
 
@@ -71,7 +71,7 @@ Drawn to any domain with hidden structure that rewards careful analysis — game
 
 **Problem type:** Problems where the data is messy, the uncertainty is real, and the system needs to produce outputs people can act on. Particularly interested in: AI systems for knowledge retrieval, structured information extraction, decision support, and evaluation infrastructure. Also interested in scientific/research-adjacent applications where domain knowledge matters.
 
-**Team and culture:** Small-to-medium teams. High trust, direct feedback, people who care about getting things right. Less interested in large organisations where process dominates output.
+**Team and culture:** Strongest fit in small-to-medium teams with high trust, direct feedback, and people who care about getting things right. Open to larger teams or organisations when the problems are genuinely interesting and engaging — what matters is that output isn't crowded out by process.
 
 **Location/format:** Based in Melbourne, Australia (PR). Open to remote and hybrid. Has demonstrated ability to work independently in remote and distributed contexts.
 
