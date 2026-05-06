@@ -10,13 +10,16 @@ branches per #18).
 """
 
 from litellm import completion
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry
+
+from _retry_policy import DEFAULT_RETRY, DEFAULT_STOP, DEFAULT_WAIT
 
 MODEL = "openai/gpt-4.1"
 TEMPERATURE = 1.0
-
-_wait = wait_exponential(multiplier=1, min=10, max=120)
-_stop = stop_after_attempt(5)
+# 90s tolerates legitimately slow gpt-4.1 generations (long prompt + long
+# output) while still catching genuine provider hangs well under LiteLLM's
+# 600s default. Tightening this further was tested and cut off real calls.
+REQUEST_TIMEOUT_S = 90
 
 
 def wrap_with_retry_feedback(system_prompt: str, previous_attempt: dict | None) -> str:
@@ -37,7 +40,7 @@ class Generator:
     MODEL = MODEL
     TEMPERATURE = TEMPERATURE
 
-    @retry(wait=_wait, stop=_stop)
+    @retry(wait=DEFAULT_WAIT, stop=DEFAULT_STOP, retry=DEFAULT_RETRY)
     def generate(
         self,
         system_prompt: str,
@@ -51,5 +54,10 @@ class Generator:
             + history
             + [{"role": "user", "content": question}]
         )
-        response = completion(model=self.MODEL, messages=messages, temperature=self.TEMPERATURE)
+        response = completion(
+            model=self.MODEL,
+            messages=messages,
+            temperature=self.TEMPERATURE,
+            timeout=REQUEST_TIMEOUT_S,
+        )
         return response.choices[0].message.content

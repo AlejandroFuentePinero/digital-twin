@@ -35,7 +35,7 @@ from contact_log import ContactRecord, ContactWriter
 from generator import Generator
 from guardrail import Guardrail
 from interaction_log import LogWriter
-from pipeline import Pipeline
+from pipeline import CANNED_REFUSAL, Pipeline
 from profile import ProfileLoader
 from rules import GAP_PHRASE
 from session_state import (
@@ -96,14 +96,23 @@ def respond(
         state.mark_explicit_request()
 
     contact_offered = state.should_show_contact_form()
-    reply = _pipeline.run(
-        question=message,
-        history=chat_history,
-        session_id=session_id,
-        turn_index=state.turn_counter,
-        contact_offered=contact_offered,
-        contact_provided=state.contact_provided,
-    )
+    # Defence-in-depth — Pipeline.run already catches per-attempt exceptions
+    # inside its retry loop and falls back to CANNED_REFUSAL after MAX_ATTEMPTS.
+    # This catch covers the rare case where something raises *outside* the loop
+    # (classifier, retrieval, composer, log writer) and prevents Gradio from
+    # leaving the chat in a hung "spinner forever, no assistant reply" state.
+    try:
+        reply = _pipeline.run(
+            question=message,
+            history=chat_history,
+            session_id=session_id,
+            turn_index=state.turn_counter,
+            contact_offered=contact_offered,
+            contact_provided=state.contact_provided,
+        )
+    except Exception as e:
+        print(f"[app] Pipeline.run raised outside its retry loop: {type(e).__name__}: {e}")
+        reply = CANNED_REFUSAL
 
     # Trigger detection — gap event from assistant reply (after generation)
     # Form will appear immediately for the visitor's next view of the page even

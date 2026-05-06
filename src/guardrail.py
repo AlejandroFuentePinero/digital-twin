@@ -9,16 +9,15 @@ OpenAI) to avoid sycophancy / correlated failures.
 """
 
 from litellm import completion
-from pydantic import BaseModel
-from tenacity import retry, stop_after_attempt, wait_exponential
+from pydantic import BaseModel, ValidationError
+from tenacity import retry
 
+from _retry_policy import DEFAULT_RETRY, DEFAULT_STOP, DEFAULT_WAIT
 from rules import GAP_PHRASE
 
 # Distinct model family from the generator (OpenAI) to avoid correlated failures.
 MODEL = "anthropic/claude-sonnet-4-6"
-
-_wait = wait_exponential(multiplier=1, min=10, max=120)
-_stop = stop_after_attempt(5)
+REQUEST_TIMEOUT_S = 90
 
 
 class Evaluation(BaseModel):
@@ -39,7 +38,7 @@ def _format_history(history: list[dict]) -> str:
 class Guardrail:
     MODEL = MODEL
 
-    @retry(wait=_wait, stop=_stop)
+    @retry(wait=DEFAULT_WAIT, stop=DEFAULT_STOP, retry=DEFAULT_RETRY)
     def evaluate(
         self,
         system_prompt: str,
@@ -65,7 +64,24 @@ class Guardrail:
                 {"role": "user", "content": user_prompt},
             ],
             response_format=Evaluation,
+            timeout=REQUEST_TIMEOUT_S,
         )
-        return Evaluation.model_validate_json(response.choices[0].message.content)
+        raw = response.choices[0].message.content or ""
+        try:
+            return Evaluation.model_validate_json(raw)
+        except ValidationError:
+            # Sonnet refused or returned non-JSON. Treat as a soft rejection so
+            # the pipeline retries the generator with the refusal text as
+            # feedback rather than burning the tenacity budget on a guaranteed-
+            # fail validation. The pipeline's MAX_ATTEMPTS=3 cap then reaches
+            # CANNED_REFUSAL within seconds instead of minutes.
+            return Evaluation(
+                is_acceptable=False,
+                feedback=(
+                    "Guardrail returned non-structured content (likely a refusal). "
+                    "Regenerate with safer phrasing that stays within the persona/scope "
+                    f"rules. Raw guardrail output (first 300 chars): {raw[:300]}"
+                ),
+            )
 
 

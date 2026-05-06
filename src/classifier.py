@@ -9,12 +9,16 @@ Low-confidence predictions default to `["GENERIC"]` (the safe broad branch).
 """
 
 from litellm import completion
-from pydantic import BaseModel
-from tenacity import retry, stop_after_attempt, wait_exponential
+from pydantic import BaseModel, ValidationError
+from tenacity import retry
+
+from _retry_policy import DEFAULT_RETRY, DEFAULT_STOP, DEFAULT_WAIT
 
 MODEL = "openai/gpt-4.1-nano"
 CLASSIFIER_HISTORY_WINDOW = 2
 CLASSIFIER_CONFIDENCE_THRESHOLD = 0.5
+# Nano + small prompt + structured output — generous tail of ~30s, 60s timeout.
+REQUEST_TIMEOUT_S = 60
 
 SYSTEM_PROMPT = """\
 You are a routing classifier on Alejandro de la Fuente's portfolio website. Read the \
@@ -50,10 +54,6 @@ If unsure, return `["GENERIC"]` with the appropriate low confidence — the syst
 falls back to the broad branch.\
 """
 
-_wait = wait_exponential(multiplier=1, min=10, max=120)
-_stop = stop_after_attempt(5)
-
-
 class ClassifierResult(BaseModel):
     labels: list[str]
     confidence: float
@@ -62,7 +62,7 @@ class ClassifierResult(BaseModel):
 class Classifier:
     MODEL = MODEL
 
-    @retry(wait=_wait, stop=_stop)
+    @retry(wait=DEFAULT_WAIT, stop=DEFAULT_STOP, retry=DEFAULT_RETRY)
     def classify(self, question: str, history: list[dict]) -> ClassifierResult:
         windowed = history[-CLASSIFIER_HISTORY_WINDOW * 2:]
         messages = (
@@ -74,8 +74,16 @@ class Classifier:
             model=self.MODEL,
             messages=messages,
             response_format=ClassifierResult,
+            timeout=REQUEST_TIMEOUT_S,
         )
-        result = ClassifierResult.model_validate_json(response.choices[0].message.content)
+        raw = response.choices[0].message.content or ""
+        try:
+            result = ClassifierResult.model_validate_json(raw)
+        except ValidationError:
+            # Classifier refused or returned malformed JSON — fall back to the
+            # safe broad branch (GENERIC) at zero confidence rather than
+            # retrying a guaranteed-fail validation.
+            return ClassifierResult(labels=["GENERIC"], confidence=0.0)
         if result.confidence < CLASSIFIER_CONFIDENCE_THRESHOLD:
             return ClassifierResult(labels=["GENERIC"], confidence=result.confidence)
         return result

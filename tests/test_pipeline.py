@@ -282,6 +282,43 @@ def test_canned_refusal_when_all_attempts_rejected(real_composer, fake_chunks, t
     assert record["knew_answer"] is True
 
 
+def test_canned_refusal_when_generator_raises_on_every_attempt(real_composer, fake_chunks, tmp_path):
+    """Generator raises on every attempt — pipeline records each as a failed
+    attempt and falls through to CANNED_REFUSAL instead of letting the exception
+    bubble out. Without this catch the for-loop's exit path is skipped and the
+    Gradio chat hangs with no assistant message — the bug surfaced during
+    Phase 5 (a) probing on the AI-JIE → schema follow-up."""
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["GENERIC"], confidence=1.0))
+
+    class RaisingGenerator:
+        MODEL = "openai/gpt-4.1"
+        TEMPERATURE = 0.7
+
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, *args, **kwargs):
+            self.calls += 1
+            raise RuntimeError("simulated provider failure")
+
+    generator = RaisingGenerator()
+    # Guardrail never gets called — every attempt fails before reaching it.
+    guardrail = FakeGuardrail(evaluations=[])
+
+    pipeline = _build_pipeline(real_composer, classifier, generator, guardrail, log_path)
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        out = pipeline.run("q", history=[], session_id="s1", turn_index=0)
+
+    assert out == CANNED_REFUSAL
+    assert generator.calls == MAX_ATTEMPTS, "every attempt must be tried and recorded"
+    record = LogReader(log_path).read_all()[0]
+    assert len(record["attempts"]) == MAX_ATTEMPTS
+    assert all(a["is_acceptable"] is False for a in record["attempts"])
+    assert all("RuntimeError" in (a["guardrail_feedback"] or "") for a in record["attempts"])
+    assert record["event_type"] == "refused"
+
+
 def test_retrieval_called_once_per_turn_even_with_retries(real_composer, fake_chunks, tmp_path):
     """fetch_context runs exactly once per turn — retries re-generate but chunks stay constant (per ADR-0003 / issue #13 spec)."""
     log_path = tmp_path / "interactions.jsonl"

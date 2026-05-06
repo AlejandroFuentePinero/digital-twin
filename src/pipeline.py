@@ -10,10 +10,23 @@ run once per turn (retry = re-generate-only — chunks are not re-fetched).
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from typing import Callable
+
+# Temporary trace instrumentation (Session 56 hang diagnosis). Set
+# `PIPELINE_TRACE=1` in the env to see step-by-step progress on stderr —
+# tells us exactly which call is blocking when the chat appears stuck.
+# Remove once the hang is diagnosed.
+_TRACE = bool(os.environ.get("PIPELINE_TRACE"))
+
+
+def _trace(msg: str) -> None:
+    if _TRACE:
+        print(f"[pipeline-trace] {msg}", file=sys.stderr, flush=True)
 
 import tool_loop
 from branches import REGISTRY
@@ -79,23 +92,28 @@ class Pipeline:
         contact_provided: bool = False,
     ) -> str:
         t_total = time.perf_counter()
+        _trace(f"run start | session={session_id[:8]} turn={turn_index} q={question[:60]!r}")
 
         # 1. Classify — filter unknown labels (e.g. TECHNICAL before #18 lands) so a
         # classifier ahead of the registry can't crash routing. Empty after filter →
         # safe fallback to GENERIC. Raw classifier output logged separately for the
         # Sentinel to surface misroute patterns.
+        _trace("classify start")
         t = time.perf_counter()
         cls_result = self._classifier.classify(question, history)
         classifier_ms = int((time.perf_counter() - t) * 1000)
+        _trace(f"classify done | {classifier_ms}ms | labels={cls_result.labels} confidence={cls_result.confidence:.2f}")
         branches = [b for b in cls_result.labels[:2] if b in self._registry] or ["GENERIC"]
         branch_name = branches[0]
         branch_spec = self._registry[branch_name]
 
         # 2. Retrieve (once per turn — chunks constant across retries)
+        _trace(f"retrieve start | branch={branch_name}")
         t = time.perf_counter()
         chunks = fetch_context(question, history)[: branch_spec.final_k]
         context = format_context(chunks)
         retrieval_ms = int((time.perf_counter() - t) * 1000)
+        _trace(f"retrieve done | {retrieval_ms}ms | {len(chunks)} chunks")
 
         # 3. Compose system prompts (one per role, both branch-aware)
         sys_prompt_gen = self._composer.compose(branches, "generator", retrieved_context=context)
@@ -147,44 +165,76 @@ class Pipeline:
 
         for attempt_idx in range(MAX_ATTEMPTS):
             current_attempt_index[0] = attempt_idx
+            answer: str | None = None
+            evaluation = None
+            attempt_exception: str | None = None
+
+            # Generation step — exceptions here (tenacity exhaustion, oversized
+            # prompt, provider 4xx etc.) are treated as a failed attempt rather
+            # than allowed to bubble out. Without this, MAX_ATTEMPTS / CANNED_REFUSAL
+            # never fires; the exception jumps over the for-loop and skips the
+            # graceful-fallback return at the bottom.
+            _trace(f"attempt {attempt_idx + 1}/{MAX_ATTEMPTS} | generate start (use_tools={use_tools})")
             t = time.perf_counter()
-            if use_tools:
-                wrapped = wrap_with_retry_feedback(sys_prompt_gen, previous_attempt)
-                messages = (
-                    [{"role": "system", "content": wrapped}]
-                    + history
-                    + [{"role": "user", "content": question}]
-                )
-                tool_specs = [
-                    build_fetch_project_readme_tool(self._tool_registry, on_call=_on_tool_call)
-                    for tool_name in branch_spec.tools
-                    if tool_name == "fetch_project_readme"
-                ]
-                answer = tool_loop.loop(self._tool_model_callable, messages, tool_specs)
-            else:
-                answer = self._generator.generate(sys_prompt_gen, history, question, previous_attempt)
+            try:
+                if use_tools:
+                    wrapped = wrap_with_retry_feedback(sys_prompt_gen, previous_attempt)
+                    messages = (
+                        [{"role": "system", "content": wrapped}]
+                        + history
+                        + [{"role": "user", "content": question}]
+                    )
+                    tool_specs = [
+                        build_fetch_project_readme_tool(self._tool_registry, on_call=_on_tool_call)
+                        for tool_name in branch_spec.tools
+                        if tool_name == "fetch_project_readme"
+                    ]
+                    answer = tool_loop.loop(self._tool_model_callable, messages, tool_specs)
+                else:
+                    answer = self._generator.generate(sys_prompt_gen, history, question, previous_attempt)
+                last_answer = answer
+                _trace(f"attempt {attempt_idx + 1} | generate done | {len(answer or '')} chars")
+            except Exception as e:
+                attempt_exception = f"{type(e).__name__}: {e}"
+                _trace(f"attempt {attempt_idx + 1} | generate raised | {attempt_exception}")
             gen_total_ms += int((time.perf_counter() - t) * 1000)
-            last_answer = answer
 
-            # Recompose the guardrail's prompt with tool-fetched content appended
-            # so the judge can verify tool-grounded answers fairly. Without this,
-            # tool-returned READMEs are invisible to the judge and grounded answers
-            # get rejected as "fabrication."
-            if tool_content_for_judge:
-                tool_block = "\n\n## Tool-fetched content available to the model\n\n" + "\n\n---\n\n".join(
-                    f"[{name}({args})]\n{content}"
-                    for name, args, content in tool_content_for_judge
-                )
-                judge_context = context + tool_block
-                sys_prompt_judge_for_attempt = self._composer.compose(
-                    branches, "guardrail", retrieved_context=judge_context
-                )
-            else:
-                sys_prompt_judge_for_attempt = sys_prompt_judge
+            # Guardrail step — skip if generation already failed; otherwise
+            # exceptions here are also treated as a failed attempt.
+            if attempt_exception is None:
+                if tool_content_for_judge:
+                    tool_block = "\n\n## Tool-fetched content available to the model\n\n" + "\n\n---\n\n".join(
+                        f"[{name}({args})]\n{content}"
+                        for name, args, content in tool_content_for_judge
+                    )
+                    judge_context = context + tool_block
+                    sys_prompt_judge_for_attempt = self._composer.compose(
+                        branches, "guardrail", retrieved_context=judge_context
+                    )
+                else:
+                    sys_prompt_judge_for_attempt = sys_prompt_judge
 
-            t = time.perf_counter()
-            evaluation = self._guardrail.evaluate(sys_prompt_judge_for_attempt, question, answer, history)
-            guard_total_ms += int((time.perf_counter() - t) * 1000)
+                _trace(f"attempt {attempt_idx + 1} | guardrail start")
+                t = time.perf_counter()
+                try:
+                    evaluation = self._guardrail.evaluate(sys_prompt_judge_for_attempt, question, answer, history)
+                    _trace(f"attempt {attempt_idx + 1} | guardrail done | acceptable={evaluation.is_acceptable}")
+                except Exception as e:
+                    attempt_exception = f"{type(e).__name__}: {e}"
+                    _trace(f"attempt {attempt_idx + 1} | guardrail raised | {attempt_exception}")
+                guard_total_ms += int((time.perf_counter() - t) * 1000)
+
+            if attempt_exception is not None:
+                attempts.append({
+                    "answer": answer,
+                    "is_acceptable": False,
+                    "guardrail_feedback": f"pipeline call raised: {attempt_exception}",
+                })
+                previous_attempt = {
+                    "answer": answer or "(no answer — exception during generation)",
+                    "feedback": f"previous attempt failed with: {attempt_exception}",
+                }
+                continue
 
             attempts.append({
                 "answer": answer,
@@ -243,4 +293,6 @@ class Pipeline:
             "prompt_hash": prompt_hash,
         })
 
-        return final_answer if final_answer is not None else CANNED_REFUSAL
+        result = final_answer if final_answer is not None else CANNED_REFUSAL
+        _trace(f"run done | {int((time.perf_counter() - t_total) * 1000)}ms total | event={event_type} | return_len={len(result)}")
+        return result

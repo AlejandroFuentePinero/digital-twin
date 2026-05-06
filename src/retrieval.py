@@ -11,8 +11,10 @@ from chromadb import PersistentClient
 from dotenv import load_dotenv
 from litellm import completion
 from openai import OpenAI
-from pydantic import BaseModel, Field
-from tenacity import retry, stop_after_attempt, wait_exponential
+from pydantic import BaseModel, Field, ValidationError
+from tenacity import retry
+
+from _retry_policy import DEFAULT_RETRY, DEFAULT_STOP, DEFAULT_WAIT
 
 load_dotenv(override=True)
 
@@ -24,10 +26,12 @@ REWRITE_MODEL = "openai/gpt-4.1-nano"
 RETRIEVAL_K = 20
 FINAL_K = 10
 
-_wait = wait_exponential(multiplier=1, min=10, max=120)
-_stop = stop_after_attempt(5)
+REQUEST_TIMEOUT_S = 60
+EMBED_TIMEOUT_S = 30
 
-_openai_client = OpenAI()
+# Default OpenAI SDK timeout is ~600s; cap embeddings explicitly so a degraded
+# provider can't hang the whole turn before the LLM call sites run.
+_openai_client = OpenAI(timeout=EMBED_TIMEOUT_S)
 _chroma = PersistentClient(path=DB_PATH)
 collection = _chroma.get_or_create_collection(COLLECTION)
 
@@ -66,7 +70,7 @@ def merge_chunks(primary: list[Chunk], secondary: list[Chunk]) -> list[Chunk]:
     return primary + [c for c in secondary if c.page_content not in seen]
 
 
-@retry(wait=_wait, stop=_stop)
+@retry(wait=DEFAULT_WAIT, stop=DEFAULT_STOP, retry=DEFAULT_RETRY)
 def rewrite_query(question: str, history: list[dict] | None = None) -> str:
     """Rewrite the user's question as a short, search-optimised KB query."""
     history_text = ""
@@ -89,12 +93,14 @@ content from the knowledge base. Focus on specific skills, projects, roles, or t
 in the question. Respond with the query only — no explanation, no punctuation at the end."""
 
     response = completion(
-        model=REWRITE_MODEL, messages=[{"role": "user", "content": prompt}]
+        model=REWRITE_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        timeout=REQUEST_TIMEOUT_S,
     )
     return response.choices[0].message.content.strip()
 
 
-@retry(wait=_wait, stop=_stop)
+@retry(wait=DEFAULT_WAIT, stop=DEFAULT_STOP, retry=DEFAULT_RETRY)
 def rerank(question: str, chunks: list[Chunk]) -> list[Chunk]:
     """Reorder chunks by relevance to the original question."""
     system = (
@@ -116,8 +122,15 @@ def rerank(question: str, chunks: list[Chunk]) -> list[Chunk]:
             {"role": "user", "content": user},
         ],
         response_format=RankOrder,
+        timeout=REQUEST_TIMEOUT_S,
     )
-    order = RankOrder.model_validate_json(response.choices[0].message.content).order
+    raw = response.choices[0].message.content or ""
+    try:
+        order = RankOrder.model_validate_json(raw).order
+    except ValidationError:
+        # Reranker refused or returned malformed JSON — fall back to
+        # retrieval order rather than retrying a guaranteed-fail validation.
+        return chunks
     seen = set()
     safe_order: list[int] = []
     for i in order:

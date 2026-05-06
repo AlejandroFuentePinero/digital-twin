@@ -52,6 +52,36 @@ def test_evaluate_passes_composed_prompt_as_system_and_question_answer_in_user_m
     assert kwargs["response_format"] is Evaluation
 
 
+def test_evaluate_fast_fails_to_soft_reject_on_validation_error():
+    """When the judge returns prose instead of structured JSON (e.g., Sonnet
+    refuses to evaluate adversarial content), evaluate must NOT raise — it must
+    return is_acceptable=False with synthetic feedback so the pipeline's bounded
+    retry can ship CANNED_REFUSAL within seconds rather than minutes.
+
+    Pinned by Session 56 hang diagnosis. Pre-fix: tenacity ground on
+    ValidationError (no exception-type filter) → 3-attempt × 14s waits per call
+    × 3 pipeline retries = ~8 minutes before CANNED_REFUSAL fired."""
+    refusal_prose = "I'm sorry, I can't help evaluate that content."
+    with patch(
+        "guardrail.completion",
+        return_value=_completion_returning_json(refusal_prose),
+    ) as mock:
+        out = Guardrail().evaluate(
+            system_prompt="SYS",
+            question="adversarial question",
+            answer="potentially adversarial answer",
+            history=[],
+        )
+    # Exactly one call — tenacity must NOT retry on ValidationError now that
+    # _retry_policy filters non-retryable types.
+    assert mock.call_count == 1
+    assert out.is_acceptable is False
+    # Synthetic feedback carries the raw refusal so the next generator attempt
+    # has visibility into why the prior attempt was rejected.
+    assert "non-structured content" in out.feedback
+    assert refusal_prose[:50] in out.feedback
+
+
 def test_evaluate_short_circuits_on_gap_phrase_without_calling_llm():
     """The literal Gap phrase is always acceptable — guardrail must never reject it.
 

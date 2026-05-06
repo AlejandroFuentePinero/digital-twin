@@ -17,12 +17,12 @@ from typing import Callable
 
 from litellm import completion
 from pydantic import BaseModel
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry
 
+from _retry_policy import DEFAULT_RETRY, DEFAULT_STOP, DEFAULT_WAIT
 from tool_loop import ModelResponse, ToolCall, ToolSpec
 
-_wait = wait_exponential(multiplier=1, min=10, max=120)
-_stop = stop_after_attempt(5)
+REQUEST_TIMEOUT_S = 90
 
 
 class RegistryEntry(BaseModel):
@@ -143,9 +143,14 @@ def make_litellm_tool_callable(model: str = "openai/gpt-4.1"):
     Retry/wait policy mirrors Generator's for transient API errors.
     """
 
-    @retry(wait=_wait, stop=_stop)
+    @retry(wait=DEFAULT_WAIT, stop=DEFAULT_STOP, retry=DEFAULT_RETRY)
     def model_callable(messages, tools):
-        response = completion(model=model, messages=messages, tools=tools)
+        response = completion(
+            model=model,
+            messages=messages,
+            tools=tools,
+            timeout=REQUEST_TIMEOUT_S,
+        )
         msg = response.choices[0].message
         tool_calls: list[ToolCall] = []
         if getattr(msg, "tool_calls", None):
