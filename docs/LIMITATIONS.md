@@ -35,7 +35,9 @@ The generator sometimes fabricates plausible content rather than emitting the ca
 
 **What Sentinel needs to make this trackable cleanly:** `attempts[*].rejection_reason` field on the interaction log record, with a small enum (`fabrication`, `bridging`, `scope`, `tone`, `multi-turn-coherence`, `other`). Today's `interaction_log.py` carries `attempts[*].guardrail_feedback` (free-text) but no structured reason — so cross-session aggregation requires text classification of the feedback strings. Add the field when Sentinel work begins.
 
-**Canary baseline (Session 42, 2026-05-04, run `run-20260504-121937-9af6fb`):** the 8 gap-aimed canary questions (C006-C009 niche-tech + C019-C022 out-of-scope) produced **3 gap-phrase emissions and 5 answered-instead-of-gapped** events. That's a 62.5% bridging rate on a curated probe set — same shape, different sample frame from the smoke-test trip-wire. Doesn't directly trip the existing trip-wires (which were defined on adversarial-probe sample shapes), but is the cleanest signal yet that the bridging behaviour is the dominant first-attempt response to no-coverage probes. **Phase 5 will read the 5 specific records to decide whether to tighten `rules.GAP_PHRASE` enforcement, add the question shapes to a curated negative-example list, or treat the bridging behaviour as acceptable on certain niche-tech probes** (some bridging may be honest — "I haven't used kdb+/q but I have used time-series databases X, Y" — and the right answer depends per-record).
+**Canary baseline (Session 42, 2026-05-04, run `run-20260504-121937-9af6fb`) — historical, contaminated:** the 8 gap-aimed canary questions (C006-C009 niche-tech + C019-C022 out-of-scope) produced **3 gap-phrase emissions and 5 answered-instead-of-gapped** events on the now-removed mechanism contract (`expected_event_type` / category-defined gap-aim). PRD `#41` slice 4 retired that contract; the post-#45 outcome contract (`outcome_accuracy` / `keyword_coverage`) replaces "did the system emit the gap phrase?" with "was the answer substantively correct?".
+
+**Post-#45 framing (Session 55 re-freeze, run `run-20260505-132248-4aeb15`):** under the outcome contract, residual bridging shows up only as `outcome=answered_with_substance` against an `expected_outcome=gap_acknowledged` corpus row. Session 55 documented this as a single question (CUDA, paraphrased gap without the literal `GAP_PHRASE`) folded into `LIMITATIONS::P17`'s "TECHNICAL paraphrased gap" bucket — the producer rule classifies branch=non-GAP + answer-without-GAP_PHRASE as `answered`, which is the architectural seam, not a generator regression. O1's adversarial-probe trip-wires above remain the live signal for first-attempt fabrication; the canary surface no longer cleanly measures bridging by mechanism.
 
 ---
 
@@ -280,6 +282,14 @@ The `fetch_project_readme` tool fires on the model's discretion — `tool_rules`
 
 **Canary baseline (Session 42, 2026-05-04, run `run-20260504-121937-9af6fb`) — historical, contaminated:** the pre-`#45` baseline reported `tool_uptake_on_warranted(corpus) = 38.5%` on the now-removed mechanism contract. Record-by-record review showed the system was correctly skipping the tool when the KB held the answer — the "low uptake" reading was a contract-design artefact. PRD `#41` slice 4 stripped the contaminated baseline; the post-`#45` re-freeze is the new anchor and uses the outcome contract.
 
+**Session 56 update (2026-05-07) — Phase 5 (a) regression confirms the pattern:** the curated 50-question regression suite (`docs/HUMAN_EVAL_QUESTIONS.md::Phase 5 close-out`) ran 7 initial named-entity drills on TECHNICAL/GENERIC branches: `Walk me through the LLM Price Predictor's QLoRA…`, `How does the Expert Knowledge Worker handle retrieval?`, `What was the largest accuracy gain in AI-JIE…`, `Compare AI-JIE and Expert Knowledge Worker…`, `What is the title of Alejandro's 2026 paper in NCC?`, `Tell me about the AI-JIE project.`, `What percentage of bird species in the GCB 2023 paper showed temperature response?`. **0/7 fired the tool on first drill.** All produced answered/atts=1 from KB chunks alone (or attempts=2 with a pivot to gap-acknowledge, as in the GCB-percentage case). The model under-fires consistently on initial named-entity drills.
+
+**Operator escape pattern (also empirical, Session 56):** drill-down follow-ups fire reliably. *"can you provide some deeper technical details?"* / *"can you provide some more technical details not covered above"* fired the tool 2/2 times on follow-up turns (LLM Price Predictor + Expert Knowledge Worker). The Session 56 `TOOL_RULES` rewrite (lift the trigger condition + add explicit drill-down phrasing) succeeded at making *follow-ups* a reliable trigger; **initial-drill conservatism remains.** Self-reference questions about the chatbot itself (`"How does this Digital Twin classify questions?"`) also fire reliably (1/1 in regression).
+
+**Architecture is sound, behaviour is the ceiling:** today's Session 56 changes opened tool access to TECHNICAL/GAP/GENERIC (`branches.py`) and rewrote `TOOL_RULES` with a precision trigger condition. The structural surface is correct — tool content correctly piped to the guardrail, retry bounded, no fabrication leaks (when the model fabricates from training memory, the guardrail catches it as ungrounded against retrieved context, retry produces gap-acknowledge). The remaining ceiling is gpt-4.1's conservatism on weak signals; further prompt sharpening shows diminishing returns.
+
+**Trip-wire promotion to fix-candidate:** if 5+ real-recruiter sessions in production (post-Phase-7 deploy) hit factual-drill-followed-by-gap-acknowledge that visibly costs credibility within the first month of traffic, promote to fix-candidate (Option C from the Session 56 audit: guardrail-rejection-on-fabrication forces a tool fetch on retry).
+
 ---
 
 ### O6 — Classifier routes specific-paper questions to GENERIC, losing TECHNICAL tool access
@@ -312,7 +322,9 @@ The semantic shape — "give me a fact about a specific named publication / proj
 
 **Companion observability:** Sentinel can surface this as `category=direct_fact AND branch=GENERIC AND classification_confidence < 0.5 AND question_mentions_paper_or_project()` — a boolean signal for misroute-to-fallback patterns. `#34`'s shipped `FlagDetector` doesn't model this shape today (its three detectors are `gap_rate_jump` / `new_cluster` / `repeat_failure`). Post-#48 the closest existing surface is the Failure Feed branch+confidence filter — the operator filters to `branch=GENERIC AND classification_confidence >= 0.5` and reads the `event_type='gap'` records to spot the paper-title misroutes by hand. Pre-#48 the `confident_failure_rate` metric was the headline surface; that metric was removed in Session 48 because its mechanism-shape contract conflated correct gap-acks with misroutes (~62% noise on the live log).
 
-**Canary baseline (Session 42, 2026-05-04, run `run-20260504-121937-9af6fb`):** broader than the original specific-paper observation — `branch_match_rate(corpus) = 78.7%` (11 / 50 canary questions misrouted), with **mean classification confidence 0.873 across the corpus**. The misroutes aren't low-confidence-correctly-floored cases; they're confident-and-wrong. Phase 5 will read the 11 specific records to identify whether the misroute clusters by question shape (paper-title-shaped misroutes only? all-direct-fact misroutes? branch-specific?) and decide between (a) classifier-prompt sharpening on the dominant shape, (b) registering more positive examples, or (c) accepting the misroute when the answer surfaces correctly anyway via GENERIC + retrieval.
+**Canary baseline (Session 42, 2026-05-04, run `run-20260504-121937-9af6fb`) — historical, contaminated:** the pre-`#45` baseline reported `branch_match_rate(corpus) = 78.7%` (11 / 50) at mean confidence 0.873 on the now-removed mechanism contract (`expected_branch` per corpus question). PRD `#41` slice 4 retired `branch_match_rate` along with `expected_branch`; the post-#45 outcome contract measures answer correctness, not classifier mechanism, because a misroute that produces a correct answer (GENERIC + retrieval covers it) is not a user-facing failure.
+
+**Post-#45 framing (Session 55 re-freeze, run `run-20260505-132248-4aeb15`):** `outcome_accuracy = 72%` / `keyword_coverage = 81%` were the headline numbers. Session 55 triaged the misses: the dominant cluster (LOGISTICAL substance / GAP-branch constructive answers tagged by branch identity) is `LIMITATIONS::P17`, the producer-rule architectural seam — *not* a classifier-misroute signal. The original O6 hypothesis (specific-paper questions confidently misrouted to GENERIC) is no longer cleanly measurable on the canary surface; the live signal for it is now post-#45 traffic + the Failure Feed branch+confidence filter described above. If a fresh adversarial probe (Phase 5 thread a) surfaces the paper-title shape, that's the trip-wire; otherwise the trip-wires remain dormant.
 
 ---
 
@@ -574,6 +586,40 @@ This was the deliberate slice-1 design ("branches imply outcomes"). It compresse
 The work is plausibly one PRD's worth (audit doc + producer change + canary-side update + corpus relabel + re-freeze). Estimate: 3-4 sessions, similar in shape to slice 4 of `#41`. **Do not start until a trip-wire fires** — Path A from Session 55 deferred this deliberately.
 
 **Companion observability:** the post-#42 framework treats `outcome_accuracy` as a Tier B shift-detection metric, not a Tier A value-on-band alert. The 72% baseline anchors trajectory; absolute level isn't a gate. This `P17` entry exists so a future maintainer reading "outcome_accuracy 72%" doesn't read it as a defect to fix unilaterally.
+
+---
+
+### O8 — Guardrail mis-flags real content as fabrication when conversation history references a different branch's `profile_sections`
+
+**Status:** Observed (Session 56 — three empirical instances on 2026-05-06 / 2026-05-07).
+
+Each branch's composed system prompt loads only that branch's `profile_sections` (per `branches.py::REGISTRY`). When a multi-turn conversation crosses branches — e.g., turn N routes BEHAVIOURAL (loads `personal_stories`) and turn N+1 routes GENERIC (loads `narrative_summary` + `transfer_principles`, NOT `personal_stories`) — turn N+1's guardrail sees the full conversation history (per `guardrail.py::_format_history`) but cannot verify references to content from a section it didn't load. The model then incorrectly flags real prior-turn content as fabrication, rejects the current answer for "consistency" reasons, and burns the bounded retry budget.
+
+**Three empirical instances (2026-05-06 / 2026-05-07):**
+
+1. **2026-05-06T12:53:19** — TECHNICAL "what percentage of species showed significant responses to temperature" → atts=2. Attempt 1 produced "72%" grounded in tool-fetched README; guardrail rejected for cross-turn consistency ("two turns earlier, the assistant said it didn't have this figure"). Attempt 2 reproduced the same answer and was accepted.
+2. **2026-05-06T23:01:38** — GENERIC "Tell me something not in your CV that defines you" → atts=3 → `event_type=refused` → CANNED_REFUSAL after 42s. Guardrail rejected all 3 attempts citing "the previous turn contains a likely fabrication: a 2024 *Oecologia* paper on herbivory–plant interactions and an equipment failure anecdote." That content is **real Story #4 in `profile.md::personal_stories`** — but GENERIC's composer doesn't load `personal_stories`, so the guardrail had no context to verify it. User retried at 23:06:13; classifier picked BEHAVIOURAL, the same question succeeded immediately on atts=1.
+3. **2026-05-06T23:01:00 series** — same conversation, multi-attempt rejection chain anchored on the same misread of Turn 2's content.
+
+**Why this is logged but not fixed today:**
+
+- All three instances are recoverable: re-asking with slightly different framing tends to route to a branch whose `profile_sections` cover the referenced content (instance 2 — GENERIC → BEHAVIOURAL — confirmed). The user-visible failure is `CANNED_REFUSAL` with the redirect-to-direct-contact message; no fabrication leak, no hang.
+- The candidate fix (instruct the guardrail to evaluate ONLY the current `## Assistant's response`, not critique prior turns in history) has a real trade-off: it disables legitimate cross-turn consistency catches. Instance 1's rejection was actually defensible — the model produced a different answer than the prior turn without obvious tool-grounded justification, and consistency-checking that is a reasonable defense. Disabling it across the board to fix instance 2 is a bad ratio on N=3.
+- The alternative fix (load `personal_stories` in every branch's `profile_sections`) bloats the prompt by ~1000 tokens per turn for branches that don't otherwise need it. Cost-benefit doesn't justify shipping on N=3.
+
+**Trip-wires (any one promotes to fix-candidate):**
+
+1. Real recruiter traffic post-Phase-7 deploy shows **5+ sessions** in the first month where this pattern produced visible CANNED_REFUSAL on a question that was clearly answerable.
+2. The pattern surfaces specifically on questions about Alejandro's identity or origin (`personal_stories::Story 6` — the gated grandmother / rural Spain origin) AND mis-routes to GENERIC, with users reporting the cold-start "I'm sorry" reply as off-putting.
+3. Sentinel surfaces a recurring shape — same question text producing `event_type=refused` then `event_type=answered` on retry, indicating users are working around the system.
+
+**Action when a trip-wire fires:**
+
+- **Preferred:** tighten the `GUARDRAIL_FRAMING` rule (`composer.py`) to evaluate only the current response. ~1 sentence change. Trade-off: lose legitimate cross-turn consistency catches; ship if the trip-wire data shows that trade-off is worth it.
+- **Alternative (heavier):** add a "shared sections" load list that every branch composes alongside its branch-specific sections. Adds prompt size to all branches but keeps cross-turn consistency catches intact.
+- **Heavier still:** modify `pipeline.py` to detect cross-branch conversation history and selectively inject relevant `profile_sections` from prior-turn branches into the current guardrail prompt. Overkill for portfolio scope.
+
+**Companion observability:** Sentinel's Failure Feed surfaces refused-then-answered-on-retry sessions (filter by event_type=refused + look for same question_id within 5 minutes). The shape isn't currently tracked as its own metric; if it becomes a recurring pattern, add a `cross_branch_consistency_misfire_rate` derived metric.
 
 ---
 

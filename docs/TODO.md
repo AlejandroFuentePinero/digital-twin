@@ -3,13 +3,14 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-06 (Session 55 — Canary baseline re-frozen (`run-20260505-132248-4aeb15`); PRD `#41` closed; producer-rule architectural seam logged as `LIMITATIONS::P17`; bundled audit polish (F1/H/G1) shipped. Phase 5 unblocked.)
-**Current phase:** **Phase 5 — break the live system + recruiter eval.** Observability rework complete; canary baseline frozen; dashboard trustworthy; system publishable. Suite at **537 passing**.
+**Last updated:** 2026-05-07 (Session 56 — Phase 5 (a) closed. 50-question regression verified: hang fix shipped, tool architecture opened to TECHNICAL/GAP/GENERIC, zero content additions per data-gated default. Two persisting watch-items: `P8` initial-drill tool-firing rate; new `O8` guardrail cross-branch evaluation gap. Issue `#4` closed.)
+**Current phase:** **Phase 6 — HuggingFace Dataset migration** (issue `#5`). Suite at **539 passing**.
 
 **Locked next-step order:**
-1. **Phase 5 thread (a)** — local probe session. Try recruiter-shaped probes, behavioural questions, gap questions, edge cases against the live system + Sentinel. Identify actual failure modes (informed by post-baseline canary trajectory + live-tab signals once log volume grows).
-2. **Phase 5 thread (b)** — recruiter eval pass. Run the existing eval harness with a recruiter-shape question set; compare against v4 baseline (MRR 0.866 / accuracy 4.56). Optional KB enrichment if probes surface specific-fact gaps that cost user-facing credibility.
-3. **Iterate dashboard from Phase 5 findings**, not from polish instinct. Re-tune Tier B bands (7%/15% placeholders) once a month of post-baseline traffic accumulates.
+1. **Phase 6 — HF Dataset migration** (issue `#5`). `LogReader.HFReader` / `LogWriter.HFWriter` implementation; buffered append; schema versioning carry-through; HF token in env / Spaces secrets.
+2. **Phase 7 — HF Spaces deploy** (issue `#6`). Package `app.py`, configure secrets, smoke-test all 5 branches + tool fires + contact form, embed Space iframe on portfolio site.
+3. **Iterate from real-recruiter traffic.** Both Phase 5 watch-items (`P8` initial-drill firing + `O8` cross-branch guardrail) resolve into fix-candidate-or-accept once production traffic accumulates ~1 month of data.
+4. **Tier B band tuning** (7%/15% placeholders) — recalibrate after a month of post-deploy traffic.
 
 **Deferred (gated on Phase 5 trip-wires):**
 - **Producer-rule v2** (`LIMITATIONS::P17`) — branch-identity-canonical conflation surfaced by Session 55 freeze. Defer until Phase 5 traffic shows the cost. New PRD if/when a trip-wire fires.
@@ -195,24 +196,19 @@ Cohort cross-tabs (e.g. conversion-by-branch); CSV / JSONL export; pagination; c
 
 ---
 
-## Phase 5 — Break the live system
+## Phase 5 — Break the live system  ✅ closed (Session 56, 2026-05-07)
 
-Two threads; the canary baseline gave us a head start on thread (b).
+**(a) Adversarial probe — data-gated additions (default zero):**
+- [x] Local probe session, 50-question curated regression suite executed (`docs/HUMAN_EVAL_QUESTIONS.md::Phase 5 close-out`). 54 records logged, 0/54 exceeded 60s wall-clock.
+- [x] Identify actual failure modes from log review. Two persisting patterns: `LIMITATIONS::P8` (0/7 tool fire on initial named-entity drills) + new `LIMITATIONS::O8` (guardrail mis-flags real content as fabrication on cross-branch conversation history).
+- [x] **Default expectation honoured: zero new content added.** The 7 stories in `personal_stories`, 5 entries in `gap_inventory`, and the deflection rule held up across every dimension the regression probed.
+- [x] Two structural fixes shipped instead: Session 56 hang fix (retry-policy filter + exception handling + timeouts) and tool architecture rewire (open `fetch_project_readme` to TECHNICAL/GAP/GENERIC + rewrite `TOOL_RULES`).
+- [x] v5 eval skipped — no eval-relevant KB content changed. v4 (MRR 0.866 / accuracy 4.56) stays the baseline.
+- [x] Issue `#4` closed; `needs-triage` stripped.
 
-**(a) Original adversarial probe + KB additions:**
-- [ ] Local probe session — try recruiter probes, behavioural questions, gap questions, edge cases.
-- [ ] Identify actual failure modes (informed by Sentinel signals when log is non-trivial).
-- [ ] Add 1–2 STAR-format stories to `profile.md`'s `personal_stories` section — only ones Alejandro would say verbatim live.
-- [ ] Add ≤10 KB-grounded recruiter eval questions (only after corresponding KB content exists). Run v5 eval.
+**(b) Canary baseline read — superseded by post-#45 contract:** the original three signals (branch-misroute / tool-uptake-on-warranted / bridging-instead-of-gap) were defined on a mechanism contract — `expected_branch` / `requires_tool` / `expected_event_type` — that PRD `#41` slice 4 retired in favour of an outcome contract (`outcome_accuracy` / `keyword_coverage` / `red_flag_rate`). Session 55's re-freeze (`run-20260505-132248-4aeb15`) ran the new contract and triaged the result there: 39 / 42 misses are the architectural seam logged as `LIMITATIONS::P17` (deferred until Phase 5 traffic shows the cost); 3 / 42 are acceptable model variance. **No live actions remain on thread (b).** Re-validation against the new baseline (Session 56, this entry) confirmed no genuine generator-side residue: walk-through-shape TECHNICAL records that skipped `fetch_project_readme` produced recruiter-quality answers from KB chunks alone — the system's "I have what I need" judgment is correct, and the post-#45 outcome contract scores those records correctly via `outcome_accuracy`.
 
-**(b) Evaluate canary baseline output (Session 42 — free data):** the first canary run surfaced three real signals before any adversarial probing. Read the actual records, decide which patterns to fix at rule / prompt / KB level, re-run the canary as the verification surface.
-
-- [ ] **Branch-misroute records (11/50, `branch_match_rate=78.7%`).** Read each misrouted question's record. Cluster by shape — paper-title-shaped, project-named-but-not-deep, behavioural-shaped, etc. Decide between (i) classifier-prompt sharpening on the dominant shape, (ii) registering more positive examples per branch in the prompt, (iii) accepting the misroute when the GENERIC+retrieval path produces the correct answer anyway. `LIMITATIONS::O6` updated with the canary numbers.
-- [ ] **Tool-uptake-on-warranted records (8/~13 warranted skipped, `tool_uptake_on_warranted=38.5%`).** Read each warranted-but-skipped record. Test the LLM advisor's candidate `tool_rules` language ("if visitor names a specific project, default to fetch unless unambiguously general"). Re-run canary; verify uptake on warranted moves up without false-positive overfiring on general TECHNICAL probes. `LIMITATIONS::P8` trip-wire #2 fires on the canary surface.
-- [ ] **Bridging-instead-of-gap records (5/8 gap-aimed answered instead, gap rate 6%).** Read each bridging response. Decide per-record: tighten `rules.GAP_PHRASE` enforcement (some bridging *is* honest — "I haven't used kdb+/q but I have used time-series databases X" — and the right answer depends on the specific shape), add the question shape to a curated negative-example list, or accept the bridging behaviour. `LIMITATIONS::O1` updated with the canary numbers.
-- [ ] **After any fix, re-run canary** (`uv run python src/canary_runner.py`, no `--freeze-baseline`) and check the three numbers move in the right direction. Re-baseline only when the fixed state is the new "correct" state.
-
-The canary baseline is the verification surface for Phase 5 fixes. The adversarial probe is the discovery surface for new failures the corpus doesn't cover.
+The canary baseline is now a Tier B trajectory anchor (deltas from `run-20260505-132248-4aeb15`), not a Phase 5 work surface. The adversarial probe (thread a) is the discovery surface for new failures.
 
 ---
 
