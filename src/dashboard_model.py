@@ -217,18 +217,27 @@ class DashboardModel:
         return len(sessions_offered & sessions_provided) / len(sessions_offered)
 
     @property
-    def technical_tool_call_rate(self) -> float | None:
-        """Share of TECHNICAL turns that invoked at least one tool call.
+    def tool_calls_by_branch(self) -> dict[str, float]:
+        """Distribution of tool-firing turns across branches:
+        ``{"TECHNICAL": 0.60, "GAP": 0.30, "GENERIC": 0.10}``.
 
-        Descriptive — direction-of-change orientation, not a target. Pre-#42
-        was named ``technical_tool_uptake_rate``; "uptake" implied a target the
-        system isn't trying to hit (PRD #41 slice 3). Denominator is "all
-        TECHNICAL", not "TECHNICAL warranting a tool" — see LIMITATIONS::P8.
-        """
-        technical = [r for r in self.records if r.branch == "TECHNICAL"]
-        if not technical:
-            return None
-        return sum(1 for r in technical if r.tool_calls) / len(technical)
+        For all turns where ≥1 tool call fired, what fraction came from each
+        branch. Numerator per branch: turns with non-empty ``tool_calls`` AND
+        ``branch=X``. Denominator: total turns with non-empty ``tool_calls``.
+        Fractions sum to 1.
+
+        Replaces the pre-Session-56 ``technical_tool_call_rate`` after the
+        tool was made available across TECHNICAL, GAP, and GENERIC (it's no
+        longer meaningful to look at TECHNICAL alone). Descriptive — shows
+        where tool firing is happening, not whether it's happening at the
+        right rate. Returns ``{}`` when no records have fired the tool."""
+        fired = [r for r in self.records if r.tool_calls]
+        if not fired:
+            return {}
+        counts: dict[str, int] = {}
+        for r in fired:
+            counts[r.branch] = counts.get(r.branch, 0) + 1
+        return {b: c / len(fired) for b, c in sorted(counts.items())}
 
     def outcome_accuracy(self, corpus) -> float | None:
         """Fraction of canary records whose derived outcome matches the corpus's
@@ -286,8 +295,8 @@ class DashboardModel:
     @property
     def tool_call_count(self) -> int:
         """Total number of tool invocations across all records — volume signal
-        in the Tool use block. Pairs with ``technical_tool_call_rate``
-        (rate) and ``tool_call_success_rate`` (quality)."""
+        in the Tool use block. Pairs with ``tool_calls_by_branch``
+        (distribution) and ``tool_call_success_rate`` (quality)."""
         return sum(len(r.tool_calls) for r in self.records)
 
     @property
@@ -427,8 +436,10 @@ METRIC_GETTERS: dict[str, Callable[["DashboardModel"], float | None]] = {
     "mean_turns_per_session": lambda m: m.mean_turns_per_session,
     "contact_offer_rate": lambda m: m.contact_offer_rate,
     "contact_conversion_rate": lambda m: m.contact_conversion_rate,
-    # Tool use
-    "technical_tool_call_rate": lambda m: m.technical_tool_call_rate,
+    # Tool use — tool_calls_by_branch is intentionally NOT here. It returns
+    # a dict (per-branch share of tool-firing turns), not a single plottable
+    # value. Same pattern as ``attempts_distribution``: shown as a single
+    # inline row in the Metrics tab, no chart, no time-series.
     "tool_call_success_rate": lambda m: m.tool_call_success_rate,
     # Latency
     "latency_p95_total": lambda m: m.latency_percentiles("total").get(95),

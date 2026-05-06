@@ -428,24 +428,33 @@ def test_for_window_propagates_provided_session_ids_to_filtered_model():
     assert windowed.contact_conversion_rate == 0.5
 
 
-def test_technical_tool_call_rate_is_tool_call_share_of_technical_turns():
-    """technical_tool_call_rate = count(branch=TECHNICAL & tool_calls!=[]) / count(branch=TECHNICAL).
-    Descriptive — rate at which TECHNICAL turns invoke a tool; None when no TECHNICAL turns.
-    Renamed from ``technical_tool_uptake_rate`` in PRD #41 slice 3 — "uptake" implied a target
-    the system isn't trying to hit; "call rate" is purely descriptive (parallel to
-    ``tool_call_count`` and ``tool_call_success_rate``)."""
+def test_tool_calls_by_branch_distributes_tool_firing_turns_across_branches():
+    """tool_calls_by_branch returns the per-branch share of *tool-firing* turns:
+    numerator per branch = turns with non-empty tool_calls AND branch=X;
+    denominator = total turns with non-empty tool_calls. Replaces the
+    pre-Session-56 ``technical_tool_call_rate`` after the tool was opened to
+    TECHNICAL/GAP/GENERIC (a single TECHNICAL-only rate stopped being meaningful).
+    Empty dict when no records have fired the tool."""
+    tc_call = [{"name": "fetch_project_readme", "args": {}, "status": "success", "attempt_index": 0}]
     model = DashboardModel(
         [
-            _r(branch="TECHNICAL", tool_calls=[{"name": "fetch_project_readme", "args": {}, "status": "success", "attempt_index": 0}]),
-            _r(branch="TECHNICAL", tool_calls=[{"name": "fetch_project_readme", "args": {}, "status": "success", "attempt_index": 0}]),
-            _r(branch="TECHNICAL", tool_calls=[]),
-            _r(branch="GENERIC", tool_calls=[]),  # excluded — not a TECHNICAL turn
+            _r(branch="TECHNICAL", tool_calls=tc_call),
+            _r(branch="TECHNICAL", tool_calls=tc_call),
+            _r(branch="TECHNICAL", tool_calls=tc_call),  # 3 fires from TECHNICAL
+            _r(branch="GAP",       tool_calls=tc_call),
+            _r(branch="GAP",       tool_calls=tc_call),  # 2 fires from GAP
+            _r(branch="TECHNICAL", tool_calls=[]),       # excluded — no fire
+            _r(branch="BEHAVIOURAL", tool_calls=[]),     # excluded — no fire
         ]
     )
-    assert model.technical_tool_call_rate == 2 / 3
+    dist = model.tool_calls_by_branch
+    assert dist == {"GAP": 2 / 5, "TECHNICAL": 3 / 5}
+    # Branches with zero fires don't appear; ones that fired sum to 1.0
+    assert sum(dist.values()) == pytest.approx(1.0)
+    assert "BEHAVIOURAL" not in dist
 
-    no_technical = DashboardModel([_r(branch="GENERIC"), _r(branch="GAP")])
-    assert no_technical.technical_tool_call_rate is None
+    no_fires = DashboardModel([_r(branch="TECHNICAL", tool_calls=[]), _r(branch="GAP", tool_calls=[])])
+    assert no_fires.tool_calls_by_branch == {}
 
 
 def test_tool_call_success_rate_is_share_of_tool_calls_marked_success():

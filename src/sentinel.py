@@ -1227,7 +1227,6 @@ FRIENDLY_BANNER_LABELS: dict[str, str] = {
     "mean_turns_per_session":       "Avg questions per session",
     "turns_per_session_median":     "Conversation depth",
     "contact_offer_rate":           "Contact form offered",
-    "technical_tool_call_rate":     "Tool calls per TECHNICAL turn",
 }
 
 
@@ -1374,11 +1373,11 @@ METRIC_SPECS: list[tuple[str, list[tuple]]] = [
     ]),
     ("Tool use", [
         ("Tool calls (count)",         None,                          lambda m: m.tool_call_count, str),
-        # technical_tool_call_rate is Tier B post-#48 — shift-detected,
-        # not threshold-alerted. The denominator caveat (LIMITATIONS::P8)
-        # is what kept it out of THRESHOLDS; the new tier framework is
-        # explicit about it.
-        ("Tool calls / TECHNICAL turn", "technical_tool_call_rate",   lambda m: m.technical_tool_call_rate, _fmt_pct),
+        # tool_calls_by_branch (Session 56) replaced technical_tool_call_rate
+        # after the tool was opened to TECHNICAL/GAP/GENERIC. Distribution
+        # metric (sums to 100% of tool-firing turns); descriptive — not a
+        # tiered alert.
+        ("Tool calls by branch",       None,                          lambda m: m.tool_calls_by_branch, _fmt_attempts_distribution),
         ("Tool-call success rate",     "tool_call_success_rate",      lambda m: m.tool_call_success_rate, _fmt_pct),
     ]),
     ("Latency", [
@@ -1427,7 +1426,7 @@ METRIC_GLOSSARY: dict[str, str] = {
     "Contact-conversion rate":                             "Share of offered sessions that submitted the form — joined session-level on contacts.jsonl.",
     # Tool use
     "Tool calls (count)":                                  "Total fetch_project_readme invocations across the window — volume signal.",
-    "Tool calls / TECHNICAL turn":                         "Rate of TECHNICAL turns that invoked at least one tool call — descriptive direction-of-change orientation, not a target. Denominator is all TECHNICAL turns (LIMITATIONS::P8); the canary tab carries the warranted-only counterpart.",
+    "Tool calls by branch":                                "Distribution of tool-firing turns across branches — fractions sum to 100%. Numerator per branch: turns with at least one tool call AND branch=X. Denominator: total turns with a tool call. Replaced ``Tool calls / TECHNICAL turn`` (Session 56) after ``fetch_project_readme`` was opened to TECHNICAL/GAP/GENERIC. Descriptive shape metric — not threshold-alerted.",
     "Tool-call success rate":                              "Fraction of tool invocations that returned successfully — should be ~100% for local file reads.",
     # Latency
     "classifier":                                          "p50 | p95 | share of total p95 for the classifier stage — typical 1s, p95 ≈ 1.7s; gpt-4.1-nano cached.",
@@ -2519,7 +2518,6 @@ METRIC_LABELS: dict[str, str] = {
     "low_confidence_rate": "Low-confidence rate (<0.7)",
     "mean_classification_confidence": "Classifier mean confidence",
     "latency_p95_total": "Total latency p95",
-    "technical_tool_call_rate": "Tool calls / TECHNICAL turn",
     "tool_call_success_rate": "Tool-call success rate",
     "contact_conversion_rate": "Contact-conversion rate",
     "contact_offer_rate": "Contact-offer rate",
@@ -2537,7 +2535,7 @@ THEMATIC_BLOCKS: dict[str, list[str]] = {
         "mean_turns_per_session", "turns_per_session_median",
         "contact_offer_rate", "contact_conversion_rate",
     ],
-    "Tool use": ["technical_tool_call_rate", "tool_call_success_rate"],
+    "Tool use": ["tool_call_success_rate"],
     "Latency": ["latency_p95_total"],
 }
 
@@ -2570,7 +2568,6 @@ METRIC_UNITS: dict[str, str] = {
     "retry_exhausted_rate": "pp",
     "answered_with_substance_rate": "pp",
     "low_confidence_rate": "pp",
-    "technical_tool_call_rate": "pp",
     "tool_call_success_rate": "pp",
     "contact_conversion_rate": "pp",
     "contact_offer_rate": "pp",

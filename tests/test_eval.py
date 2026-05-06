@@ -506,7 +506,11 @@ def test_eval_answer_returns_answer_result_generated_and_classification():
     result so the runner can record per-question branch metadata."""
     docs = [make_doc("ecology methods at JCU")]
     test = make_test(keywords=["ecology"])
-    cls = _stub_classifier(labels=["GENERIC"], confidence=0.88)
+    # BEHAVIOURAL has tools=[] so eval_answer takes the bare-generator path —
+    # the test stubs _generator.generate, not the tool model callable. (Post-
+    # Session 56 the tool is also available in TECHNICAL/GAP/GENERIC; staying
+    # on BEHAVIOURAL keeps this test focused on the non-tool dispatch path.)
+    cls = _stub_classifier(labels=["BEHAVIOURAL"], confidence=0.88)
     gen = MagicMock()
     gen.generate.return_value = "Alejandro did tropical ecology at JCU."
     with patch("run_eval.fetch_context", return_value=docs), \
@@ -517,5 +521,5 @@ def test_eval_answer_returns_answer_result_generated_and_classification():
     assert isinstance(ans, AnswerResult)
     assert isinstance(classification, ClassifierResult)
     assert generated == "Alejandro did tropical ecology at JCU."
-    assert classification.labels == ["GENERIC"]
+    assert classification.labels == ["BEHAVIOURAL"]
     assert ans.accuracy == pytest.approx(4.5)

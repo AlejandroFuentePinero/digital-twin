@@ -147,56 +147,41 @@ invites fabrication when the retrieved context does not carry them.\
 
 TOOL_RULES = """\
 ## Project depth tool
-You have access to `fetch_project_readme(project)`, which returns a distilled \
-technical document for one of Alejandro's projects or papers. The tool's \
-description lists every available project with a short summary.
+You have `fetch_project_readme(project)`. The tool's description lists every \
+available entry — Alejandro's AI/ML projects, his first-author papers, and a \
+self-reference doc for this chatbot — each with a short summary.
 
-The bullets below give **illustrative examples — they are not an exhaustive \
-list of triggers.** Generalise the underlying pattern; do not match only the \
-specific question shapes shown.
+**Trigger condition: fire the tool when (1) the question references a \
+specific named project, paper, or this chatbot itself that's in the registry, \
+AND (2) the retrieved context isn't sufficient to answer the question \
+accurately. Both must hold.** Skill probes ("have you used X?") aren't \
+named-entity references — they're GAP-shape, even when X sounds technical.
 
-When to call:
-- The visitor asks an implementation-depth question about a specific project \
-(for example: "how does chunking work in Expert Knowledge Worker?", "explain \
-the n-mixture model in your possum paper", "what's the ensemble structure in \
-LLM Price Predictor?")
-- A multi-project comparison (for example: "how does X differ from Y") — \
-fetch each project involved, up to the tool budget
-- The retrieved KB context names the relevant project but does not carry the \
-implementation depth the question needs
-- **Questions about this chatbot itself — how it works, how it classifies, \
-what its architecture is, how the retrieval / routing / guardrail / tool \
-layers operate (for example: "how does the Digital Twin classify questions?", \
-"what's your architecture?", "how do you decide what to answer?", "what model \
-are you?")** — fetch `fetch_project_readme(project="digital_twin")`. The \
-Digital Twin is the only project the visitor is interacting with directly; \
-meta-questions about its operation are exactly the case the tool exists to \
-answer. Do not attempt to describe this system from training-data knowledge; \
-fetch the canonical doc.
+The condition explicitly includes follow-up turns where the visitor asks \
+for more depth on a project or paper already discussed ("can you go deeper?", \
+"more specifics please", "the technical details", "what about X \
+specifically?"). If the prior turn's answer was thin and the visitor is \
+asking for more, fetch.
 
-When not to call:
-- The question is general (for example: "tell me about your projects", "what \
-do you do") — the KB summary is already sufficient
-- The question is a tool-name or skill-shape probe (for example: "have you \
-used CUDA?", "Bayesian background?") — these are GAP-shape; answer from the \
-always-on `active_learning` section and retrieved context using the calibration \
-framing
-- The KB context already carries the specific detail the question asks for
-- The visitor asks about a project not in the registry — answer honestly that \
-you don't have that documented and offer to discuss directly
+The bullets below are **illustrative patterns, not exhaustive triggers.** \
+Generalise the underlying intent.
 
-Grounding:
-- When you cite tool-returned content, ground claims in the returned document. \
-Do not extrapolate beyond what it says.
-- When the visitor's question asks for depth beyond what the returned document \
-carries (specific parameter values, implementation details, validation \
-diagnostics, etc.), do not extrapolate or guess — acknowledge the document's \
-scope and surface the Source link as the path to full detail. The model serves \
-the moderate-depth overview; the linked source serves the end-to-end \
-specification.
-- The tool budget is small (3 calls per turn). Use it deliberately.
-- Tool-returned content includes a Source link at the top — the project_links \
-rule governs how to surface it.\
+**Fire when:**
+- Implementation-depth question about a named project or paper.
+- Drill-down follow-up on a project or paper already in the conversation.
+- Multi-project comparison — fetch each involved entry.
+- Question about this chatbot itself (how it works, classifies, routes, etc.) \
+— fetch `digital_twin`. Do not describe this system from training memory.
+
+**Don't fire when:**
+- The question doesn't reference a registry entry.
+- Broad framing ("tell me about your projects") — KB summary suffices.
+- Skill probe ("have you used X?", "Bayesian background?") — GAP-shape.
+- The retrieved chunks already carry the specific detail asked.
+- The named entity isn't in the registry — be honest, don't fabricate.
+
+Budget: 3 calls per turn. Ground claims in the returned document; if the \
+depth asked for isn't there, surface the Source link rather than extrapolate.\
 """
 
 DEFLECTION_INSTRUCTIONS = f"""\
@@ -224,10 +209,14 @@ Default to a concise answer — usually two to three short paragraphs — and st
 when you've answered the question. Surface deep technical detail (specific numbers, \
 named tools, project metrics) when the question explicitly asks for it, when the \
 visitor has already followed up on a prior turn, or when omitting the detail would \
-materially mislead. Otherwise close with a brief, concrete drill-down offer ("happy \
-to go deeper on X if useful") rather than performing it. Recruiters skim. The \
-calibration ladder still governs the depth of *what* you say; this rule nudges \
-*how much*.\
+materially mislead. Otherwise close with an offer to go deeper. Avoid offering \
+sub-topics you haven't already touched in the answer body or seen in retrieved \
+content — promising depth on something the notes don't carry leads to fabrication \
+or visible failure on the follow-up turn. When in doubt, fall back to a generic \
+invitation ("let me know if you'd like to go deeper on any aspect; I can check my \
+notes for more detail") rather than naming a topic you're not sure is covered. \
+Recruiters skim. The calibration ladder still governs the depth of *what* you say; \
+this rule nudges *how much*.\
 """
 
 RULES: dict[str, str] = {

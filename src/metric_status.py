@@ -90,7 +90,6 @@ TIER_B_METRICS: frozenset[str] = frozenset({
     "mean_turns_per_session",
     "turns_per_session_median",
     "contact_offer_rate",
-    "technical_tool_call_rate",
     "answered_with_substance_rate",
 })
 
