@@ -5,6 +5,89 @@
 
 ---
 
+## Session 57 (2026-05-07) — Phase 6 slice A (#46) shipped: buffered HF writer + reader round-trip
+
+**Status:** First slice of Phase 6 (HF Dataset migration, issue `#5`) shipped. Five new pieces — `LogBuffer`, `HFLogWriter`, `HFLogReader`, the `make_log_writer()` factory, and the auto-start/atexit lifecycle — give the agent an end-to-end production log path: `append → buffer → background flush → HF Dataset → HFLogReader.read() → InteractionRecord`. Issue `#46` closed; Slices B–E (`#47`–`#50`) untouched. Suite at **567 passing** (+28 from Session 56's 539: 16 in `test_hf_log_writer.py` + 7 in `test_log_reader.py` + 6 in `test_interaction_log.py` − 1 deleted Phase-6-stub test) plus 1 opt-in integration test gated on `HF_INTEGRATION_TEST=1`.
+
+### What shipped
+
+**1. `LogBuffer` (in-memory + disk-backed at `data/logs/.hf_buffer.jsonl`).**
+
+Pure-data accumulator with a JSONL fallback. The disk file exists exactly so an unflushed buffer survives a Space restart — a new instance pointed at the same path picks the records up. `flush()` is atomic across both layers (in-memory list reset + disk file truncated + `last_flush_monotonic` reset). Already gitignored via the parent `data/logs/` rule.
+
+**2. `HFLogWriter` (non-blocking append, size-or-time flush, group-by-UTC-date commits, append-don't-overwrite).**
+
+Hot path: `append(record)` writes only to `LogBuffer` — no `huggingface_hub` call. Flush policy: `size >= FLUSH_BATCH_SIZE=50` OR `elapsed >= FLUSH_INTERVAL_SECONDS=600`. Each flush groups records by UTC date, fetches the existing `logs/YYYY-MM-DD.jsonl` from the dataset (treating `EntryNotFoundError` / `FileNotFoundError` as empty), concatenates, and re-uploads — so a same-day re-flush never wipes earlier flushes. Failures are logged at ERROR level and leave the buffer untouched for the next attempt — flush is broad-`except` precisely because we never want a network blip to fail the per-turn pipeline.
+
+**3. Background flush thread + clean shutdown.**
+
+`start()` spawns a daemon thread that polls `maybe_flush()` at `poll_interval_seconds=1.0` (real wall-clock via `Event.wait`). The poll loop uses real time but `maybe_flush` consults the **injected** clock — that split is what lets unit tests skip ahead through the 10-minute interval without actually sleeping. `stop()` sets the shutdown event, joins the thread, then issues one final flush so a clean shutdown ships any straggler records.
+
+**4. `HFLogReader` (per-day file download + read-side dedup).**
+
+Lists the dataset repo, filters to `^logs/(\d{4}-\d{2}-\d{2})\.jsonl$`, prunes to the days-window if requested, downloads each, and parses through the same `_smart_normalize_event_type` path the local reader uses (so pre-v4 records carrying `GAP_PHRASE` still upgrade to `event_type="gap"` on read). Dedup keys on `(session_id, turn_index, run_id, replicate_index)` — canary fields default `None` for live records. The read-side is the slice's **single dedup choke point**: any write-side duplication from a retried-after-ambiguous-failure flush collapses on read. Two canary records with the same session/turn but different `replicate_index` are correctly preserved as distinct (replicates are the unit of the canary corpus, not a flush retry).
+
+**5. `make_log_writer()` factory + auto-start lifecycle.**
+
+`DIGITAL_TWIN_LOG_BACKEND=local` (default) → file-backed `LogWriter`. `=hf` → `HFLogWriter` pointed at `HF_DATASET_REPO`, with `start()` called and `atexit.register(writer.stop)` so callers don't manage lifecycle. Misconfiguration (`=hf` without `HF_DATASET_REPO`, or any unknown value) raises at startup rather than silently degrading. `auto_start=False` is an escape hatch for tests.
+
+| File | Change |
+|---|---|
+| `src/hf_log_writer.py` (new, ~190 lines) | `LogBuffer` + `HFLogWriter` + background poller + `_utc_date_of` helper |
+| `src/log_reader.py` | `HFReader` stub (NotImplementedError) replaced with real `HFLogReader`; backward-compat alias `HFReader = HFLogReader` retained for any in-flight imports; new `_dedupe_by_identity_key` + `_parse_jsonl_to_records` extracted from `LocalReader` so both backends share the smart-normalize path |
+| `src/interaction_log.py` | New `make_log_writer()` factory keyed on `DIGITAL_TWIN_LOG_BACKEND`; `auto_start=True` default starts the background thread + registers `atexit` stop; `auto_start=False` for tests |
+| `src/app.py` | Threaded through `make_log_writer()` (was `LogWriter()`) — production wiring for the factory |
+| `src/system_map.py` | `hf_log_writer` registered under `"Logging"` (forcing-function test in `test_system_map.py` enforces this) |
+| `pyproject.toml` + `uv.lock` | `huggingface-hub>=0.27.0` (was already transitive at 0.35.3 via anthropic; pin makes it direct) |
+| `tests/test_hf_log_writer.py` (new, ~340 lines) | 16 unit tests covering LogBuffer (append/flush/disk-persistence/is_full/clock), HFLogWriter (non-blocking append, size + interval triggers, group-by-day, flush-failure preservation, append-don't-overwrite), background thread (size-trigger fires, time-trigger fires with mocked clock, stop-final-flush) + 1 opt-in integration test gated on `HF_INTEGRATION_TEST=1` (writes a uuid-stamped record, reads it back from `Alejandrofupi/digital-twin-logs`) |
+| `tests/test_log_reader.py` | +7 tests for `HFLogReader` (download-and-parse, dedup-on-identity-key, canary-replicates-distinct, days-window-pruning-files-not-records, empty-repo, skip-non-log-paths, most-recent-first sort); `test_hf_reader_raises_not_implemented_until_phase_6` deleted (stub became real) |
+| `tests/test_interaction_log.py` | +6 tests for `make_log_writer` factory (default-local, explicit-local, hf returns HFLogWriter, hf-without-HF_DATASET_REPO raises, unknown-backend raises, auto-start + atexit registered) |
+
+### Decisions
+
+**1. Read-side dedup as the single choke point.**
+
+The HF Dataset commit API is "fetch existing → concatenate → upload" — there's a non-trivial window where a network blip could leave us unsure whether a flush succeeded. The clean answer: don't try to be exactly-once on the write side. Tolerate write-side duplication; collapse it on read. Key on `(session_id, turn_index, run_id, replicate_index)` (canary fields default `None`); first occurrence wins so the dedup is order-stable. This is also why the integration test asserts `len(matched) == 1` even though we ran the round-trip from a stateful repo.
+
+**2. Background thread split: real-time polling, mockable trigger evaluation.**
+
+The poll loop uses `threading.Event.wait(poll_interval_seconds=1.0)` (real wall-clock). The trigger evaluation inside `maybe_flush` consults the **injected** `clock` (default `time.monotonic`). That split lets unit tests inject a fake clock that jumps 600s ahead without the test actually sleeping for 600s — the time-trigger test runs in <1 second of wall-clock while still exercising the real interval logic. The size-trigger test similarly bumps the buffer to threshold and waits for the next poll tick (~10ms in tests, 1s in prod).
+
+**3. Auto-start in the factory, not in `app.py`.**
+
+The factory returns a writer with the background thread already running and `atexit.register(writer.stop)` already wired. App code stays the same one-liner (`make_log_writer()`). Two reasons: (a) the daemon-thread lifecycle is a property of the writer, not the app — encapsulating it in the factory avoids leaking lifecycle concerns into call sites; (b) a future second call site (e.g., a CLI tool that drops a record) gets the same lifecycle for free. `auto_start=False` is the escape hatch for tests that want synchronous behaviour.
+
+**4. Buffer preserved on flush failure (broad `except`).**
+
+`HFLogWriter.flush` catches `Exception` and logs at ERROR. This is deliberate broad-except: a flush failure must never propagate up the per-turn pipeline (would fail the user-facing turn over a logging issue). Buffer is untouched on failure, so the next size/time trigger re-tries. Worst case under sustained HF-down: buffer grows on disk indefinitely — acceptable for a portfolio-scale app, with the gitignored `.hf_buffer.jsonl` as the recovery surface.
+
+**5. `HFReader` stub → real `HFLogReader` + backward-compat alias.**
+
+The Phase-6 stub at `log_reader.py:78` raised `NotImplementedError("Phase 6")`. Replaced with the real implementation, renamed to `HFLogReader` to mirror `HFLogWriter`. `HFReader = HFLogReader` alias retained so any in-flight imports keep working — Sentinel doesn't currently import it, so the alias is belt-and-braces. Stub-NotImplementedError test deleted.
+
+**6. Out-of-band: HF dataset repo created.**
+
+Despite the issue body saying `Alejandrofupi/digital-twin-logs` was provisioned, the repo didn't exist on HF. Created it as a private dataset using the `HF_TOKEN` already in `.env`. `HF_DATASET_REPO=Alejandrofupi/digital-twin-logs` added to `.env` after factory test failure surfaced the gap.
+
+### Live smoke verification
+
+- Full suite: **567/567 passing** (+28 from Session 56's 539). Integration test gated on `HF_INTEGRATION_TEST=1` skipped in default runs; verified passing against `Alejandrofupi/digital-twin-logs` (writes uuid-stamped record, reads back, asserts singleton match).
+- End-to-end smoke with `DIGITAL_TWIN_LOG_BACKEND=hf` against the real repo: factory returns `HFLogWriter` with `_thread.is_alive() == True`; one `append()` lands in buffer; setting `_batch_size=1` triggers flush within 10s; `HFLogReader.read(days=2)` finds the record back; `writer.stop()` exits cleanly with empty buffer.
+- Downstream check (local backend): `LocalReader().read()` returns 551 records as before; `cluster_gaps.extract_gap_questions(records, days=None)` returns 30 gap questions; `summarize_failures.select_records_for_group(records, group=g, days=None)` returns 26/49/30 across `unacceptable`/`deflection`/`gap`. Slice A change is invisible to the local backend.
+
+### Outstanding (start of next session)
+
+- **Slice B (#47)** — next slice in Phase 6. Open the issue body before starting: per the persistent feedback memory `feedback_read_latest_decisions_session.md`, the issue may have decisions tightened beyond the bare spec.
+- **Slice C / D / E (#48 / #49 / #50)** — sequenced after B per the issue dependencies.
+- **Phase 7 (HF Spaces deploy, issue `#6`)** — final phase before public traffic. Sequenced after Phase 6 closes.
+- **Watch-items unchanged from Session 56:** `LIMITATIONS::P8` initial-drill tool-firing rate; new `LIMITATIONS::O8` guardrail cross-branch evaluation gap. Both gated on real-recruiter traffic post-deploy.
+
+### Next session entry-point
+
+Phase 6 slice B (`#47`). The factory wiring + lifecycle is solid, so subsequent slices can build on `make_log_writer()` without re-litigating the backend selection mechanism. The reader-side dedup contract is also locked — slice-B retry behaviour can lean on it rather than inventing write-side dedup.
+
+---
+
 ## Session 56 (2026-05-06 / 2026-05-07) — Phase 5 (a) closed; hang fix shipped; tool architecture opened to TECHNICAL/GAP/GENERIC; 50-question regression verified
 
 **Status:** Phase 5 (a) probe completed. Issue `#4` closes in scope. Two structural fixes shipped (Session 56 hang fix + tool architecture rewire); two persisting watch-items logged (`P8` empirical 0% initial-drill firing rate; new `O8` guardrail cross-branch evaluation gap). **Zero content additions** per the data-gated default — the existing 7 stories in `personal_stories` + 5 entries in `gap_inventory` + the deflection rule covered the surface area exposed by the 50-question regression. Suite at **539 passing** (+2 net from Session 55's 537 — new `test_evaluate_fast_fails_to_soft_reject_on_validation_error` and `test_canned_refusal_when_generator_raises_on_every_attempt`). v5 eval skipped (no eval-relevant KB content changed; v4 stays the baseline).

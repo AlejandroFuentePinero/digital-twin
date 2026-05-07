@@ -3,8 +3,8 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-07 (Session 56 — Phase 5 (a) closed. 50-question regression verified: hang fix shipped, tool architecture opened to TECHNICAL/GAP/GENERIC, zero content additions per data-gated default. Two persisting watch-items: `P8` initial-drill tool-firing rate; new `O8` guardrail cross-branch evaluation gap. Issue `#4` closed.)
-**Current phase:** **Phase 6 — HuggingFace Dataset migration** (issue `#5`). Suite at **539 passing**.
+**Last updated:** 2026-05-07 (Session 57 — Phase 6 slice A (`#46`) shipped: `LogBuffer`, `HFLogWriter`, `HFLogReader`, `make_log_writer()` factory, auto-start lifecycle. End-to-end production log path live: append → buffer → background flush → HF Dataset → reader. Suite +28.)
+**Current phase:** **Phase 6 — HuggingFace Dataset migration** (issue `#5`). Slice A closed. Suite at **567 passing**.
 
 **Locked next-step order:**
 1. **Phase 6 — HF Dataset migration** (issue `#5`). `LogReader.HFReader` / `LogWriter.HFWriter` implementation; buffered append; schema versioning carry-through; HF token in env / Spaces secrets.
@@ -214,11 +214,13 @@ The canary baseline is now a Tier B trajectory anchor (deltas from `run-20260505
 
 ## Phase 6 — HF Dataset migration
 
-- [ ] Implement `HFReader` and `HFWriter` in `LogReader` abstraction.
-- [ ] Buffered append: local JSONL buffer, batch flush every N writes or M minutes.
-- [ ] Schema versioning: `schema_version` field on every record; reader handles version skew.
-- [ ] HF write token in Space secrets; rotation procedure documented.
-- [ ] Sentinel auto-detects backend (HF token present → HFReader; else LocalReader).
+Sliced into five GitHub issues (`#46`–`#50`). Slice A closed Session 57.
+
+- [x] **Slice A — Buffered HF writer + reader round-trip (`#46`).** `LogBuffer` (in-memory + disk-backed at `data/logs/.hf_buffer.jsonl`). `HFLogWriter` (non-blocking append, size-or-time flush, group-by-UTC-date commits, append-don't-overwrite, background poller). `HFLogReader` (per-day file download + dedup on `(session_id, turn_index, run_id, replicate_index)` — slice's single dedup choke point). `make_log_writer()` factory keyed on `DIGITAL_TWIN_LOG_BACKEND=local|hf`; hf path auto-starts thread + registers `atexit` stop. `Alejandrofupi/digital-twin-logs` private dataset created. Opt-in `HF_INTEGRATION_TEST=1` round-trip verified.
+- [ ] **Slice B (`#47`)** — see issue body.
+- [ ] **Slice C (`#48`)** — see issue body.
+- [ ] **Slice D (`#49`)** — see issue body.
+- [ ] **Slice E (`#50`)** — see issue body.
 
 ---
 
