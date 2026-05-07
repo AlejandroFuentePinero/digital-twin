@@ -5,6 +5,79 @@
 
 ---
 
+## Session 58 (2026-05-07) — Phase 6 slice B (#47) shipped: graceful shutdown + crash recovery for HF writer
+
+**Status:** Slice B closes the durability gap left at the end of Slice A. The buffered HF writer was already non-blocking and had `start()`/`stop()`; what was missing was (a) a way for SIGTERM to drain the buffer before the process dies, and (b) a way for a buffer file left behind by a crashed process to ship on next startup without waiting for the next size/time trigger. Both shipped. Issue `#47` closed; Slices C–E (`#48`–`#50`) untouched. Suite at **572 passing** (+5 from Session 57: 3 new for crash-recovery startup-flush, 2 for the SIGTERM helper). End-to-end manual verification against `Alejandrofupi/digital-twin-logs` passed for both halves.
+
+### What shipped
+
+**1. Crash recovery — immediate flush at construction time.**
+
+`HFLogWriter.__init__` now checks `LogBuffer.size()` after `_load_from_disk` runs and calls `self.flush()` if non-empty. The buffer file at `data/logs/.hf_buffer.jsonl` is the survival surface — it's written to on every `append` and only truncated by a successful flush, so any record on disk at startup is by definition un-shipped. Flush failures stay logged-and-preserved per Slice A's broad-`except`, so a bad HF connection at startup leaves the records intact for the next attempt rather than dropping them.
+
+**2. SIGTERM handler — `install_sigterm_handler(writer)` in `hf_log_writer.py`.**
+
+A free function (not a method) that registers `signal.signal(SIGTERM, _handler)` where `_handler` calls `writer.stop()` (which final-flushes + joins the thread) then `sys.exit(0)`. Lives in `hf_log_writer.py` rather than `app.py` so it's testable in isolation (importing `app.py` would trigger Pipeline + classifier + tool-registry construction). Returns `True` if installed, `False` if the writer has no `stop` method (the local-backend `LogWriter` case) — so dev workflows are a no-op pass-through.
+
+**3. `app.py` wiring.**
+
+One-liner `install_sigterm_handler(_log_writer)` next to the `make_log_writer()` call. The `_log_writer` reference also got pulled into a module-level binding (was inline in the `Pipeline(...)` constructor call) so the handler has something to register against.
+
+| File | Change |
+|---|---|
+| `src/hf_log_writer.py` | `__init__` post-`LogBuffer`-load: if `buffer.size() > 0`, call `self.flush()` (crash recovery). New top-level `install_sigterm_handler(writer)` returning bool. Module docstring updated to reflect Slice-B closure. |
+| `src/app.py` | Import `install_sigterm_handler`. Hoisted `_log_writer = make_log_writer()` to module level; called `install_sigterm_handler(_log_writer)` next to it. |
+| `tests/test_hf_log_writer.py` (+125 lines) | 3 startup-flush tests (non-empty disk buffer → flush fires; missing buffer → no-op; empty buffer file → no-op). 2 SIGTERM tests (handler installed for HF writer + handler invocation calls `stop` and exits 0; no-op for writer without `stop`). |
+| `scripts/verify_slice_b.py` (new) | Two-pass crash-recovery harness — pass 1 appends + `os._exit(1)` (simulating a crash); pass 2 reinstantiates and confirms HF readback. |
+| `scripts/verify_slice_b_sigterm.py` (new) | SIGTERM harness child process — appends + idles; harness sends SIGTERM and confirms HF readback. |
+
+### Decisions
+
+**1. SIGTERM helper as a free function in `hf_log_writer.py`, not a method on `HFLogWriter`.**
+
+Two reasons. First, signal handling is process-global — installing it from a method would imply per-instance ownership of a global resource, which is misleading. A free function makes the lifecycle explicit: app code calls it once, against the writer it actually wants to drain. Second, testing — `install_sigterm_handler` is reachable from a unit test without importing `app.py` (which would force-construct the Pipeline, classifier, tool registry, etc., none of which the test cares about). The trade-off (signal handling lives in the same module as the writer rather than a dedicated `lifecycle.py`) is small at this scale.
+
+**2. Handler calls `writer.stop()` rather than `writer.flush()` directly.**
+
+`stop()` joins the background thread and *then* flushes — the right ordering on shutdown so a flush-in-flight by the poller can't race the SIGTERM-driven flush. `flush()` alone has a `_flush_lock` so it'd be safe, but `stop()` is the canonical "I'm done with this writer" call and gives us thread cleanup for free. The handler then `sys.exit(0)` — same exit code Gradio would use for a clean shutdown.
+
+**3. Crash recovery flushes immediately, not on a delay.**
+
+The alternative would be: load the disk buffer and let the next poll tick (≤1s) ship it. Rejected because (a) the disk-recovered records are by definition older than any in-memory record, and the whole point of recovery is that they were stuck, and (b) deferring it just for symmetry with normal flush triggers would mean records sitting under the 50-record / 600s threshold could wait the full 10 minutes after a crash recovery. Flushing in `__init__` ships them in the first second after restart. If HF is unreachable at startup, the broad-`except` keeps them on disk and the next size/time trigger retries.
+
+**4. Local-backend SIGTERM is a no-op.**
+
+`LogWriter` writes synchronously to JSONL with no buffer, so there's nothing to flush on SIGTERM. The `hasattr(writer, "stop")` check in `install_sigterm_handler` returns `False` and skips the registration. Dev workflows where someone Ctrl+Cs the local-mode app behave identically before and after this change.
+
+### Live smoke verification
+
+- Full suite: **572/572 passing** (+5 from Session 57's 567). 1 opt-in HF integration test still gated on `HF_INTEGRATION_TEST=1`, skipped in default runs.
+- **Crash-recovery round-trip** against `Alejandrofupi/digital-twin-logs`:
+  - Pass 1 of `scripts/verify_slice_b.py` appended one record under a uuid-stamped session id and `os._exit(1)`'d before any flush. Disk buffer post-pass-1: 532 bytes (one JSONL line).
+  - Pass 2 reinstantiated `HFLogWriter` against the same buffer path. `__init__` triggered the upload; in-memory buffer = 0; disk buffer file was unlinked. `HFLogReader.read(days=2)` returned the record. PASS.
+- **SIGTERM round-trip** against same dataset:
+  - `verify_slice_b_sigterm.py` child process started, registered the handler (`installed=True`), appended one record, idled.
+  - Harness sent `kill -TERM <child_pid>`. Child exited 0; disk buffer file gone (flush succeeded).
+  - `HFLogReader.read(days=2)` returned the record. PASS.
+
+### Decisions deferred to future slices
+
+- **Buffer growth under sustained HF outage** — same as Slice A's "worst case under sustained HF-down": disk buffer grows indefinitely. Acceptable for a portfolio-scale app. A future slice (or `LIMITATIONS.md` entry) could cap it; not in Slice B's scope.
+- **`atexit` vs SIGTERM ordering** — `atexit.register(writer.stop)` from `make_log_writer` runs on clean Python exit; the SIGTERM handler runs on SIGTERM and explicitly calls `sys.exit(0)`, which then runs the atexit. `writer.stop()` is safe to call twice — the join is a no-op when the thread is already dead, and a double final-flush over an empty buffer is also a no-op. So the redundancy is harmless.
+
+### Outstanding (start of next session)
+
+- **Slice C (#48)** — next slice in Phase 6. Same hybrid-TDD pattern; per the persistent feedback memory `feedback_read_latest_decisions_session.md`, open the issue body before starting and read this Session 58 entry for any decisions tightened beyond the bare spec.
+- **Slices D / E (#49 / #50)** — sequenced after C per the issue dependencies.
+- **Phase 7 (HF Spaces deploy, issue `#6`)** — final phase before public traffic.
+- **Watch-items unchanged:** `LIMITATIONS::P8` initial-drill tool-firing rate; `LIMITATIONS::O8` guardrail cross-branch evaluation gap.
+
+### Next session entry-point
+
+Phase 6 slice C (`#48`). The durability surface is now closed end-to-end (append → buffer → background flush + crash-recovery flush + SIGTERM-flush + atexit-flush → HF Dataset → reader). Subsequent slices can rely on "from the moment `append` returns, a record is durable" without further qualifications.
+
+---
+
 ## Session 57 (2026-05-07) — Phase 6 slice A (#46) shipped: buffered HF writer + reader round-trip
 
 **Status:** First slice of Phase 6 (HF Dataset migration, issue `#5`) shipped. Five new pieces — `LogBuffer`, `HFLogWriter`, `HFLogReader`, the `make_log_writer()` factory, and the auto-start/atexit lifecycle — give the agent an end-to-end production log path: `append → buffer → background flush → HF Dataset → HFLogReader.read() → InteractionRecord`. Issue `#46` closed; Slices B–E (`#47`–`#50`) untouched. Suite at **567 passing** (+28 from Session 56's 539: 16 in `test_hf_log_writer.py` + 7 in `test_log_reader.py` + 6 in `test_interaction_log.py` − 1 deleted Phase-6-stub test) plus 1 opt-in integration test gated on `HF_INTEGRATION_TEST=1`.

@@ -34,6 +34,7 @@ from composer import PromptComposer
 from contact_log import ContactRecord, ContactWriter
 from generator import Generator
 from guardrail import Guardrail
+from hf_log_writer import install_sigterm_handler
 from interaction_log import make_log_writer
 from pipeline import CANNED_REFUSAL, Pipeline
 from profile import ProfileLoader
@@ -80,16 +81,23 @@ _composer = PromptComposer(_profile, REGISTRY)
 _tool_registry = ToolRegistry(
     Path(__file__).parent.parent / "data" / "readmes" / "registry.json"
 )
+_log_writer = make_log_writer()
 _pipeline = Pipeline(
     classifier=Classifier(),
     composer=_composer,
     generator=Generator(),
     guardrail=Guardrail(),
-    log_writer=make_log_writer(),
+    log_writer=_log_writer,
     tool_registry=_tool_registry,
     tool_model_callable=make_litellm_tool_callable(),
 )
 _contact_writer = ContactWriter()
+
+# SIGTERM handler — ensures HF Spaces' container-shutdown signal final-
+# flushes the buffered writer before the process dies (#47). Local
+# backend is a no-op. atexit (registered by make_log_writer) covers
+# the clean Python-exit path; this covers signal-driven termination.
+install_sigterm_handler(_log_writer)
 
 
 def respond(

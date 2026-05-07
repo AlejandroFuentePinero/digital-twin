@@ -400,6 +400,131 @@ def test_flush_appends_to_existing_per_day_file_rather_than_overwriting(tmp_path
 
 
 # ---------------------------------------------------------------------------
+# Slice B (#47) — crash recovery: immediate flush on startup
+# ---------------------------------------------------------------------------
+
+
+def test_init_flushes_immediately_when_disk_buffer_is_non_empty(tmp_path):
+    """Slice B crash-recovery contract: a buffer file left behind by a
+    previous (crashed or SIGTERM'd) process must ship as soon as a new
+    ``HFLogWriter`` is constructed — not on the next poll tick or
+    size/time trigger."""
+    from hf_log_writer import HFLogWriter
+
+    buffer_path = tmp_path / ".hf_buffer.jsonl"
+    buffer_path.parent.mkdir(parents=True, exist_ok=True)
+    with buffer_path.open("w", encoding="utf-8") as f:
+        f.write(json.dumps(_record(0)) + "\n")
+        f.write(json.dumps(_record(1)) + "\n")
+
+    api = _hf_api_mock()
+    writer = HFLogWriter(
+        repo_id="ignored/test",
+        buffer_path=buffer_path,
+        flush_batch_size=50,
+        flush_interval_seconds=600,
+        hf_api=api,
+    )
+
+    api.upload_file.assert_called_once()
+    assert writer.buffer_size() == 0
+
+
+def test_init_does_not_flush_when_disk_buffer_is_missing(tmp_path):
+    from hf_log_writer import HFLogWriter
+
+    api = _hf_api_mock()
+    HFLogWriter(
+        repo_id="ignored/test",
+        buffer_path=tmp_path / ".hf_buffer.jsonl",
+        flush_batch_size=50,
+        flush_interval_seconds=600,
+        hf_api=api,
+    )
+    api.upload_file.assert_not_called()
+
+
+def test_init_does_not_flush_when_disk_buffer_is_empty(tmp_path):
+    """An empty (zero-byte or whitespace-only) buffer file is the
+    post-clean-flush state and must not trigger a network call."""
+    from hf_log_writer import HFLogWriter
+
+    buffer_path = tmp_path / ".hf_buffer.jsonl"
+    buffer_path.parent.mkdir(parents=True, exist_ok=True)
+    buffer_path.write_text("")
+
+    api = _hf_api_mock()
+    HFLogWriter(
+        repo_id="ignored/test",
+        buffer_path=buffer_path,
+        flush_batch_size=50,
+        flush_interval_seconds=600,
+        hf_api=api,
+    )
+    api.upload_file.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Slice B (#47) — SIGTERM handler
+# ---------------------------------------------------------------------------
+
+
+def test_install_sigterm_handler_registers_handler_that_calls_stop(monkeypatch):
+    """The SIGTERM path is what HF Spaces uses for container shutdown.
+    The handler must final-flush via ``writer.stop`` so records in the
+    buffer ship before the process dies. The handler itself terminates
+    the process via ``sys.exit`` — tests intercept both to assert the
+    full chain without actually killing the test runner."""
+    import signal as _signal
+
+    from hf_log_writer import install_sigterm_handler
+
+    writer = MagicMock()
+    writer.stop = MagicMock()
+
+    installed: dict = {}
+
+    def fake_signal(signum, handler):
+        installed["signum"] = signum
+        installed["handler"] = handler
+
+    monkeypatch.setattr(_signal, "signal", fake_signal)
+
+    assert install_sigterm_handler(writer) is True
+    assert installed["signum"] == _signal.SIGTERM
+
+    # Invoke the handler the same way the kernel would. It calls
+    # sys.exit(0); intercept that so the test doesn't tear itself down.
+    with pytest.raises(SystemExit) as excinfo:
+        installed["handler"](_signal.SIGTERM, None)
+    assert excinfo.value.code == 0
+    writer.stop.assert_called_once()
+
+
+def test_install_sigterm_handler_is_noop_for_writer_without_stop(monkeypatch):
+    """The local-backend ``LogWriter`` has no ``stop`` method. Installing
+    the handler must be a no-op so dev workflows aren't affected by a
+    SIGTERM that has nothing to flush."""
+    import signal as _signal
+
+    from hf_log_writer import install_sigterm_handler
+
+    class LocalLikeWriter:
+        def append(self, _record):
+            pass
+
+    called = {"count": 0}
+
+    def fake_signal(_signum, _handler):
+        called["count"] += 1
+
+    monkeypatch.setattr(_signal, "signal", fake_signal)
+
+    assert install_sigterm_handler(LocalLikeWriter()) is False
+    assert called["count"] == 0
+
+
+# ---------------------------------------------------------------------------
 # Opt-in real-network integration (gated on HF_INTEGRATION_TEST=1)
 # ---------------------------------------------------------------------------
 

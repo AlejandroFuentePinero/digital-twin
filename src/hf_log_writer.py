@@ -15,10 +15,13 @@ Two pieces:
   (``HFLogReader.read``) is the dedup choke point — write-side never
   tries to be exactly-once.
 
-ADR-0002 motivates the HF Dataset backend; this module is the writer
-half of the slice-A wiring (#46). Slice B (#47) wraps the flush in a
-real background task; this module exposes ``maybe_flush`` so the
-existing call sites can drive it synchronously in the meantime.
+ADR-0002 motivates the HF Dataset backend. Slice A (#46) introduced
+the buffer + writer + background poller. Slice B (#47) closes the
+durability gap: ``__init__`` flushes immediately if the disk buffer
+was non-empty at construction (crash recovery), and ``app.py`` wires
+a SIGTERM handler so a Space restart drains the buffer before the
+process dies. ``atexit`` registration of ``stop`` is handled by
+``make_log_writer`` and stays the route for ordinary clean exits.
 """
 
 from __future__ import annotations
@@ -26,6 +29,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
+import sys
 import threading
 import time as _time
 from datetime import date, datetime, timezone
@@ -140,6 +145,14 @@ class HFLogWriter:
         self._poll_interval = poll_interval_seconds
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+
+        # Crash recovery (#47): a non-empty buffer file at construction time
+        # means the previous process died with un-shipped records. Flush
+        # immediately so they're durable on HF rather than waiting up to one
+        # poll tick + the size/time trigger. A failure here is logged by
+        # ``flush`` itself and leaves the buffer intact for the next attempt.
+        if self._buffer.size() > 0:
+            self.flush()
 
     # ------------------------------------------------------------------ append
     def append(self, record) -> None:  # type: ignore[no-untyped-def]
@@ -265,3 +278,26 @@ def _utc_date_of(timestamp: str) -> date:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).date()
+
+
+def install_sigterm_handler(writer) -> bool:  # type: ignore[no-untyped-def]
+    """Wire ``writer.stop`` into a SIGTERM handler so a Space restart
+    final-flushes the buffer before the process dies (#47).
+
+    Returns ``True`` if a handler was installed, ``False`` otherwise. Local
+    backends (``LogWriter``) have no ``stop`` method and degrade to no-op
+    so dev workflows are unaffected. ``atexit`` already covers the clean
+    Python-exit path via ``make_log_writer``; this covers SIGTERM, which
+    is what HF Spaces sends on container shutdown.
+    """
+    if not hasattr(writer, "stop"):
+        return False
+
+    def _handle_sigterm(_signum, _frame):
+        try:
+            writer.stop()
+        finally:
+            sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+    return True
