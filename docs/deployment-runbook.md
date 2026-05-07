@@ -29,7 +29,7 @@ The Space and the dataset both live under the `Alejandrofupi` namespace.
    - SDK: **Gradio**. Hardware: **CPU basic** (free). The pipeline is I/O-bound on LLM calls; CPU is sufficient.
    - License: **MIT**.
 2. **Configure secrets** (Space → Settings → Variables and secrets):
-   - `OPENAI_API_KEY` — for `gpt-4.1` (generator), `gpt-4.1-nano` (classifier, event classifier), `text-embedding-3-small` (retrieval).
+   - `OPENAI_API_KEY` — for `gpt-4.1` (generator), `gpt-4.1-nano` (classifier, event classifier), `text-embedding-3-large` (retrieval).
    - `ANTHROPIC_API_KEY` — for `claude-sonnet-4-6` (guardrail).
    - `HF_TOKEN` — write token for `Alejandrofupi/digital-twin-logs`.
    - `HF_DATASET_REPO` — `Alejandrofupi/digital-twin-logs`.

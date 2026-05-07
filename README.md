@@ -119,19 +119,24 @@ graph LR
     contact_log["contact_log.py"]:::logging
     log_reader["log_reader.py"]:::logging
     session_state["session_state.py"]:::logging
+    hf_log_writer["hf_log_writer.py"]:::logging
+    hf_contact_log["hf_contact_log.py"]:::logging
+    schema_migrations["schema_migrations.py"]:::logging
   end
 
   subgraph sg_tooling["Operator Tools"]
     sentinel["sentinel.py (dashboard)"]:::tooling
     canary_runner["canary_runner.py"]:::tooling
+    canary_drift["canary_drift.py"]:::tooling
+    canary_baseline["canary_baseline.py"]:::tooling
+    canary_corpus["canary_corpus.py"]:::tooling
+    canary_outcome["canary_outcome.py"]:::tooling
     cluster_gaps["cluster_gaps.py"]:::tooling
     failure_feed["failure_feed.py"]:::tooling
     flag_detector["flag_detector.py"]:::tooling
     dashboard_model["dashboard_model.py"]:::tooling
     summarize_failures["summarize_failures.py"]:::tooling
     metric_status["metric_status.py"]:::tooling
-    canary_drift["canary_drift.py"]:::tooling
-    canary_baseline["canary_baseline.py"]:::tooling
     system_map["system_map.py"]:::tooling
     module_health["module_health.py"]:::tooling
   end
@@ -283,7 +288,7 @@ The system was redesigned in 2026-04. Three short ADRs capture the load-bearing 
 
 ## Tech stack
 
-- **Models:** `gpt-4.1-nano` (classifier), `gpt-4.1` (generator), `claude-sonnet-4-6` (guardrail), `text-embedding-3-small` (retrieval).
+- **Models:** `gpt-4.1-nano` (classifier), `gpt-4.1` (generator), `claude-sonnet-4-6` (guardrail), `text-embedding-3-large` (retrieval).
 - **LLM gateway:** [LiteLLM](https://github.com/BerriAI/litellm) — single client across providers.
 - **Vector store:** [ChromaDB](https://www.trychroma.com/) — local persistent collection.
 - **UI:** [Gradio](https://gradio.app/) 5.x with `gr.Blocks`, `gr.Chatbot`, custom CSS theme.
@@ -294,13 +299,15 @@ The system was redesigned in 2026-04. Three short ADRs capture the load-bearing 
 
 | Document | Purpose |
 |---|---|
+| [`docs/MAINTENANCE.md`](./docs/MAINTENANCE.md) | **Operator entry point** — periodic / on-demand / triggered checklist for observe-mode |
 | [`CONTEXT.md`](./CONTEXT.md) | Domain glossary — every term with a precise definition |
 | [`docs/MAP.md`](./docs/MAP.md) | Full system map (runtime + every module) |
 | [`docs/adr/`](./docs/adr/) | Architectural decisions with rationale |
-| [`docs/TODO.md`](./docs/TODO.md) | Active phase plan |
+| [`docs/TODO.md`](./docs/TODO.md) | Phase history (Phases 1–7, closed) |
 | [`docs/DECISIONS.md`](./docs/DECISIONS.md) | Session-by-session log |
 | [`docs/TESTING.md`](./docs/TESTING.md) | Testing conventions |
 | [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md) | Known limitations register |
+| [`docs/SENTINEL.md`](./docs/SENTINEL.md) | Sentinel dashboard usage guide — metric definitions, canary tab |
 | [`docs/deployment-runbook.md`](./docs/deployment-runbook.md) | Deploy to HF Spaces — pre-flight checklist, push recipe, smoke test, rollback |
 
 ## Contact
