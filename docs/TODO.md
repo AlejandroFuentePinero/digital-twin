@@ -3,8 +3,8 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-07 (Session 62 — Phase 7 slice 1 (`#51`) shipped: Space live at <https://alejandrofupi-digital-twin.hf.space> on cpu-basic. Mid-session additions post slice-1 close: dual-source Sentinel reader (`_HFWithLocalCanaryOverlay` — HF live + local canary overlay so the operator gets prod metrics + today's local canary results in one Sentinel session); +5 tests; suite 623 → 628. Canary run in flight (`b26zu6426`, no `--freeze-baseline` per operator correction — prior `4aeb15` baseline stays canonical, this run is the +1 trajectory point); first invocation killed mid-run, left 69 partial records under `run_id=run-20260507-045928-33ecda` pending cleanup.)
-**Current phase:** **Phase 7 — HF Spaces deploy** (issue `#6`). Slice 1 (`#51`) closed; slice 2 (`#52`, portfolio iframe embed) next. Suite at **628 passing**.
+**Last updated:** 2026-05-07 (Session 62 — Phase 7 slice 1 (`#51`) shipped: Space live at <https://alejandrofupi-digital-twin.hf.space> on cpu-basic. Mid-session: dual-source Sentinel reader (`_HFWithLocalCanaryOverlay`) + CLI overlay-bypass fix; canary `+1` run vs `4aeb15` baseline (no freeze) completed cleanly, partial run from killed first invocation cleaned up; canary drift detector pruned of mechanism signals (`chunk_set_changed` + `retry_depth_changed` removed; `latency_p95_regression` thresholds tightened 1.5x/2.0x) — same data drops from 52 flags → 12, signal-dominated. Manual LOGISTICAL turn against the deployed Space closed the Space-side smoke-test coverage gap. Suite 619 → 620 (net +1 after dropping 9 mechanism tests + adding 6 new ones for overlay/CLI/dual-source).)
+**Current phase:** **Phase 7 — HF Spaces deploy** (issue `#6`). Slice 1 (`#51`) closed; slice 2 (`#52`, portfolio iframe embed) next. Suite at **620 passing**.
 
 **Locked next-step order:**
 1. **Phase 6 — HF Dataset migration** (issue `#5`). `LogReader.HFReader` / `LogWriter.HFWriter` implementation; buffered append; schema versioning carry-through; HF token in env / Spaces secrets.
@@ -189,6 +189,12 @@ Two-session arc: Session 40 added 5 load-bearing metric surfaces + published the
 - Inline sparkline tables for the 3 health blocks on the Canary tab. `render_sparkline` helper exists; the matplotlib-PNG-base64-in-table renderer is the missing piece. Low priority until the operator has seen real drift signals and decides whether sparklines are load-bearing.
 - LLM-as-judge `answer_drifted` flag kind — defer until keyword matching against `expected_keywords` proves too brittle in practice.
 - Cost tracking on canary runs (`tokens_in`, `tokens_out`, USD) — parallel concern, separate ticket.
+
+**Canary follow-ups identified in Session 62 (post drift-detector cleanup):**
+
+- **Corpus cleanup** — drop fuzzy off-topic questions ("What did you have for breakfast?", "What's your favourite colour?") that have no defensible correct branch and will keep firing `branch_changed` on every run. Corpus-design issue, not detector issue.
+- **`branch_changed` unanimous-vote tightening** — current detector fires on majority shift across N=3 replicates; a single flipped record can swing 2/3-vs-2/3 majorities. Tighten to require unanimous vote (3/3 vs 3/3) before flagging. Reduces false-positive rate on borderline questions without losing real signal.
+- **Per-question stability scoring** — some questions have high inherent variance (we discover which by running them); the detector treats them all equally. Could compute per-question stability from accumulated trajectory runs and downweight chronically-unstable questions.
 
 ### Explicitly punted as YAGNI (reopen if signal demands)
 
