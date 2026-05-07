@@ -1364,3 +1364,121 @@ def test_format_writer_health_surfaces_last_error_when_set(monkeypatch):
     assert "RuntimeError: hf is down" in out
     assert "writer-health-value-bad" in out
     assert "17" in out, "non-zero buffer size rendered"
+
+
+# ---------------------------------------------------------------------------
+# Dual-source reader: HF live + local canary overlay
+# ---------------------------------------------------------------------------
+
+
+def _make_record(tmp_path: Path, *, session_id: str, is_canary: bool, ts: str):
+    """Helper — build a minimal InteractionRecord-shaped dict and write it.
+    Mirrors the shape of records produced by Pipeline.run; only the fields
+    required by the reader path are populated."""
+    return {
+        "schema_version": "4",
+        "timestamp": ts,
+        "session_id": session_id,
+        "turn_index": 0,
+        "question": "stub",
+        "event_type": "answered",
+        "branch": "GENERIC",
+        "classifier_labels": ["GENERIC"],
+        "classification_confidence": 1.0,
+        "attempts": [{"answer": "ok", "is_acceptable": True, "guardrail_feedback": ""}],
+        "retrieved_chunks": [],
+        "tool_calls": [],
+        "latency_ms": {"total": 1, "classifier": 1, "retrieval": 0, "generation": 0, "guardrail": 0},
+        "knew_answer": True,
+        "is_canary": is_canary,
+    }
+
+
+def test_default_reader_wraps_hf_with_local_canary_overlay(monkeypatch, tmp_path):
+    """When HF env is set, _default_reader() returns the dual-source wrapper
+    so today's local canary records appear alongside live HF records."""
+    from sentinel import _default_reader, _HFWithLocalCanaryOverlay
+
+    monkeypatch.setenv("HF_TOKEN", "fake")
+    monkeypatch.setenv("HF_DATASET_REPO", "ignored/repo")
+    # Stub HFLogReader so make_log_reader() can construct without a network call.
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr("log_reader.HFLogReader.__init__", lambda self, **kw: None)
+    reader = _default_reader()
+    assert isinstance(reader, _HFWithLocalCanaryOverlay)
+
+
+def test_default_reader_does_not_wrap_when_local(monkeypatch):
+    """In local mode the LocalReader already includes canary records, so the
+    wrapper is unnecessary — _default_reader returns the LocalReader directly."""
+    from sentinel import _default_reader, _HFWithLocalCanaryOverlay
+
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HF_DATASET_REPO", raising=False)
+    reader = _default_reader()
+    assert not isinstance(reader, _HFWithLocalCanaryOverlay)
+    assert isinstance(reader, LocalReader)
+
+
+def test_overlay_merges_hf_live_with_local_canary_only(tmp_path):
+    """The wrapper returns HF-live records as-is plus only the is_canary=True
+    records from the local file. Live records on the local file are dropped
+    so they cannot double-count against records already on HF."""
+    from sentinel import _HFWithLocalCanaryOverlay
+    from unittest.mock import MagicMock
+
+    # Build a local JSONL with one canary + one stale-live record
+    local_file = tmp_path / "interactions.jsonl"
+    records = [
+        _make_record(tmp_path, session_id="local-canary", is_canary=True, ts="2026-05-07T01:00:00+00:00"),
+        _make_record(tmp_path, session_id="stale-live", is_canary=False, ts="2026-05-06T23:00:00+00:00"),
+    ]
+    with local_file.open("w") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+
+    # Fake the HF reader returning one live record
+    hf = MagicMock()
+    hf_record = InteractionRecord.model_validate(
+        _make_record(tmp_path, session_id="hf-live", is_canary=False, ts="2026-05-07T02:00:00+00:00")
+    )
+    hf.read.return_value = [hf_record]
+
+    wrapper = _HFWithLocalCanaryOverlay(hf, local_path=local_file)
+    out = wrapper.read()
+
+    session_ids = {r.session_id for r in out}
+    assert "hf-live" in session_ids, "HF live records flow through"
+    assert "local-canary" in session_ids, "local canary records overlaid"
+    assert "stale-live" not in session_ids, "local non-canary records must be dropped"
+
+
+def test_overlay_forwards_invalidate_cache_to_hf_reader():
+    """Refresh button calls invalidate_cache; the wrapper must forward it to
+    the underlying HF reader without raising."""
+    from sentinel import _HFWithLocalCanaryOverlay
+    from unittest.mock import MagicMock
+
+    hf = MagicMock()
+    wrapper = _HFWithLocalCanaryOverlay(hf, local_path=Path("/nonexistent"))
+    wrapper.invalidate_cache()
+    hf.invalidate_cache.assert_called_once()
+
+
+def test_source_label_reflects_dual_source(monkeypatch):
+    """The source label distinguishes the dual-source state from plain HF /
+    plain Local so the operator can see what's wired at a glance."""
+    from sentinel import _HFWithLocalCanaryOverlay, _source_label
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr("log_reader.HFLogReader.__init__", lambda self, **kw: None)
+    from log_reader import HFLogReader
+
+    plain_hf = HFLogReader()
+    plain_local = LocalReader(Path("/nonexistent"))
+    dual = _HFWithLocalCanaryOverlay(plain_hf, local_path=Path("/nonexistent"))
+
+    assert "canary overlay" in _source_label(dual).lower()
+    assert _source_label(plain_hf) == "HF Dataset"
+    assert _source_label(plain_local) == "Local JSONL"

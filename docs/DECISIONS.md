@@ -91,16 +91,33 @@ Issue `#52` is the next slice. Slice 1's acceptance gates on "Space works standa
 - Local Sentinel-shape read against prod (HFLogReader + HFContactReader + DashboardModel) constructs and aggregates cleanly.
 - Suite `uv run pytest -q` → **623 passing, 1 skipped** (HF integration opt-in).
 
+### Mid-session additions (post slice-1 close)
+
+**Dual-source Sentinel reader.** New `_HFWithLocalCanaryOverlay` wrapper in `sentinel.py`. When the operator launches Sentinel with prod HF env exported, the live tabs read remote (HF Dataset) AND the Canary tab simultaneously sees the local JSONL's canary records. The canary runner writes to `data/logs/interactions.jsonl` regardless of `DIGITAL_TWIN_LOG_BACKEND` (hardcoded `LogWriter` at `canary_runner.py:118`); without the overlay, prod-pointed Sentinel never saw today's canary results unless the operator switched to `--local`. Wrapper applies only when `make_log_reader()` returns `HFLogReader`; the `--local` path is unchanged (LocalReader already includes canaries). The overlay is canary-only — local non-canary records are dropped so dev sessions on disk can't double-count against records already on HF. `invalidate_cache` (Refresh button) forwards to the HF reader. `_source_label` returns `"HF Dataset · canary overlay from local"` so the dashboard header shows the dual-source state. +5 unit tests pinning the wrapping condition + merge filter + invalidate forward + label. Suite **628 passing** (+5).
+
+**Canary run in flight (no freeze).** Started `uv run python src/canary_runner.py --replicates 3 --freeze-baseline`. Operator corrected: don't freeze; the prior baseline (`run-20260505-132248-4aeb15`, Session 55) stays canonical and this run is the +1 trajectory point. Killed the first invocation mid-execution (background task `boq5eos7e`); restarted as `b26zu6426` without `--freeze-baseline`. The killed run left **69 partial records** in `data/logs/interactions.jsonl` under `run_id=run-20260507-045928-33ecda`. Records are inert (the baseline pointer is a strict `run_id` match against `4aeb15`, so partial-run records never feed drift detection), but they show up as a partial entry in Sentinel's recent-runs trajectory list.
+
+| Run | Records (in file when this entry was written) | Status |
+|---|---|---|
+| `run-20260505-132248-4aeb15` | 150 | **frozen baseline** (Session 55) — referenced by `data/canaries/baseline.json` |
+| `run-20260505-124543-298c7d` | 143 | superseded earlier Session-55 run |
+| `run-20260507-045928-33ecda` | 69 | killed mid-run; cleanup pending |
+| `run-20260507-051336-343809` | growing | live run in progress at session-restart time |
+
+**New feedback memory pinned this session:** never auto-suggest `--freeze-baseline`; freezing is an explicit operator decision separate from running a canary. See `feedback_canary_baseline_freeze_is_explicit.md`.
+
 ### Outstanding (start of next session)
 
+- **Triage the live canary run** (`b26zu6426`) once it completes (~30 min from start at ~05:13 UTC). Drift report against `4aeb15` baseline; expect some divergence from the regenerated DB's enriched headlines (LLM-generated, non-deterministic). Classify per the Session 55 partition: expected-from-DB-regen vs genuine drift. If the background task didn't survive a Claude Code restart, restart it: `uv run python src/canary_runner.py --replicates 3` (no freeze flag).
+- **Clean up partial-run records** with `run_id=run-20260507-045928-33ecda` from `data/logs/interactions.jsonl` after the live run finishes. One-shot Python filter; do not race the writer.
+- **Manual LOGISTICAL turn** in the browser against the deployed Space — the smoke test missed it. ~2 minutes; closes the Space-side coverage gap.
 - **Slice 2 (`#52`) — iframe embed on the portfolio.** Adds the embed snippet + fallback link to `_pages/about.md` (or whichever Jekyll page backs the home), then runs the parent-PRD step 12 (the embedded smoke test).
-- **LOGISTICAL turn not in the smoke-test logs.** The user reported "looking good" so likely tested with a different question, or skipped. Not blocking — covered by `tests/test_branches.py::LOGISTICAL` against the local pipeline. If LOGISTICAL never fires in production traffic, consider it a portfolio-scope reality (recruiters don't ask salary-range first) rather than a routing bug.
 - **Cold-start latency capture #1.** First organic visitor on the slept Space will surface this via `latency_ms.total` for turn 1.
 - **Watch-items unchanged:** `LIMITATIONS::P8` initial-drill tool-firing rate; `LIMITATIONS::O8` guardrail cross-branch evaluation gap. Phase 5 follow-ups; eligible for re-read once a month of post-deploy traffic accumulates.
 
 ### Next session entry-point
 
-Slice 2 (`#52` — portfolio embed). Slice 1 closed the standalone gate. The iframe embed work is independent — Space code doesn't change; the portfolio repo gets the embed + fallback link, then the parent-PRD step 12 (embedded smoke test) gates the close. After slice 2, Phase 7 closes and the project is in observe-mode.
+Pick up by checking the live canary run's status: `tail data/logs/interactions.jsonl` and count records with `run_id=run-20260507-051336-343809` (target 150). If complete: triage drift report → clean up `33ecda` partial records → 2-min LOGISTICAL manual turn → close out the system review. Then slice 2 (`#52`) is unblocked: portfolio iframe embed.
 
 ---
 

@@ -80,7 +80,7 @@ from failure_feed import (
     select_failures,
     tier_for_mode,
 )
-from interaction_log import InteractionRecord
+from interaction_log import DEFAULT_LOG_PATH, InteractionRecord
 from kb_corpus import CoverageEntry, compute_coverage, load_sections
 from log_reader import HFLogReader, HFReader, LocalReader, LogReader, make_log_reader
 from metric_status import (
@@ -1041,17 +1041,60 @@ footer { display: none !important; }
 # ---- Reader bootstrap -------------------------------------------------------
 
 
+class _HFWithLocalCanaryOverlay:
+    """Reads live records from an ``HFLogReader`` and overlays the local
+    JSONL's canary records.
+
+    ``canary_runner.py`` writes records to ``data/logs/interactions.jsonl``
+    regardless of ``DIGITAL_TWIN_LOG_BACKEND`` (hardcoded ``LogWriter`` at
+    ``canary_runner.py:118``). When Sentinel is pointed at the production
+    HF Dataset for live metrics, this wrapper additionally reads the local
+    JSONL and surfaces the ``is_canary=True`` records so the Canary tab
+    works in the same session as live tabs.
+
+    The overlay is canary-only: live records on the local file (e.g. dev
+    sessions before the operator switched to ``DIGITAL_TWIN_LOG_BACKEND=hf``)
+    are ignored, so they cannot double-count against records already on HF.
+
+    ``invalidate_cache`` is forwarded to the HF reader; the local reader
+    has no cache (re-parses on each ``read``)."""
+
+    def __init__(self, primary: HFLogReader, *, local_path=None):
+        self._primary = primary
+        self._local = LocalReader(local_path or DEFAULT_LOG_PATH)
+
+    def read(self, days: int | None = None) -> list[InteractionRecord]:
+        live = self._primary.read(days=days)
+        canary = [r for r in self._local.read(days=days) if r.is_canary]
+        return live + canary
+
+    def invalidate_cache(self) -> None:
+        if hasattr(self._primary, "invalidate_cache"):
+            self._primary.invalidate_cache()
+
+
 def _default_reader() -> LogReader:
     """Selects the read backend via ``log_reader.make_log_reader`` (#49):
     ``HF_TOKEN`` + ``HF_DATASET_REPO`` set → ``HFLogReader`` against the
     production dataset; otherwise ``LocalReader``. The ``--local`` CLI
     flag at the entry point bypasses this in favour of a forced
-    ``LocalReader`` even when full HF creds are present."""
-    return make_log_reader()
+    ``LocalReader`` even when full HF creds are present.
+
+    When the resolved backend is HF, the reader is wrapped with
+    ``_HFWithLocalCanaryOverlay`` so today's local canary records appear
+    in the same Sentinel session as live HF traffic."""
+    primary = make_log_reader()
+    if isinstance(primary, HFLogReader):
+        return _HFWithLocalCanaryOverlay(primary)
+    return primary
 
 
 def _source_label(reader: LogReader) -> str:
-    return "HF Dataset" if isinstance(reader, HFLogReader) else "Local JSONL"
+    if isinstance(reader, _HFWithLocalCanaryOverlay):
+        return "HF Dataset · canary overlay from local"
+    if isinstance(reader, HFLogReader):
+        return "HF Dataset"
+    return "Local JSONL"
 
 
 # ---- Date / number formatters ----------------------------------------------
