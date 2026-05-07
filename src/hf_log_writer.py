@@ -50,6 +50,12 @@ DEFAULT_BUFFER_PATH = (
     Path(__file__).parent.parent / "data" / "logs" / ".hf_buffer.jsonl"
 )
 
+# Diagnostic state file (#49). Committed to the dataset alongside the
+# per-day log files on every flush attempt — the only window into "is
+# production silently failing to flush?" that Sentinel has when running
+# off the HF backend. Sentinel reads it via ``read_writer_state``.
+WRITER_STATE_FILENAME = "hf_writer_state.json"
+
 
 class LogBuffer:
     """In-memory record buffer with a JSONL fallback on disk.
@@ -182,15 +188,45 @@ class HFLogWriter:
             records = self._buffer.snapshot()
             if not records:
                 return
+            error: str | None = None
             try:
                 self._upload_grouped_by_day(records)
-            except Exception:  # broad: never let a flush fail the caller
+            except Exception as exc:  # broad: never let a flush fail the caller
                 _log.exception(
                     "HFLogWriter flush failed; buffer of %d records preserved",
                     len(records),
                 )
-                return
-            self._buffer.flush()
+                error = f"{type(exc).__name__}: {exc}"
+            else:
+                self._buffer.flush()
+            # State file is diagnostic; surface it on every attempt
+            # (success OR failure). Wrapped in its own broad ``except``
+            # so a state-upload failure can't mask a successful data
+            # flush or break the next retry. Sentinel reads this file
+            # via ``read_writer_state`` (#49).
+            try:
+                self._upload_writer_state(buffer_size=self._buffer.size(), error=error)
+            except Exception:
+                _log.exception("HFLogWriter could not commit %s", WRITER_STATE_FILENAME)
+
+    def _upload_writer_state(self, *, buffer_size: int, error: str | None) -> None:
+        state = {
+            "last_flush_time": datetime.now(timezone.utc).isoformat(),
+            "buffer_size": buffer_size,
+            "last_error": error,
+        }
+        body = json.dumps(state, indent=2).encode("utf-8")
+        self._api.upload_file(
+            path_or_fileobj=body,
+            path_in_repo=WRITER_STATE_FILENAME,
+            repo_id=self._repo_id,
+            repo_type="dataset",
+            commit_message=(
+                "Update writer state (success)"
+                if error is None
+                else "Update writer state (flush error)"
+            ),
+        )
 
     def _upload_grouped_by_day(self, records: Iterable[dict]) -> None:
         groups: dict[date, list[dict]] = {}
@@ -278,6 +314,26 @@ def _utc_date_of(timestamp: str) -> date:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).date()
+
+
+def read_writer_state(api: HfApi, *, repo_id: str) -> dict | None:
+    """Sentinel-side reader for ``hf_writer_state.json`` (#49).
+
+    Returns the parsed dict or ``None`` if the file isn't present yet
+    (cold dataset — the writer hasn't completed a flush attempt). Any
+    other download error is propagated; the caller (Sentinel panel)
+    decides how to surface it. Lives here rather than in ``log_reader``
+    because it's a writer-diagnostic file, not an interaction record.
+    """
+    try:
+        local = api.hf_hub_download(
+            repo_id=repo_id,
+            filename=WRITER_STATE_FILENAME,
+            repo_type="dataset",
+        )
+    except (EntryNotFoundError, FileNotFoundError):
+        return None
+    return json.loads(Path(local).read_text(encoding="utf-8"))
 
 
 def install_sigterm_handler(writer) -> bool:  # type: ignore[no-untyped-def]

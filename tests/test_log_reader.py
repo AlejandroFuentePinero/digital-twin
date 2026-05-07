@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from interaction_log import DEFAULT_LOG_PATH, InteractionRecord
-from log_reader import HFLogReader, LocalReader
+from log_reader import HFLogReader, LocalReader, make_log_reader
 
 
 def _record(timestamp: str = "2026-05-01T12:00:00+00:00", turn_index: int = 0) -> dict:
@@ -452,3 +452,116 @@ def test_read_passes_v4_records_through_without_normalize(tmp_path):
     out = LocalReader(log_path).read()
 
     assert out[0].event_type == "answered", "v4 records must not be smart-normalized"
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 slice D — make_log_reader factory + HFLogReader session cache (#49)
+# ---------------------------------------------------------------------------
+
+
+def test_make_log_reader_returns_local_when_hf_token_absent(monkeypatch):
+    """No ``HF_TOKEN`` in env → ``LocalReader``. The default for dev
+    environments where the operator runs Sentinel against
+    ``data/logs/interactions.jsonl``."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HF_DATASET_REPO", raising=False)
+
+    reader = make_log_reader()
+
+    assert isinstance(reader, LocalReader)
+
+
+def test_make_log_reader_returns_hf_reader_when_token_and_repo_set(monkeypatch):
+    """``HF_TOKEN`` + ``HF_DATASET_REPO`` set → ``HFLogReader`` against
+    that repo. Mirrors ``make_log_writer``'s shape so a Space provisioned
+    with both env vars reads and writes the same dataset."""
+    monkeypatch.setenv("HF_TOKEN", "fake-read-token")
+    monkeypatch.setenv("HF_DATASET_REPO", "Alejandrofupi/digital-twin-logs")
+
+    reader = make_log_reader()
+
+    assert isinstance(reader, HFLogReader)
+    assert reader._repo_id == "Alejandrofupi/digital-twin-logs"
+
+
+def test_make_log_reader_force_local_overrides_hf_env(monkeypatch):
+    """``--local`` CLI flag (force_local=True) returns ``LocalReader``
+    even when full HF creds are present — the operator's escape hatch
+    for running Sentinel against dev logs while a prod HF env is set."""
+    monkeypatch.setenv("HF_TOKEN", "fake-read-token")
+    monkeypatch.setenv("HF_DATASET_REPO", "Alejandrofupi/digital-twin-logs")
+
+    reader = make_log_reader(force_local=True)
+
+    assert isinstance(reader, LocalReader)
+
+
+def test_make_log_reader_token_set_but_repo_missing_raises(monkeypatch):
+    """``HF_TOKEN`` but no ``HF_DATASET_REPO`` is a half-configured prod
+    env. Raise loudly at construction rather than silently degrading
+    to local — same fail-fast contract ``make_log_writer`` uses."""
+    monkeypatch.setenv("HF_TOKEN", "fake-read-token")
+    monkeypatch.delenv("HF_DATASET_REPO", raising=False)
+
+    with pytest.raises(RuntimeError, match=r"HF_DATASET_REPO"):
+        make_log_reader()
+
+
+def test_hf_log_reader_caches_repo_listing_within_session():
+    """The first ``read()`` lists the repo once; subsequent reads re-walk
+    the cache without re-listing. Sentinel opens many panels off the same
+    reader — re-listing per-panel would burn an HF API call each time."""
+    files = {
+        "logs/2026-05-06.jsonl": [_record(timestamp="2026-05-06T10:00:00+00:00", turn_index=1)],
+        "logs/2026-05-07.jsonl": [_record(timestamp="2026-05-07T10:00:00+00:00", turn_index=2)],
+    }
+    api = _hf_api_for_reader(files)
+    reader = HFLogReader(repo_id="ignored/test", hf_api=api)
+
+    reader.read()
+    reader.read()
+    reader.read()
+
+    assert api.list_repo_files.call_count == 1, (
+        "list_repo_files must be called once per session, not per-read"
+    )
+
+
+def test_hf_log_reader_caches_per_file_downloads_within_session():
+    """Each per-day file is downloaded + parsed once per session.
+    Reading 7d then 30d must NOT re-download the days that overlap."""
+    files = {
+        "logs/2026-05-06.jsonl": [_record(timestamp="2026-05-06T10:00:00+00:00", turn_index=1)],
+        "logs/2026-05-07.jsonl": [_record(timestamp="2026-05-07T10:00:00+00:00", turn_index=2)],
+    }
+    api = _hf_api_for_reader(files)
+    reader = HFLogReader(repo_id="ignored/test", hf_api=api)
+
+    reader.read()
+    downloads_after_first = api.hf_hub_download.call_count
+
+    reader.read()
+    downloads_after_second = api.hf_hub_download.call_count
+
+    assert downloads_after_first == 2, "first read downloads each per-day file once"
+    assert downloads_after_second == 2, (
+        "second read must hit the cache; no extra downloads"
+    )
+
+
+def test_hf_log_reader_invalidate_cache_re_fetches():
+    """``invalidate_cache()`` is the Refresh-button hook — after a call,
+    the next ``read()`` re-lists the repo and re-downloads the files,
+    so records appended since the session opened show up."""
+    files = {
+        "logs/2026-05-07.jsonl": [_record(timestamp="2026-05-07T10:00:00+00:00", turn_index=1)],
+    }
+    api = _hf_api_for_reader(files)
+    reader = HFLogReader(repo_id="ignored/test", hf_api=api)
+
+    reader.read()
+    reader.invalidate_cache()
+    reader.read()
+
+    assert api.list_repo_files.call_count == 2, "invalidate forces a re-list"
+    assert api.hf_hub_download.call_count == 2, "invalidate forces a re-download"

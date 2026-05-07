@@ -1276,3 +1276,91 @@ def test_row_severity_tier_a_unaffected_by_history_gate():
     raws = [1.0, 1.0, 1.0]
     assert _row_severity("refusal_rate", raws, history_days=0) == "alert"
     assert _row_severity("refusal_rate", raws, history_days=10) == "alert"
+
+
+# ----- Log writer health panel (#49) ----------------------------------------
+
+
+def test_format_writer_health_renders_placeholder_for_local_reader():
+    """Local backend has no HF state file — the panel renders a
+    self-explanatory placeholder so the operator knows why the three
+    rows aren't there."""
+    from log_reader import LocalReader
+    from sentinel import (
+        WRITER_HEALTH_LOCAL_PLACEHOLDER,
+        format_writer_health,
+    )
+
+    out = format_writer_health(LocalReader())
+    assert out == WRITER_HEALTH_LOCAL_PLACEHOLDER
+
+
+def test_format_writer_health_renders_no_state_placeholder_when_state_missing(monkeypatch):
+    """A fresh HF dataset (writer hasn't completed a flush yet) has no
+    ``hf_writer_state.json``. The panel renders a placeholder rather
+    than a crashing error."""
+    from log_reader import HFLogReader
+    from sentinel import (
+        WRITER_HEALTH_NO_STATE_PLACEHOLDER,
+        format_writer_health,
+    )
+    from unittest.mock import MagicMock
+
+    reader = HFLogReader(repo_id="ignored/test", hf_api=MagicMock())
+    monkeypatch.setattr(
+        "hf_log_writer.read_writer_state",
+        lambda api, *, repo_id: None,
+    )
+
+    out = format_writer_health(reader)
+    assert out == WRITER_HEALTH_NO_STATE_PLACEHOLDER
+
+
+def test_format_writer_health_renders_state_rows(monkeypatch):
+    """The happy path: state file present → three rows for last_flush_time,
+    buffer_size, last_error (rendered "none" when null)."""
+    from log_reader import HFLogReader
+    from sentinel import format_writer_health
+    from unittest.mock import MagicMock
+
+    reader = HFLogReader(repo_id="ignored/test", hf_api=MagicMock())
+    monkeypatch.setattr(
+        "hf_log_writer.read_writer_state",
+        lambda api, *, repo_id: {
+            "last_flush_time": "2026-05-07T12:34:56+00:00",
+            "buffer_size": 0,
+            "last_error": None,
+        },
+    )
+
+    out = format_writer_health(reader)
+
+    assert "2026-05-07T12:34:56+00:00" in out, "last_flush_time surfaced"
+    assert "Buffer size" in out and ">0<" in out, "buffer_size row rendered"
+    assert "writer-health-value-ok" in out, "no-error path uses healthy styling"
+    assert "writer-health-value-bad" not in out
+
+
+def test_format_writer_health_surfaces_last_error_when_set(monkeypatch):
+    """When last_error is non-null, the panel renders the error string
+    in the alert-coloured value class — that's the whole point of the
+    panel: surface 'HF is silently failing to flush'."""
+    from log_reader import HFLogReader
+    from sentinel import format_writer_health
+    from unittest.mock import MagicMock
+
+    reader = HFLogReader(repo_id="ignored/test", hf_api=MagicMock())
+    monkeypatch.setattr(
+        "hf_log_writer.read_writer_state",
+        lambda api, *, repo_id: {
+            "last_flush_time": "2026-05-07T12:34:56+00:00",
+            "buffer_size": 17,
+            "last_error": "RuntimeError: hf is down",
+        },
+    )
+
+    out = format_writer_health(reader)
+
+    assert "RuntimeError: hf is down" in out
+    assert "writer-health-value-bad" in out
+    assert "17" in out, "non-zero buffer size rendered"

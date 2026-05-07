@@ -144,6 +144,20 @@ def _hf_api_mock() -> MagicMock:
     return api
 
 
+def _data_upload_count(api: MagicMock) -> int:
+    """Number of ``upload_file`` calls that targeted a per-day ``logs/``
+    file. Excludes ``hf_writer_state.json`` (which is uploaded by every
+    flush attempt as a diagnostic alongside the data — #49). Tests that
+    assert "the flush fired" should compare against this rather than
+    ``api.upload_file.call_count`` so a state-file upload doesn't shift
+    the count."""
+    return sum(
+        1
+        for call in api.upload_file.call_args_list
+        if str(call.kwargs.get("path_in_repo", "")).startswith("logs/")
+    )
+
+
 def test_append_is_non_blocking_no_hf_call_on_hot_path(tmp_path):
     """The hot path (one ``append``) must never reach huggingface_hub —
     the whole point of the buffer is to keep the per-turn pipeline off
@@ -177,11 +191,11 @@ def test_size_trigger_flushes_when_buffer_hits_threshold(tmp_path):
     )
     writer.append(_record(0))
     writer.append(_record(1))
-    assert api.upload_file.call_count == 0
+    assert _data_upload_count(api) == 0
     writer.append(_record(2))
     # Synchronous flush (the background task delegates to the same path).
     writer.maybe_flush()
-    assert api.upload_file.call_count == 1
+    assert _data_upload_count(api) == 1
 
 
 def test_interval_trigger_flushes_when_clock_advances_past_interval(tmp_path):
@@ -208,12 +222,12 @@ def test_interval_trigger_flushes_when_clock_advances_past_interval(tmp_path):
     # Below interval — no flush yet.
     fake_now[0] = 1000.0 + 599.0
     writer.maybe_flush()
-    assert api.upload_file.call_count == 0
+    assert _data_upload_count(api) == 0
 
     # Past interval — flush fires.
     fake_now[0] = 1000.0 + 600.5
     writer.maybe_flush()
-    assert api.upload_file.call_count == 1
+    assert _data_upload_count(api) == 1
 
 
 def test_flush_groups_records_by_utc_date_one_commit_per_day(tmp_path):
@@ -235,7 +249,11 @@ def test_flush_groups_records_by_utc_date_one_commit_per_day(tmp_path):
 
     writer.flush()
 
-    paths_in_repo = sorted(call.kwargs.get("path_in_repo") for call in api.upload_file.call_args_list)
+    paths_in_repo = sorted(
+        call.kwargs.get("path_in_repo")
+        for call in api.upload_file.call_args_list
+        if str(call.kwargs.get("path_in_repo", "")).startswith("logs/")
+    )
     assert paths_in_repo == ["logs/2026-05-06.jsonl", "logs/2026-05-07.jsonl"]
 
 
@@ -265,6 +283,162 @@ def test_flush_failure_logs_and_preserves_buffer(tmp_path, caplog):
 
     assert writer.buffer_size() == 2, "records must remain buffered for next retry"
     assert any("flush" in rec.message.lower() for rec in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 slice D — hf_writer_state.json (#49)
+# ---------------------------------------------------------------------------
+
+
+def _state_uploads(api: MagicMock) -> list[dict]:
+    """Decode every ``upload_file`` call that targeted the state filename
+    so the tests can inspect the JSON payload without re-parsing the
+    bytes by hand."""
+    out: list[dict] = []
+    for call in api.upload_file.call_args_list:
+        if call.kwargs.get("path_in_repo") != "hf_writer_state.json":
+            continue
+        body = call.kwargs.get("path_or_fileobj")
+        if isinstance(body, bytes):
+            out.append(json.loads(body.decode("utf-8")))
+    return out
+
+
+def test_flush_success_uploads_writer_state_with_zero_buffer_no_error(tmp_path):
+    """After a successful flush, ``hf_writer_state.json`` is committed
+    to the dataset with ``last_flush_time`` populated, ``buffer_size=0``
+    (the buffer was just drained), and ``last_error=None``. Sentinel's
+    Log writer health panel reads exactly this file (#49)."""
+    from hf_log_writer import HFLogWriter
+
+    api = _hf_api_mock()
+    writer = HFLogWriter(
+        repo_id="ignored/test",
+        buffer_path=tmp_path / ".hf_buffer.jsonl",
+        flush_batch_size=10,
+        flush_interval_seconds=600,
+        hf_api=api,
+    )
+    writer.append(_record(0))
+    writer.append(_record(1))
+
+    writer.flush()
+
+    states = _state_uploads(api)
+    assert len(states) == 1, "exactly one state-file upload per flush"
+    state = states[0]
+    assert state["buffer_size"] == 0, "post-success the buffer is drained"
+    assert state["last_error"] is None
+    assert state["last_flush_time"] is not None
+
+
+def test_flush_failure_uploads_writer_state_with_buffer_size_and_last_error(
+    tmp_path, caplog
+):
+    """A flush that fails the data upload still attempts to commit a state
+    file — that's the whole point of the panel: Sentinel must see "HF is
+    silently failing to flush". The state carries ``buffer_size`` (records
+    still queued) and ``last_error`` (a short string a human can read)."""
+    import logging
+
+    from hf_log_writer import HFLogWriter
+
+    api = _hf_api_mock()
+
+    def _fail_data_only(*args, **kwargs):
+        # The state file is allowed to upload; only the per-day data file fails.
+        if kwargs.get("path_in_repo", "").startswith("logs/"):
+            raise RuntimeError("hf is down")
+        return None
+
+    api.upload_file.side_effect = _fail_data_only
+
+    writer = HFLogWriter(
+        repo_id="ignored/test",
+        buffer_path=tmp_path / ".hf_buffer.jsonl",
+        flush_batch_size=10,
+        flush_interval_seconds=600,
+        hf_api=api,
+    )
+    writer.append(_record(0))
+    writer.append(_record(1))
+
+    with caplog.at_level(logging.ERROR, logger="hf_log_writer"):
+        writer.flush()  # must not raise
+
+    assert writer.buffer_size() == 2, "buffer preserved for retry"
+    states = _state_uploads(api)
+    assert len(states) == 1, "state file must still be committed on failure"
+    state = states[0]
+    assert state["buffer_size"] == 2, "state surfaces the un-shipped record count"
+    assert state["last_error"] is not None
+    assert "hf is down" in state["last_error"]
+
+
+def test_state_upload_failure_does_not_break_flush(tmp_path):
+    """If the state-file upload itself raises, the data flush must still
+    have committed and the buffer must still be drained. The state file
+    is diagnostic — it must never gate the durability path."""
+    from hf_log_writer import HFLogWriter
+
+    api = _hf_api_mock()
+
+    def _fail_state_only(*args, **kwargs):
+        if kwargs.get("path_in_repo") == "hf_writer_state.json":
+            raise RuntimeError("state upload broke")
+        return None
+
+    api.upload_file.side_effect = _fail_state_only
+
+    writer = HFLogWriter(
+        repo_id="ignored/test",
+        buffer_path=tmp_path / ".hf_buffer.jsonl",
+        flush_batch_size=10,
+        flush_interval_seconds=600,
+        hf_api=api,
+    )
+    writer.append(_record(0))
+    writer.flush()  # must not raise
+
+    assert writer.buffer_size() == 0, "data flush succeeded; buffer drained"
+
+
+def test_read_writer_state_returns_none_when_state_file_missing():
+    """Sentinel asks for the state file before any flush has happened
+    (cold dataset). The reader returns ``None`` so the panel can render
+    a 'no flushes yet' placeholder rather than crashing."""
+    from huggingface_hub.utils import EntryNotFoundError
+    from hf_log_writer import read_writer_state
+
+    api = MagicMock()
+    api.hf_hub_download = MagicMock(side_effect=EntryNotFoundError("missing"))
+
+    state = read_writer_state(api, repo_id="ignored/test")
+
+    assert state is None
+
+
+def test_read_writer_state_returns_parsed_dict_when_present(tmp_path):
+    """When ``hf_writer_state.json`` is present, the reader returns the
+    parsed dict so Sentinel can index ``last_flush_time``/``buffer_size``/
+    ``last_error`` directly."""
+    from hf_log_writer import read_writer_state
+
+    state_file = tmp_path / "hf_writer_state.json"
+    state_file.write_text(json.dumps({
+        "last_flush_time": "2026-05-07T12:00:00+00:00",
+        "buffer_size": 0,
+        "last_error": None,
+    }))
+    api = MagicMock()
+    api.hf_hub_download = MagicMock(return_value=str(state_file))
+
+    state = read_writer_state(api, repo_id="ignored/test")
+
+    assert state is not None
+    assert state["last_flush_time"] == "2026-05-07T12:00:00+00:00"
+    assert state["buffer_size"] == 0
+    assert state["last_error"] is None
 
 
 def test_flush_with_empty_buffer_is_a_noop(tmp_path):
@@ -304,11 +478,11 @@ def test_background_thread_flushes_on_size_trigger(tmp_path):
         # Give the poller up to 1s — generous on a slow CI box but
         # asymptotic to the 10ms poll interval.
         deadline = time.monotonic() + 1.0
-        while api.upload_file.call_count == 0 and time.monotonic() < deadline:
+        while _data_upload_count(api) == 0 and time.monotonic() < deadline:
             time.sleep(0.01)
     finally:
         writer.stop()
-    assert api.upload_file.call_count >= 1, "background poll must fire flush"
+    assert _data_upload_count(api) >= 1, "background poll must fire flush"
 
 
 def test_background_thread_flushes_on_time_trigger_with_mocked_clock(tmp_path):
@@ -337,11 +511,11 @@ def test_background_thread_flushes_on_time_trigger_with_mocked_clock(tmp_path):
         # Bump the mocked clock past the interval — the next poll should fire.
         fake_now[0] = 1000.0 + 1000.0
         deadline = time.monotonic() + 1.0
-        while api.upload_file.call_count == 0 and time.monotonic() < deadline:
+        while _data_upload_count(api) == 0 and time.monotonic() < deadline:
             time.sleep(0.01)
     finally:
         writer.stop()
-    assert api.upload_file.call_count >= 1
+    assert _data_upload_count(api) >= 1
 
 
 def test_stop_flushes_remaining_buffer_on_clean_shutdown(tmp_path):
@@ -362,7 +536,7 @@ def test_stop_flushes_remaining_buffer_on_clean_shutdown(tmp_path):
     writer.start()
     writer.append(_record(0))
     writer.stop()
-    assert api.upload_file.call_count == 1
+    assert _data_upload_count(api) == 1
     assert writer.buffer_size() == 0
 
 
@@ -388,8 +562,13 @@ def test_flush_appends_to_existing_per_day_file_rather_than_overwriting(tmp_path
     writer.append(_record(0) | {"timestamp": "2026-05-07T01:00:00+00:00"})
     writer.flush()
 
-    api.upload_file.assert_called_once()
-    body = api.upload_file.call_args.kwargs["path_or_fileobj"]
+    data_calls = [
+        call
+        for call in api.upload_file.call_args_list
+        if str(call.kwargs.get("path_in_repo", "")).startswith("logs/")
+    ]
+    assert len(data_calls) == 1
+    body = data_calls[0].kwargs["path_or_fileobj"]
     if isinstance(body, (bytes, bytearray)):
         text = body.decode("utf-8")
     else:
@@ -426,7 +605,7 @@ def test_init_flushes_immediately_when_disk_buffer_is_non_empty(tmp_path):
         hf_api=api,
     )
 
-    api.upload_file.assert_called_once()
+    assert _data_upload_count(api) == 1
     assert writer.buffer_size() == 0
 
 

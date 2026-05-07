@@ -5,6 +5,91 @@
 
 ---
 
+## Session 60 (2026-05-07) — Phase 6 slice D (#49) shipped: Sentinel HF auto-detection + log writer health panel
+
+**Status:** Slice D closes the operability gap left by slices A–C: the same Sentinel binary can run against local dev logs OR the production HF dataset without configuration, and the operator gets a small "is HF actually flushing?" panel for the cases where the answer is no. New `make_log_reader()` factory + `--local` CLI escape hatch + per-session caching on `HFLogReader` + `hf_writer_state.json` written on every flush attempt + a Sentinel "Log writer health" panel that reads it. Issue `#49` closed; Slice E (`#50`) untouched. Suite at **598 passing** (+16 from Session 59's 582: 7 reader-factory/cache + 5 writer state-file + 4 panel).
+
+### What shipped
+
+**1. `log_reader.make_log_reader(*, force_local=False)` — Sentinel-facing factory.**
+
+Mirrors `interaction_log.make_log_writer`'s shape so a Space provisioned with `HF_TOKEN` + `HF_DATASET_REPO` reads and writes the same dataset. Selection rule: `force_local=True` → `LocalReader` (the `--local` CLI override); `HF_TOKEN` + `HF_DATASET_REPO` set → `HFLogReader`; `HF_TOKEN` set with `HF_DATASET_REPO` missing raises `RuntimeError` so a half-configured prod env fails loudly at startup; otherwise → `LocalReader`. `sentinel._default_reader` and `_source_label` rewired to use the factory + `HFLogReader` directly (the legacy `HFReader` alias is kept for in-flight imports). The `HF_WRITE_TOKEN`-based selector that lived on `_default_reader` since the Phase-4 stub is gone — `HF_TOKEN` is the read+write canonical name now.
+
+**2. `HFLogReader` per-session caching.**
+
+The first `read()` call lists the repo and parses every per-day file; the parsed records cache by filename so subsequent reads re-walk the cache without re-fetching. The file-level granularity preserves the existing `read(days=N)` short-circuit that skips downloads for files outside the window — the existing `test_hf_log_reader_with_days_filter_only_downloads_in_window` still passes against the cached implementation. `invalidate_cache()` is the Refresh-button hook (clears both the listing memo and the per-file cache). On-disk caching is delegated to `huggingface_hub` itself — `hf_hub_download` already writes to `~/.cache/huggingface/` and short-circuits on revision match, so the spec's "in-memory and on local disk" criterion is satisfied without a parallel `~/.cache/digital-twin-sentinel/` layer that would just duplicate work.
+
+**3. `--local` CLI escape hatch.**
+
+`sentinel.py` now grows a tiny `_parse_cli_args` (argparse) that surfaces `--local` (force LocalReader). Wired into `__main__` so `uv run python src/sentinel.py --local` runs against `data/logs/interactions.jsonl` even when HF creds are in env. Other flags can land here later without churning `main`.
+
+**4. `HFLogWriter` writes `hf_writer_state.json` on every flush attempt.**
+
+After the data-upload portion of `flush()` (success or failure path), the writer uploads a small JSON blob carrying `last_flush_time`, `buffer_size`, and `last_error` to the dataset root as `hf_writer_state.json`. Wrapped in its own broad `except` so a state-upload failure can't mask a successful data flush or break the next retry — the state file is diagnostic, never gates durability. New `read_writer_state(api, repo_id)` helper exposes the parsed dict for Sentinel; missing file (cold dataset / no flushes yet) returns `None` so the panel can render a placeholder rather than crash.
+
+**5. Sentinel "Log writer health" panel.**
+
+New `format_writer_health(reader)` helper + a section in the Metrics tab below Health overview. Three rows (last_flush_time / buffer_size / last_error). Local backend → placeholder explaining writer health applies only to the HF backend. Cold HF dataset → "no writer state file yet" placeholder. State file present → three rows; healthy when `last_error is None`, alert-coloured value when set. Small CSS block (`.writer-health` + `.writer-health-row` + `.writer-health-error` + ok/bad value classes) added to `SENTINEL_CSS`.
+
+| File | Change |
+|---|---|
+| `src/log_reader.py` | New `make_log_reader(*, force_local=False)` factory. `HFLogReader` gains `_file_cache` + `_files_listed` per-instance memos, an `invalidate_cache()` method, and a private `_download_and_parse(filename)` helper; `read()` re-walks the cache instead of re-listing. |
+| `src/hf_log_writer.py` | New `WRITER_STATE_FILENAME = "hf_writer_state.json"` constant. `flush()` records the post-attempt buffer size + error string and calls `_upload_writer_state` (broad-`except`). New `read_writer_state(api, *, repo_id)` helper. |
+| `src/sentinel.py` | Imports updated (`HFLogReader` + `make_log_reader`). `_default_reader` / `_source_label` rewritten on top of the factory. New `format_writer_health` + `WRITER_HEALTH_*_PLACEHOLDER` constants. CSS block for the panel. New `_parse_cli_args` + `--local` flag wired into `__main__`. Panel rendered in the Metrics tab below Health overview. |
+| `tests/test_log_reader.py` (+7) | Factory: token absent → Local; token+repo → HFLogReader; force_local override; token-only → raises. Cache: list_repo_files called once per session; per-file downloads cached; `invalidate_cache` re-fetches. |
+| `tests/test_hf_log_writer.py` (+5, ±5) | New tests for state-file upload on flush success / flush failure / state-upload-failure-doesn't-break-flush / `read_writer_state` missing / `read_writer_state` present. Existing `upload_file.call_count` / `assert_called_once` assertions updated to count data-file uploads only (a new `_data_upload_count` helper) so the additional state-file upload doesn't shift the numbers. |
+| `tests/test_sentinel.py` (+4) | Panel formatter tests: local placeholder / no-state placeholder / happy-path rows / last_error surfaced in alert class. |
+
+### Decisions
+
+**1. `make_log_reader()` raises when `HF_TOKEN` is set but `HF_DATASET_REPO` is missing.**
+
+Two options: (a) fall back to `LocalReader` silently, (b) raise `RuntimeError`. I chose (b) for symmetry with `make_log_writer` (which raises the same shape on the same misconfig) and because a Space launched with one of two env vars set is a deployment bug — silent degrade would leave the operator pointed at empty local logs, looking confused. The error message names the missing var and points at `force_local` / `--local` for the legitimate "yes I want local" case.
+
+**2. On-disk cache delegated to `huggingface_hub`'s built-in `~/.cache/huggingface/`.**
+
+The slice spec phrased the on-disk cache as `e.g. ~/.cache/digital-twin-sentinel/`. I evaluated two designs: (a) a parallel cache directory under `digital-twin-sentinel/`, (b) lean on `huggingface_hub`'s revision-aware cache. Picked (b): `hf_hub_download` already writes to `~/.cache/huggingface/<repo>/...` and short-circuits on revision match, so a cold-restart Sentinel re-uses the cached files without re-downloading bytes. Adding a parallel layer would duplicate work without buying anything for portfolio scale (~weeks of weekly Sentinel runs). The in-memory cache is the load-bearing add for the "open multiple panels in one session" use case the spec calls out.
+
+**3. State file uploaded on every flush attempt — including failures.**
+
+The whole point of the panel is to surface "HF is silently failing to flush". If the state file were only written on success, the panel would always read a green state right up until it stopped reading anything (because flush had been failing for hours). Writing on the failure path means Sentinel sees `last_error` set + a stale `last_flush_time` and the operator immediately knows something's wrong. The risk: HF being down could fail the state upload too. Acceptable — the previous successful flush's state will still be there, the dashboard shows old `last_flush_time`, the operator infers the outage from the staleness. Two layers of signal for one failure mode.
+
+**4. State-upload failure wrapped in its own `except`.**
+
+The data flush comes first. If the data flush succeeds and the buffer drains, but then the state-upload itself raises, the data is durable and the buffer is empty — the next flush attempt is a no-op (empty buffer) and won't re-upload state. So a one-off state-upload failure means the panel shows a slightly stale `last_flush_time` for one cycle. Tradeoff: simpler control flow, no chance of state-upload errors leaking into the per-turn pipeline. The alternative (raising state-upload failures) would propagate into `_poll_loop`'s `except Exception` and just log there anyway.
+
+**5. `_data_upload_count(api)` test helper.**
+
+The state-file upload now lives inside every `flush()`, which means existing tests asserting `api.upload_file.call_count == 1` started failing because the count became 2 (data + state). Two ways to fix: (a) bump every assertion to its new total, (b) add a helper that counts only data-file uploads (path starts with `logs/`). Picked (b) — the assertions are about "did the flush fire?" which is semantically about data uploads; counting both conflates the diagnostic with the data path. The helper makes future similar additions (a `manifest.json` later, say) trivial.
+
+**6. CLI argparse, not env-var, for `--local`.**
+
+Could have used `DIGITAL_TWIN_FORCE_LOCAL=1`. Picked argparse because (a) it's what an operator instinctively reaches for at the shell prompt, (b) it leaves env vars dedicated to deployment-time configuration (Spaces secrets, etc.), and (c) argparse gives `--help` output for free. Accepted cost: tiny `_parse_cli_args` function + an `import argparse` inside it (kept local so the module-load path doesn't grow).
+
+### Live verification
+
+- Full suite: **598/598 passing** (+16 from Session 59's 582). 1 opt-in HF integration test still gated on `HF_INTEGRATION_TEST=1`, skipped in default runs.
+- `--local` CLI parse smoke-tested against `_parse_cli_args(['--local'])` and `_parse_cli_args([])` — flag toggles correctly.
+- Sentinel imports clean against the rewired `HFLogReader` / `make_log_reader` paths; no module-load regressions.
+
+### Decisions deferred to future slices
+
+- **Live round-trip against `Alejandrofupi/digital-twin-logs`** — slice A's pattern (and slice B's verification scripts) call for an opt-in `HF_INTEGRATION_TEST=1` end-to-end check. Not in this slice's scope; the existing slice-A round-trip test already covers data paths, and the state-file path is small enough that the unit tests are convincing. If real HF traffic surfaces a state-upload race, add a verification script in slice E.
+- **Sentinel auto-invalidation on a "real" Refresh action** — `invalidate_cache()` exists on `HFLogReader` but isn't yet wired to a button. The Sentinel auto-refresh ribbon already triggers data reloads via `ensure_fresh_*`; threading cache-invalidation through that path is slice-E or post-Phase-7 polish.
+- **Local-mode writer-state mirror** — currently the state file is HF-only. A local mirror at `data/logs/.hf_writer_state.json` would let an operator inspect the writer's state without HF connectivity. Not load-bearing for the panel (which only renders for HF backend) and would be dead code for the local path that lacks a flush concept entirely.
+
+### Outstanding (start of next session)
+
+- **Slice E (`#50`)** — final slice in Phase 6.
+- **Phase 7 (HF Spaces deploy, issue `#6`)** — final phase before public traffic.
+- **Watch-items unchanged:** `LIMITATIONS::P8` initial-drill tool-firing rate; `LIMITATIONS::O8` guardrail cross-branch evaluation gap.
+
+### Next session entry-point
+
+Phase 6 slice E (`#50`). The Sentinel surface is now backend-agnostic: same dashboard runs over local JSONL or HF Dataset, and the writer-health panel surfaces the only HF-specific failure mode that wouldn't show up in record reads. Slice E plus the Phase-7 deploy are what's left before public traffic.
+
+---
+
 ## Session 59 (2026-05-07) — Phase 6 slice C (#48) shipped: read-time schema migration
 
 **Status:** Slice C insulates the reader from every schema bump shipped so far (#37 / #39 / #42) and from future ones. New `src/schema_migrations.py` declares the per-version required-field set + cumulative optional-field defaults + a pure `SchemaVersionHandler` that fills missing optionals, raises a clear catchable error on missing required, and passes future-version records through unchanged with a warning. Wired upstream of `InteractionRecord.model_validate` in `_parse_jsonl_to_records`; `LocalReader.read()` was refactored to share that helper with `HFLogReader.read()` so a single wiring point covers both backends. Issue `#48` closed; Slices D / E (`#49` / `#50`) untouched. Suite at **582 passing** (+10 from Session 58's 572: 8 handler + 2 reader-integration).

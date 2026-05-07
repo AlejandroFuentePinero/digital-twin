@@ -82,7 +82,7 @@ from failure_feed import (
 )
 from interaction_log import InteractionRecord
 from kb_corpus import CoverageEntry, compute_coverage, load_sections
-from log_reader import HFReader, LocalReader, LogReader
+from log_reader import HFLogReader, HFReader, LocalReader, LogReader, make_log_reader
 from metric_status import (
     THRESHOLDS,
     TIER_B_METRICS,
@@ -939,6 +939,23 @@ footer { display: none !important; }
 .filter-bar .gradio-dropdown,
 .filter-bar .gradio-textbox { min-height: 36px !important; }
 
+/* ---- Log writer health panel (Metrics tab, #49) ---- */
+.writer-health {
+    display: flex; flex-direction: column; gap: 4px;
+    margin: 4px 0 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+}
+.writer-health-row, .writer-health-error {
+    display: flex; gap: 16px;
+}
+.writer-health-label {
+    color: var(--text-secondary);
+    min-width: 110px;
+}
+.writer-health-value-ok  { color: var(--healthy); }
+.writer-health-value-bad { color: var(--alert); }
+
 /* ---- KB coverage panel (Failures tab) ---- */
 .kb-coverage-summary {
     padding: 8px 0 12px;
@@ -1025,13 +1042,16 @@ footer { display: none !important; }
 
 
 def _default_reader() -> LogReader:
-    if os.environ.get("HF_WRITE_TOKEN"):
-        return HFReader()
-    return LocalReader()
+    """Selects the read backend via ``log_reader.make_log_reader`` (#49):
+    ``HF_TOKEN`` + ``HF_DATASET_REPO`` set → ``HFLogReader`` against the
+    production dataset; otherwise ``LocalReader``. The ``--local`` CLI
+    flag at the entry point bypasses this in favour of a forced
+    ``LocalReader`` even when full HF creds are present."""
+    return make_log_reader()
 
 
 def _source_label(reader: LogReader) -> str:
-    return "HF Dataset" if isinstance(reader, HFReader) else "Local JSONL"
+    return "HF Dataset" if isinstance(reader, HFLogReader) else "Local JSONL"
 
 
 # ---- Date / number formatters ----------------------------------------------
@@ -1971,6 +1991,67 @@ _FLAG_TARGET_LABEL: dict[str, str] = {
     "gap_clusters": "Failures",
     "trend": "Trends",
 }
+
+
+WRITER_HEALTH_LOCAL_PLACEHOLDER = (
+    "_Backend: Local JSONL. Writer health applies only to the HF backend._"
+)
+WRITER_HEALTH_NO_STATE_PLACEHOLDER = (
+    "_No writer state file yet — the HF writer hasn't completed a flush "
+    "attempt against this dataset._"
+)
+
+
+def format_writer_health(reader: LogReader) -> str:
+    """Render ``hf_writer_state.json`` for the Sentinel "Log writer health"
+    panel (#49). Three rows: last flush time, current buffer size, and
+    the last error if any. Only meaningful for the HF backend; the local
+    backend renders a placeholder so the panel is self-explanatory in
+    dev. Errors fetching the state file degrade to a placeholder rather
+    than crashing the dashboard — the writer's own broad ``except`` is
+    the durability path; this panel is purely diagnostic."""
+    if not isinstance(reader, HFLogReader):
+        return WRITER_HEALTH_LOCAL_PLACEHOLDER
+
+    from hf_log_writer import read_writer_state
+
+    try:
+        state = read_writer_state(reader._api, repo_id=reader._repo_id)
+    except Exception as exc:
+        return f"_Could not fetch writer state ({type(exc).__name__}: {exc})._"
+
+    if state is None:
+        return WRITER_HEALTH_NO_STATE_PLACEHOLDER
+
+    last_flush = state.get("last_flush_time") or "—"
+    buffer_size = state.get("buffer_size", 0)
+    last_error = state.get("last_error")
+    error_block = (
+        f"<div class='writer-health-error'>"
+        f"<span class='writer-health-label'>Last error</span>"
+        f"<span class='writer-health-value writer-health-value-bad'>"
+        f"{html.escape(str(last_error))}</span></div>"
+        if last_error
+        else (
+            "<div class='writer-health-row'>"
+            "<span class='writer-health-label'>Last error</span>"
+            "<span class='writer-health-value writer-health-value-ok'>none</span>"
+            "</div>"
+        )
+    )
+    return (
+        "<div class='writer-health'>"
+        "<div class='writer-health-row'>"
+        "<span class='writer-health-label'>Last flush</span>"
+        f"<span class='writer-health-value'>{html.escape(str(last_flush))}</span>"
+        "</div>"
+        "<div class='writer-health-row'>"
+        "<span class='writer-health-label'>Buffer size</span>"
+        f"<span class='writer-health-value'>{int(buffer_size)}</span>"
+        "</div>"
+        f"{error_block}"
+        "</div>"
+    )
 
 
 def format_flag_card(flag: Flag) -> str:
@@ -3039,6 +3120,11 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                     format_metrics_overview(models, priors, DISPLAY_MODE_DEFAULT)
                 )
 
+                gr.Markdown(
+                    "<div class='section-header'>Log writer health</div>"
+                )
+                gr.Markdown(format_writer_health(reader))
+
                 with gr.Accordion("Glossary", open=False):
                     gr.Markdown(format_metrics_glossary())
 
@@ -3533,5 +3619,30 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
     return app
 
 
+def _parse_cli_args(argv: list[str] | None = None):
+    """``--local`` forces ``LocalReader`` even when ``HF_TOKEN`` is in env
+    (operator escape hatch for inspecting dev logs while a prod env is
+    set; #49). Other flags can land here later without churning ``main``.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="sentinel",
+        description="Digital Twin Sentinel dashboard.",
+    )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help=(
+            "Force the LocalReader even when HF_TOKEN + HF_DATASET_REPO are "
+            "set in env. Use to inspect data/logs/interactions.jsonl in a "
+            "shell that also has prod HF creds exported."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
-    build_app().launch(inbrowser=True)
+    args = _parse_cli_args()
+    reader = make_log_reader(force_local=args.local)
+    build_app(reader=reader).launch(inbrowser=True)

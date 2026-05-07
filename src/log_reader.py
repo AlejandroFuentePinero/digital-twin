@@ -2,13 +2,19 @@
 
 Returns parsed `InteractionRecord` objects (vs `interaction_log.LogReader` which
 returns dicts and pairs with `LogWriter`). `LocalReader` reads JSONL today;
-`HFReader` is a Phase 6 stub per ADR-0002.
+`HFLogReader` (Phase 6 / `#46`) reads the per-UTC-day files written by
+`HFLogWriter` from the configured HuggingFace Dataset repo.
+
+`make_log_reader()` (Phase 6 / `#48 #49`) is the Sentinel-facing factory:
+`HF_TOKEN` + `HF_DATASET_REPO` set → `HFLogReader`; otherwise → `LocalReader`.
+The `force_local` argument is the `--local` CLI escape hatch.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -90,20 +96,37 @@ class HFLogReader:
             hf_api = HfApi(token=token)
         self._repo_id = repo_id
         self._api = hf_api
+        # Per-instance per-file memo. ``list_repo_files`` runs once, then
+        # each ``logs/YYYY-MM-DD.jsonl`` is parsed on first touch and the
+        # parsed records are cached. Opening multiple Sentinel panels in
+        # one session re-walks the cache without re-fetching (#49). The
+        # file-level granularity preserves the ``read(days=N)`` short-
+        # circuit that skips downloads for files outside the window.
+        # On-disk caching is delegated to ``huggingface_hub`` itself —
+        # ``hf_hub_download`` already writes to ``~/.cache/huggingface/``
+        # and short-circuits on revision match.
+        self._file_cache: dict[str, list[InteractionRecord]] = {}
+        self._files_listed: list[str] | None = None
 
     def read(self, days: int | None = None) -> list[InteractionRecord]:
-        try:
-            files = self._api.list_repo_files(repo_id=self._repo_id, repo_type="dataset")
-        except Exception:
-            _log.exception("HFLogReader could not list repo %s", self._repo_id)
-            return []
+        if self._files_listed is None:
+            try:
+                self._files_listed = self._api.list_repo_files(
+                    repo_id=self._repo_id, repo_type="dataset"
+                )
+            except Exception:
+                _log.exception(
+                    "HFLogReader could not list repo %s", self._repo_id
+                )
+                self._files_listed = []
+                return []
 
         cutoff_date = None
         if days is not None:
             cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days)).date()
 
         targets: list[str] = []
-        for f in files:
+        for f in self._files_listed:
             m = _HF_LOG_PATTERN.match(f)
             if not m:
                 continue
@@ -114,14 +137,9 @@ class HFLogReader:
 
         records: list[InteractionRecord] = []
         for filename in targets:
-            try:
-                local = self._api.hf_hub_download(
-                    repo_id=self._repo_id, filename=filename, repo_type="dataset"
-                )
-            except Exception as exc:
-                _log.warning("HFLogReader skipping %s (%s)", filename, exc)
-                continue
-            records.extend(_parse_jsonl_to_records(Path(local), source=filename))
+            if filename not in self._file_cache:
+                self._file_cache[filename] = self._download_and_parse(filename)
+            records.extend(self._file_cache[filename])
 
         deduped = _dedupe_by_identity_key(records)
 
@@ -133,6 +151,24 @@ class HFLogReader:
 
         deduped.sort(key=lambda r: r.timestamp, reverse=True)
         return deduped
+
+    def invalidate_cache(self) -> None:
+        """Clear the in-memory memos so the next ``read`` re-lists the
+        repo and re-parses each file. Sentinel's Refresh button calls
+        this when the operator wants to pick up records appended since
+        the session opened."""
+        self._file_cache.clear()
+        self._files_listed = None
+
+    def _download_and_parse(self, filename: str) -> list[InteractionRecord]:
+        try:
+            local = self._api.hf_hub_download(
+                repo_id=self._repo_id, filename=filename, repo_type="dataset"
+            )
+        except Exception as exc:
+            _log.warning("HFLogReader skipping %s (%s)", filename, exc)
+            return []
+        return _parse_jsonl_to_records(Path(local), source=filename)
 
 
 def _parse_jsonl_to_records(path: Path, *, source: str) -> list[InteractionRecord]:
@@ -185,3 +221,36 @@ def _dedupe_by_identity_key(
 # Phase 6 stub name in #28; #46 ships the real implementation as
 # `HFLogReader` (matching the writer's `HFLogWriter`).
 HFReader = HFLogReader
+
+
+def make_log_reader(*, force_local: bool = False) -> LogReader:
+    """Sentinel-facing reader factory (#49 / Phase 6 slice D).
+
+    Selection rule:
+    - ``force_local=True`` → ``LocalReader`` regardless of env (the
+      ``--local`` CLI escape hatch when the operator wants to inspect
+      dev logs in a session that also has HF creds in the environment).
+    - ``HF_TOKEN`` set → ``HFLogReader`` against ``HF_DATASET_REPO``.
+      Missing repo raises ``RuntimeError`` so a half-configured prod env
+      fails loudly at startup rather than silently degrading to local.
+    - Otherwise → ``LocalReader``.
+
+    Mirrors the structure of ``interaction_log.make_log_writer`` so a
+    Space provisioned with ``HF_TOKEN`` + ``HF_DATASET_REPO`` reads and
+    writes against the same dataset without per-call configuration.
+    """
+    if force_local:
+        return LocalReader()
+
+    token = os.environ.get("HF_TOKEN")
+    if not token:
+        return LocalReader()
+
+    repo_id = os.environ.get("HF_DATASET_REPO")
+    if not repo_id:
+        raise RuntimeError(
+            "HF_TOKEN is set but HF_DATASET_REPO is not — make_log_reader "
+            "needs both to read against the production HuggingFace Dataset. "
+            "Either set HF_DATASET_REPO or pass force_local=True / --local."
+        )
+    return HFLogReader(repo_id=repo_id, token=token)
