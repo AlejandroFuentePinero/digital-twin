@@ -133,6 +133,44 @@ A structured extraction pipeline that reads raw job postings and produces valida
 
 ---
 
+## Digital Twin
+**Live app:** https://alejandrofupi-digital-twin.hf.space (also embedded on the home page of `alejandrofuentepinero.github.io`)
+**GitHub:** https://github.com/AlejandroFuentePinero/digital-twin
+**Tier:** Flagship | Deployed app
+
+A multi-LLM conversational agent that answers professional questions about Alejandro's research, projects, skills, and trajectory — grounded in a curated knowledge base, with deflection to a polite redirect when the question is out of scope rather than hallucination. The agent recruiters are interacting with right now is itself the strongest demonstration of how Alejandro builds production-grade AI systems.
+
+**Problem:** A single-prompt chatbot gives every recruiter the same surface, regardless of whether they're probing a real gap (deserves an honest acknowledgement and active-learning context), asking about technical depth (deserves tool-fetched README content), or asking for a behavioural story (deserves a concrete example, not platitudes). One prompt cannot do all three jobs without ballooning to 6–7k tokens and diluting attention.
+
+**What it delivers:**
+- **Branch-routed answers:** every turn classified into one of five branches — `GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGISTICAL` — each with its own profile sections, rules, and tool surface.
+- **Calibrated gap responses:** for skills not yet demonstrated, the system surfaces the specific gap, the broader transferable skill with named evidence, and the active-learning context (e.g. Ed Donner production track currently in progress).
+- **Tool-grounded technical depth:** the `TECHNICAL` branch can fetch any of 24 distilled project / paper README files via `fetch_project_readme` (bounded loop, max 3 calls per turn).
+- **Deflection floor on out-of-scope and harmful prompts:** canonical "I don't have that information" gap phrase short-circuits the guardrail; injection attempts and harmful asks are deflected to email contact.
+
+**Pipeline architecture (5 stages):**
+1. **Classifier** — `gpt-4.1-nano` returns `{labels, confidence}` from the last 2 turns plus the current question. Defaults to `GENERIC` on low confidence; multi-label up to 2.
+2. **Branch composer** — composes the system prompt from branch-declared profile sections + branch-specific rules. The same composer call drives generator AND guardrail prompts, structurally preventing writer–judge drift.
+3. **Retrieval** — ChromaDB top-6 against an LLM-enriched chunk store (headline + summary + verbatim source embedded together for multiple match surfaces). Four-stage: query rewriting → dual retrieval pass → chunk merge → LLM rerank.
+4. **Generator** — `gpt-4.1` produces the answer; `TECHNICAL` enters a bounded tool loop with `fetch_project_readme`.
+5. **Guardrail** — `Claude Sonnet 4.6` judges the answer using the same composed prompt the generator saw. Up to 3 retries with structured rejection feedback; falls back to a polite canned-refusal floor.
+
+**Key engineering decisions:**
+- **Distinct model families for generator and guardrail** — OpenAI vs Anthropic. Shared training data and prompt-injection susceptibilities are real risks when both come from the same family; splitting reduces shared failure modes at no architectural cost.
+- **Tool access scoped to one branch** — only `TECHNICAL` has `fetch_project_readme` in its spec. The argument is a `Literal[*REGISTRY.keys()]` pinned at startup; misconfiguration fails at import, not on first user turn.
+- **Outcome-based canary contract, not mechanism-based** — drift detector flags branch / event_type / outcome / keyword-coverage / red-flag changes, not retrieved-chunk-set or retry-depth deltas (those mechanism signals fire on every legitimate KB rebuild without adding signal).
+- **One enriched log per turn, schema-versioned** — every record carries branch, classifier confidence, retrieval chunks with section headings, tool calls with attempt-index attribution, retry attempts with guardrail feedback, per-stage latency, contact-flow state. Sentinel reads this log directly. Read-time schema migration insulates the dashboard from future schema bumps.
+- **ADR-driven decisions, with limitations registered** — every load-bearing structural choice has an ADR; `docs/LIMITATIONS.md` tracks observed and predicted limits with trip-wire conditions per entry. Decisions are working hypotheses; limitations are data.
+
+**Eval and observability:**
+- **v4 baseline** (post-redesign, in-process against the routed pipeline): MRR 0.866, nDCG 0.864, accuracy 4.56/5, completeness 4.64/5, gap rate 0.0% across 149 questions in 7 categories.
+- **Sentinel dashboard:** 14 metrics across Outcome / Routing / Engagement / Tool use / Latency blocks, per-branch trends, failure feed with replay, KB coverage tracking, weekly LLM-batched gap clusters and deflection summaries, canary drift trajectory.
+- **Production:** deployed on HuggingFace Spaces (`cpu-basic`); per-turn latency p50 ≈ 12.7 s / p95 ≈ 17.3 s. Both interaction logs and contact-form submissions persist durably to a private HuggingFace Dataset (buffered writer, size-or-time flush, SIGTERM-safe drain, crash-recovery flush). 620+ behaviour tests; 11-step deployed-Space smoke test passed across all five branches.
+
+**Stack:** Python 3.12 · `uv` · LiteLLM · ChromaDB · Gradio · Pydantic · tenacity · OpenAI (`gpt-4.1`, `gpt-4.1-nano`) · Anthropic (`claude-sonnet-4-6`) · `text-embedding-3-large` · HuggingFace Datasets / Spaces
+
+---
+
 ## Job Intelligence Engine
 **Live app:** https://job-intelligence-engine.streamlit.app/
 **GitHub:** https://github.com/AlejandroFuentePinero/job-intelligence-engine
