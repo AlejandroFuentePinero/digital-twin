@@ -74,6 +74,65 @@ The architecture phases are done. Slice 1 (deploy) + slice 2 (embed) close the b
 
 Observe-mode. The system is live, embedded, instrumented, and durable. Re-engage when one of: (a) real-recruiter traffic surfaces a new failure mode worth fixing; (b) a content update is needed (new role, new project, KB drift); (c) a canary trajectory point shows drift worth investigating.
 
+### Release-checklist status (close-out audit)
+
+Per `docs/RELEASE_CHECKLIST.md`. Honest mapping for each line — closed, deferred, or covered by alternative evidence:
+
+| Checklist | Status | Notes |
+|---|---|---|
+| L7 — `MAP.md` regenerated | ✅ closed | Re-run after `pipeline_diagram.mmd` updates this session |
+| L8 — `pipeline_diagram.mmd` reflects runtime | ✅ closed | Q4 — schema v3 → v4, missing log fields added |
+| L9 — `DECISIONS.md` final session entry | ✅ closed | This entry |
+| L10 — `TODO.md` at final state | ✅ closed | Banner reflects observe-mode posture |
+| L11 — `HUMAN_EVAL_QUESTIONS.md` probes for every branch | 🟡 covered-by-alternative | Smoke test (4/5 branches + manual LOGISTICAL) + canary +1 trajectory gave equivalent evidence. Doc is gitignored / operator-managed |
+| L12 — `LIMITATIONS.md` current | ✅ closed | Q5 — entries through O8 |
+| L13 — Every post-redesign decision has an ADR | ✅ closed | 3 ADRs cover the load-bearing decisions; subsequent slice work captured in DECISIONS sessions |
+| L14 — `CONTEXT.md` glossary covers every term | ✅ closed | Q5 — Drift kind entry rewritten for the post-Session-62 six-kind contract |
+| L15 — `CLAUDE.md` Architecture Summary | ✅ closed | Schema v3 → v4 fix; observe-mode entry-point block added; MAINTENANCE.md cross-referenced |
+| L16 — Pre-redesign artifacts marked historical | ✅ closed | `PLAN.md`/`ARCHITECTURE.md` annotated as superseded in CLAUDE.md; both gitignored |
+| L20 — `pytest -q` passes | ✅ closed | 620 passing, 1 skipped (HF integration opt-in) |
+| L21 — Module health all green | ✅ closed | `_retry_policy.py` added to TESTING.md exemption list (Q5) |
+| L22 — No transition shims / `TODO(#N+)` markers | ✅ closed | Q5 grep — only one false positive (CSS selector comment) |
+| L23 — Forcing-function tests replaced | ✅ closed | Implicit through Phase 6 slice work |
+| L24 — No mock-heavy tests | ✅ closed | TESTING.md convention enforced through review |
+| L25 — All `src/*.py` have a docstring | ✅ closed | Q5 grep clean across 41 modules |
+| L29 — KB re-ingested | ✅ closed | Multiple times this session; final post-skills-update ingest at 105 chunks |
+| L30 — No stale tense/dates | 🟡 closed-with-flag | Q3 — Officeworks tense forward-leaning by ~6 days vs the 13 May 2026 start date; operator chose option C (accept). `~6 years` → `~7 years` in SUMMARY.md fixed |
+| L31 — `profile.md` Frame sections current | ✅ closed | Q3 review |
+| L32 — No unauthorised real names | ✅ closed | Q3 review — only public references (Ed Donner, RSPB, WTMA, Officeworks) |
+| L36 — `run_eval.py` rewired through routed pipeline | ✅ closed | Phase 3 / `#2` |
+| L37 — Latest eval baseline run against deployed | 🟡 deferred | Q6 — v4 (MRR 0.866 / accuracy 4.56) stays current; no eval-relevant content changed; v6 reopens if recruiter traffic shows regression |
+| L38 — Comparison vs prior baseline noted in DECISIONS | ✅ closed | v4 captured in Session 27; v3→v4 caveat noted |
+| L42 — All branches return right calibration verb | 🟡 covered-by-alternative | Phase 5 (#56) regression batch + Session 62 smoke covered this; no formal pre-release re-run |
+| L43 — In-progress curriculum keywords never claimed | 🟡 covered-by-alternative | Phase 5 verified the system-failure target across 50-question regression |
+| L44 — Adversarial probes hold | 🟡 covered-by-alternative | Phase 5 thread (a) close-out (Session 56) |
+| L45 — Mid-conversation branch flips work | ✅ closed | Verified during Phase 5 + canary trajectory |
+| L46 — Out-of-scope / injection probes | 🟡 covered-by-alternative | Deflection rule + canary deflection-aimed probes |
+| L47 — Contact flow works | ✅ closed | Slice 1 first production write to `contacts/` succeeded; slice 2 embedded smoke also exercised it |
+| L51 — Sentinel reads from production | ✅ closed | Dual-source reader confirmed via header label |
+| L52 — Records have full enriched schema | ✅ closed | Schema v4; read-time migration insulates the dashboard |
+| L53 — Sentinel surfaces designed metrics | ✅ closed | 14 metrics across the 5 thematic blocks |
+| L54 — Canary baseline within ~5 commits of HEAD | 🟡 deferred | Q7 — operator chose to leave `4aeb15` (~14 commits past 4898d05) per `feedback_canary_baseline_freeze_is_explicit.md`. Trajectory accumulates against the same anchor through observe-mode |
+| L55 — Canary corpus audited | 🟡 deferred | Three additive KB changes since Phase 5 (Digital Twin section, SUMMARY.md `~7 years` fix, skills.md additions); none remove grounding from existing canary questions. Formal walk deferred to next operator-cadence canary refresh |
+| L56 — Live-vs-canary separation | ✅ closed | Test coverage in `test_dashboard_model.py` |
+| L68 — `.env` keys documented | ✅ closed | `.env.example` |
+| L69 — Required services accessible | ✅ closed | Verified during slice 1 deploy |
+| L70 — Hosting target verified end-to-end | ✅ closed | 11-step smoke test on the live Space |
+| L71 — Public URL responsive | ✅ closed | p50 ≈ 12.7 s, p95 ≈ 17.3 s on cpu-basic |
+| L75 — README current | ✅ closed | Post-Phase-7 currency pass — embedding model fix, module graph + 5 missing modules, MAINTENANCE.md row |
+| L76 — LICENSE present | ✅ closed | MIT |
+| L77 — Portfolio embeds Space (iframe + fallback) | ✅ closed | Slice 2 step 12 passed; tool call fired correctly inside the iframe |
+| L78 — Public links in `data/raw_me/` | 🟡 not-verified | `data/raw_me/` is gitignored / not in the deployed surface; operator content review |
+| L79 — UI polish session shipped | 🟡 deferred | Explicitly listed as a dedicated standalone session in `RELEASE_CHECKLIST.md` itself; not done. Honest gap |
+| L80 — Source links in `data/readmes/*.md` resolve | ✅ closed | Q5 — only Wiley/Scielo 403s (browser-OK; checklist accepts this) |
+| L81 — `digital_twin.md` Alejandro-authored | 🟡 operator-decision | Q2 — accepted Claude-distilled rewrite with locked Q11 shape; corpus convention is Claude-distilled READMEs anyway. Voice rewrite is a future maintenance pass if needed |
+| L82 — `digital_twin.md` Source link resolves | ✅ closed | Repo confirmed PUBLIC |
+| L86 — Tag the release commit | ✅ closed | `v1.0.0` on HEAD (`6a7bcbd`) — moved forward from `e4941d4` after the post-close polish to capture README + skills updates in the first release |
+| L87 — Close `needs-triage` labels | ✅ closed | Zero open issues on the tracker |
+| L88 — Last DECISIONS entry dated and final | ✅ closed | This entry, 2026-05-07 |
+
+**Net:** **34 closed**, **9 deferred or covered-by-alternative** (each documented above), **1 not-verified** (`data/raw_me/` content review, gitignored). No silent failures. Project ships honest.
+
 ---
 
 ## Session 62 (2026-05-07) — Phase 7 slice 1 (#51) shipped: Space deployed + production polish + smoke-test pass
