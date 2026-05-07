@@ -1,13 +1,24 @@
 # Single-job CI: run the test suite on every push to main and every PR
 # targeting main. Catches SDK / dep-resolution breaks before they reach a
-# redeploy. No secrets needed (mock-at-boundary discipline keeps tests
-# off the LLM API path; the one HF round-trip test gated on
-# HF_INTEGRATION_TEST=1 stays skipped here).
+# redeploy.
+#
+# Why the fake API keys below: the OpenAI + Anthropic SDK clients validate
+# the API key at construction time (`OpenAI()` raises if neither argument
+# nor env var is set), and `src/retrieval.py` + `src/ingest.py` construct
+# the client at module-import time. Tests mock at the LLM boundary per
+# docs/TESTING.md and never actually hit the API — but module imports
+# happen during pytest collection, before any mocking layer is in place.
+# Setting placeholder keys lets the constructors succeed; the keys are
+# never used to make a real call (any test that tried would violate the
+# mock-at-boundary discipline and is expected to fail loudly anyway).
+# Local dev gets keys from .env via python-dotenv; CI gets them from
+# this env block. Both work without code changes.
 #
 # What this does NOT cover:
 #   - Eval (in-process, hits real LLMs — operator cadence per MAINTENANCE.md)
 #   - Canary (same)
 #   - Doc-vs-code drift (no automated gate today; relies on manual review)
+#   - The HF round-trip test gated on HF_INTEGRATION_TEST=1 stays skipped.
 #
 # See docs/audits/audit-2026-05-07.md::M4 for the rationale.
 
@@ -22,6 +33,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # Placeholder values — satisfy SDK constructor validation only.
+      # Tests mock at the boundary; these are never used in real calls.
+      OPENAI_API_KEY: sk-ci-placeholder-not-a-real-key
+      ANTHROPIC_API_KEY: sk-ant-ci-placeholder-not-a-real-key
     steps:
       - name: Checkout
         uses: actions/checkout@v4
