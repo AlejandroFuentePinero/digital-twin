@@ -34,7 +34,7 @@ from composer import PromptComposer
 from contact_log import ContactRecord, ContactWriter
 from generator import Generator
 from guardrail import Guardrail
-from interaction_log import LogWriter
+from interaction_log import make_log_writer
 from pipeline import CANNED_REFUSAL, Pipeline
 from profile import ProfileLoader
 from rules import GAP_PHRASE
@@ -85,7 +85,7 @@ _pipeline = Pipeline(
     composer=_composer,
     generator=Generator(),
     guardrail=Guardrail(),
-    log_writer=LogWriter(),
+    log_writer=make_log_writer(),
     tool_registry=_tool_registry,
     tool_model_callable=make_litellm_tool_callable(),
 )

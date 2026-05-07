@@ -9,8 +9,10 @@ storage layer in Phase 6 without changing this module's public surface.
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -92,3 +94,49 @@ class LogReader:
     def read_since(self, since: str) -> list[dict]:
         """Return records with `timestamp >= since` (lex-compare ISO-8601 strings)."""
         return [r for r in self.read_all() if r["timestamp"] >= since]
+
+
+def make_log_writer(
+    *,
+    local_path: Path = DEFAULT_LOG_PATH,
+    buffer_path: Path | None = None,
+    auto_start: bool = True,
+):
+    """Return the configured log writer based on ``DIGITAL_TWIN_LOG_BACKEND``.
+
+    Default (unset or ``local``) returns the file-backed ``LogWriter`` so
+    ordinary local dev keeps writing to ``data/logs/interactions.jsonl``.
+    ``hf`` returns an ``HFLogWriter`` pointed at ``HF_DATASET_REPO`` with
+    its background flush thread started and an ``atexit`` hook that
+    stops + final-flushes on shutdown — so callers don't have to manage
+    the lifecycle. Misconfiguration (no repo / unknown backend) raises
+    at startup rather than silently degrading.
+
+    ``auto_start=False`` is an escape hatch for tests that want to
+    drive the writer synchronously.
+    """
+    backend = os.environ.get("DIGITAL_TWIN_LOG_BACKEND", "local").lower()
+    if backend == "local":
+        return LogWriter(local_path)
+    if backend == "hf":
+        repo_id = os.environ.get("HF_DATASET_REPO")
+        if not repo_id:
+            raise RuntimeError(
+                "DIGITAL_TWIN_LOG_BACKEND=hf requires HF_DATASET_REPO env var "
+                "(e.g. 'Alejandrofupi/digital-twin-logs')."
+            )
+        from hf_log_writer import DEFAULT_BUFFER_PATH, HFLogWriter
+
+        writer = HFLogWriter(
+            repo_id=repo_id,
+            buffer_path=buffer_path or DEFAULT_BUFFER_PATH,
+            token=os.environ.get("HF_TOKEN"),
+        )
+        if auto_start:
+            writer.start()
+            atexit.register(writer.stop)
+        return writer
+    raise RuntimeError(
+        f"DIGITAL_TWIN_LOG_BACKEND={backend!r} is not recognised; "
+        "expected 'local' or 'hf'."
+    )

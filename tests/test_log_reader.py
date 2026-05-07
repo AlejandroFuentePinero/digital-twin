@@ -2,11 +2,12 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from interaction_log import DEFAULT_LOG_PATH, InteractionRecord
-from log_reader import HFReader, LocalReader
+from log_reader import HFLogReader, LocalReader
 
 
 def _record(timestamp: str = "2026-05-01T12:00:00+00:00", turn_index: int = 0) -> dict:
@@ -110,10 +111,137 @@ def test_local_reader_parses_real_interactions_log_cleanly():
     assert all(isinstance(r, InteractionRecord) for r in out)
 
 
-def test_hf_reader_raises_not_implemented_until_phase_6(tmp_path):
-    """HFReader is a Phase 6 stub per ADR-0002 — calling read() must surface that explicitly."""
-    with pytest.raises(NotImplementedError, match="Phase 6"):
-        HFReader().read()
+def _hf_api_for_reader(files_by_path: dict[str, list[dict]]) -> MagicMock:
+    """A MagicMock standing in for ``huggingface_hub.HfApi`` for the
+    reader path.
+
+    ``files_by_path`` maps ``logs/YYYY-MM-DD.jsonl`` → list of records;
+    ``list_repo_files`` returns the keys, ``hf_hub_download`` writes the
+    matching value to a temp file and returns its path."""
+    import tempfile
+
+    api = MagicMock()
+    api.list_repo_files = MagicMock(return_value=list(files_by_path.keys()))
+
+    def fake_download(*, repo_id, filename, repo_type):  # noqa: ARG001
+        records = files_by_path[filename]
+        f = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+        f.close()
+        return f.name
+
+    api.hf_hub_download = MagicMock(side_effect=fake_download)
+    return api
+
+
+def test_hf_log_reader_downloads_and_parses_per_day_files(tmp_path):
+    files = {
+        "logs/2026-05-06.jsonl": [_record(timestamp="2026-05-06T10:00:00+00:00", turn_index=1)],
+        "logs/2026-05-07.jsonl": [_record(timestamp="2026-05-07T10:00:00+00:00", turn_index=2)],
+    }
+    api = _hf_api_for_reader(files)
+
+    out = HFLogReader(repo_id="ignored/test", hf_api=api).read()
+
+    assert len(out) == 2
+    assert all(isinstance(r, InteractionRecord) for r in out)
+    assert sorted(r.turn_index for r in out) == [1, 2]
+
+
+def test_hf_log_reader_dedupes_by_session_turn_run_and_replicate(tmp_path):
+    """Reader-side dedup is the slice's single dedup choke point — a
+    retried-after-ambiguous-failure flush can produce the same record
+    twice. The key is ``(session_id, turn_index, run_id, replicate_index)``;
+    canary fields default ``None`` for live records."""
+    duplicate_live = _record(timestamp="2026-05-07T10:00:00+00:00", turn_index=0)
+    files = {
+        "logs/2026-05-07.jsonl": [
+            duplicate_live,
+            duplicate_live,  # exact replay → same key → collapses
+            _record(timestamp="2026-05-07T11:00:00+00:00", turn_index=1),
+        ]
+    }
+    api = _hf_api_for_reader(files)
+
+    out = HFLogReader(repo_id="ignored/test", hf_api=api).read()
+
+    assert sorted(r.turn_index for r in out) == [0, 1], "exact duplicates collapse"
+
+
+def test_hf_log_reader_treats_canary_replicates_as_distinct(tmp_path):
+    """Two canary records with the same session/turn but different
+    ``replicate_index`` are NOT duplicates — replicates are the unit
+    of the canary corpus, not a flush retry."""
+    base = _record(timestamp="2026-05-07T10:00:00+00:00", turn_index=0)
+    files = {
+        "logs/2026-05-07.jsonl": [
+            base | {"is_canary": True, "run_id": "r-1", "replicate_index": 0},
+            base | {"is_canary": True, "run_id": "r-1", "replicate_index": 1},
+            base | {"is_canary": True, "run_id": "r-1", "replicate_index": 2},
+        ]
+    }
+    api = _hf_api_for_reader(files)
+
+    out = HFLogReader(repo_id="ignored/test", hf_api=api).read()
+    assert sorted(r.replicate_index for r in out) == [0, 1, 2]
+
+
+def test_hf_log_reader_returns_records_most_recent_first(tmp_path):
+    files = {
+        "logs/2026-05-05.jsonl": [_record(timestamp="2026-05-05T10:00:00+00:00", turn_index=1)],
+        "logs/2026-05-07.jsonl": [_record(timestamp="2026-05-07T10:00:00+00:00", turn_index=3)],
+        "logs/2026-05-06.jsonl": [_record(timestamp="2026-05-06T10:00:00+00:00", turn_index=2)],
+    }
+    api = _hf_api_for_reader(files)
+
+    out = HFLogReader(repo_id="ignored/test", hf_api=api).read()
+    assert [r.turn_index for r in out] == [3, 2, 1]
+
+
+def test_hf_log_reader_with_days_filter_only_downloads_in_window(tmp_path):
+    """The days filter prunes by file name (each file is one UTC day) so
+    files outside the window are never downloaded."""
+    today = datetime.now(timezone.utc).date()
+    in_window = (today - timedelta(days=2)).isoformat()
+    out_window = (today - timedelta(days=30)).isoformat()
+    files = {
+        f"logs/{out_window}.jsonl": [
+            _record(timestamp=f"{out_window}T10:00:00+00:00", turn_index=99)
+        ],
+        f"logs/{in_window}.jsonl": [
+            _record(timestamp=f"{in_window}T10:00:00+00:00", turn_index=1)
+        ],
+    }
+    api = _hf_api_for_reader(files)
+
+    out = HFLogReader(repo_id="ignored/test", hf_api=api).read(days=7)
+
+    assert [r.turn_index for r in out] == [1]
+    downloaded = [c.kwargs["filename"] for c in api.hf_hub_download.call_args_list]
+    assert all(in_window in n for n in downloaded), (
+        f"out-of-window files must not be downloaded; got {downloaded}"
+    )
+
+
+def test_hf_log_reader_returns_empty_list_when_repo_has_no_log_files(tmp_path):
+    api = _hf_api_for_reader({"README.md": []})
+    out = HFLogReader(repo_id="ignored/test", hf_api=api).read()
+    assert out == []
+
+
+def test_hf_log_reader_skips_non_log_paths_in_repo_listing(tmp_path):
+    """``list_repo_files`` returns everything in the repo (README.md,
+    ``.gitattributes``, etc.) — only ``logs/*.jsonl`` are interaction
+    records."""
+    files = {
+        "README.md": [],
+        ".gitattributes": [],
+        "logs/2026-05-07.jsonl": [_record(timestamp="2026-05-07T10:00:00+00:00", turn_index=1)],
+    }
+    api = _hf_api_for_reader(files)
+    out = HFLogReader(repo_id="ignored/test", hf_api=api).read()
+    assert [r.turn_index for r in out] == [1]
 
 
 def test_read_tolerates_records_missing_optional_fields(tmp_path):

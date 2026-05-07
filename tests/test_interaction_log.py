@@ -1,6 +1,6 @@
 import pytest
 
-from interaction_log import LogReader, LogWriter, compute_prompt_hash
+from interaction_log import LogReader, LogWriter, compute_prompt_hash, make_log_writer
 
 
 def _full_record(timestamp: str = "2026-05-01T12:00:00+00:00") -> dict:
@@ -150,6 +150,95 @@ def test_canary_fields_default_to_live_record_shape_and_round_trip_when_set(tmp_
     assert out["is_canary"] is True
     assert out["replicate_index"] == 2
     assert out["run_id"] == "run-2026-05-04-abc"
+
+
+# ---------------------------------------------------------------------------
+# Backend-selection factory (#46): DIGITAL_TWIN_LOG_BACKEND=local|hf
+# ---------------------------------------------------------------------------
+
+
+def test_make_log_writer_defaults_to_local_when_env_is_unset(tmp_path, monkeypatch):
+    monkeypatch.delenv("DIGITAL_TWIN_LOG_BACKEND", raising=False)
+    writer = make_log_writer(local_path=tmp_path / "interactions.jsonl")
+    assert isinstance(writer, LogWriter)
+
+
+def test_make_log_writer_returns_local_when_env_is_explicitly_local(tmp_path, monkeypatch):
+    monkeypatch.setenv("DIGITAL_TWIN_LOG_BACKEND", "local")
+    writer = make_log_writer(local_path=tmp_path / "interactions.jsonl")
+    assert isinstance(writer, LogWriter)
+
+
+def test_make_log_writer_returns_hf_writer_when_env_is_hf(tmp_path, monkeypatch):
+    """``DIGITAL_TWIN_LOG_BACKEND=hf`` plus a configured ``HF_DATASET_REPO``
+    selects the HuggingFace writer. ``HF_TOKEN`` is allowed to be present
+    in env (the writer uses it via ``HfApi``); the test should not need
+    any real network and should not assert on token contents.
+
+    ``auto_start=False`` keeps the test deterministic — we don't want a
+    background daemon thread spinning during the suite. Production
+    callers (app.py) get ``auto_start=True``."""
+    from hf_log_writer import HFLogWriter
+
+    monkeypatch.setenv("DIGITAL_TWIN_LOG_BACKEND", "hf")
+    monkeypatch.setenv("HF_DATASET_REPO", "Alejandrofupi/digital-twin-logs-test")
+    monkeypatch.setenv("HF_TOKEN", "fake-token-for-test")
+
+    writer = make_log_writer(
+        local_path=tmp_path / "interactions.jsonl",
+        buffer_path=tmp_path / ".hf_buffer.jsonl",
+        auto_start=False,
+    )
+    assert isinstance(writer, HFLogWriter)
+
+
+def test_make_log_writer_auto_starts_hf_thread_and_registers_atexit_stop(
+    tmp_path, monkeypatch
+):
+    """Production callers want the lifecycle managed for them:
+    ``make_log_writer()`` with ``DIGITAL_TWIN_LOG_BACKEND=hf`` returns a
+    writer whose background poller is already running, and registers
+    ``stop`` on ``atexit`` so a clean shutdown final-flushes the
+    buffer instead of stranding records on disk."""
+    import atexit as _atexit
+
+    from hf_log_writer import HFLogWriter
+
+    monkeypatch.setenv("DIGITAL_TWIN_LOG_BACKEND", "hf")
+    monkeypatch.setenv("HF_DATASET_REPO", "Alejandrofupi/digital-twin-logs-test")
+    monkeypatch.setenv("HF_TOKEN", "fake-token-for-test")
+
+    registered: list = []
+    monkeypatch.setattr(_atexit, "register", lambda fn, *a, **kw: registered.append(fn))
+
+    writer = make_log_writer(
+        local_path=tmp_path / "interactions.jsonl",
+        buffer_path=tmp_path / ".hf_buffer.jsonl",
+    )
+    try:
+        assert isinstance(writer, HFLogWriter)
+        assert writer._thread is not None and writer._thread.is_alive(), (
+            "auto_start=True (default) must start the background poller"
+        )
+        assert writer.stop in registered, "stop must be registered on atexit"
+    finally:
+        writer.stop()
+
+
+def test_make_log_writer_rejects_hf_backend_without_repo_env(tmp_path, monkeypatch):
+    """``DIGITAL_TWIN_LOG_BACKEND=hf`` but no ``HF_DATASET_REPO`` is a
+    misconfiguration — fail loudly at startup rather than silently
+    falling back to local."""
+    monkeypatch.setenv("DIGITAL_TWIN_LOG_BACKEND", "hf")
+    monkeypatch.delenv("HF_DATASET_REPO", raising=False)
+    with pytest.raises(Exception, match=r"HF_DATASET_REPO|backend"):
+        make_log_writer(local_path=tmp_path / "interactions.jsonl")
+
+
+def test_make_log_writer_rejects_unknown_backend_value(tmp_path, monkeypatch):
+    monkeypatch.setenv("DIGITAL_TWIN_LOG_BACKEND", "s3")
+    with pytest.raises(Exception, match=r"DIGITAL_TWIN_LOG_BACKEND|backend"):
+        make_log_writer(local_path=tmp_path / "interactions.jsonl")
 
 
 def test_record_round_trips_reproducibility_fields_when_caller_populates_them(tmp_path):

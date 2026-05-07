@@ -48,6 +48,7 @@ MODULE_CATEGORY: dict[str, str] = {
     "ingest": "Retrieval (RAG)",
     "kb_corpus": "Retrieval (RAG)",
     "interaction_log": "Logging",
+    "hf_log_writer": "Logging",
     "log_reader": "Logging",
     "session_state": "Logging",
     "contact_log": "Logging",
