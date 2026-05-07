@@ -1466,6 +1466,31 @@ def test_overlay_forwards_invalidate_cache_to_hf_reader():
     hf.invalidate_cache.assert_called_once()
 
 
+def test_wrap_helper_wraps_hf_passes_through_local(monkeypatch):
+    """The CLI path bypasses _default_reader and constructs the reader
+    inline, so the overlay-wrapping logic must live in a helper that the
+    CLI can reach. Regression for the bug where Sentinel-from-CLI showed
+    plain HF Dataset records and the Canary tab read empty."""
+    from sentinel import _wrap_with_canary_overlay_if_hf, _HFWithLocalCanaryOverlay
+    from unittest.mock import MagicMock
+
+    # HFLogReader → wrapped
+    monkeypatch.setattr("log_reader.HFLogReader.__init__", lambda self, **kw: None)
+    from log_reader import HFLogReader
+
+    hf = HFLogReader()
+    wrapped = _wrap_with_canary_overlay_if_hf(hf)
+    assert isinstance(wrapped, _HFWithLocalCanaryOverlay)
+
+    # LocalReader → pass-through (canary records are already in the local file)
+    local = LocalReader(Path("/nonexistent"))
+    assert _wrap_with_canary_overlay_if_hf(local) is local
+
+    # Some other reader (e.g. test mock) → pass-through
+    mock = MagicMock()
+    assert _wrap_with_canary_overlay_if_hf(mock) is mock
+
+
 def test_source_label_reflects_dual_source(monkeypatch):
     """The source label distinguishes the dual-source state from plain HF /
     plain Local so the operator can see what's wired at a glance."""

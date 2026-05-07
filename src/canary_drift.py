@@ -10,22 +10,32 @@ Two phases:
    so single-shot LLM stochasticity doesn't generate spurious drift flags.
 
 2. **Detect** drift per-question by comparing the current run's aggregate to
-   the baseline run's aggregate. Eight drift kinds with locked severity bounds:
+   the baseline run's aggregate. Six drift kinds with locked severity bounds:
 
    - ``branch_changed``               → always major
    - ``event_type_changed``           → always major (PRD #41 user-story #26)
    - ``outcome_changed``              → always major (post-#45 headline drift)
    - ``keyword_coverage_dropped``     → minor (drop ≥0.2), major (drop ≥0.5)
    - ``red_flag_emerged``             → always major (fabrication regression)
-   - ``retry_depth_changed``          → minor (delta ±1), major (1↔3+ jump)
-   - ``chunk_set_changed``            → minor (Jaccard ∈ [0.4, 0.7)), major (< 0.4)
-   - ``latency_p95_regression``       → minor (>25% growth), major (>50% growth)
+   - ``latency_p95_regression``       → minor (>50% growth), major (>100% growth)
 
-Per the PRD, drift detection is keyword-free / answer-text-free for routing /
-retrieval / latency signals; the new outcome / keyword-coverage / red-flag
-kinds (#45) inspect answer text via the `canary_outcome` deep module. An
-LLM-judge layer can be added later as `answer_drifted` if rule-based proves
-too brittle on the recalibrated baseline.
+The detector deliberately surfaces **outcome drift only** — branch/event/
+outcome/keyword/red-flag answer the question "did the system stop doing
+what we wanted?" Mechanism signals (which chunks were retrieved, how many
+guardrail attempts ran, sub-second latency wobble) were dropped in
+Session 62 because their false-positive rate dwarfed real signal: any
+legitimate `ingest.py` rebuild flips chunk_set Jaccard via non-deterministic
+enrichment headlines, and single-attempt retry variance is normal LLM mood.
+Quality regressions caused by retrieval shifts now surface via
+``keyword_coverage_dropped`` (downstream effect, not cause).
+
+``latency_p95_regression`` survives but with tighter thresholds — sub-1.5x
+ratios are API-load fluctuation, not regression.
+
+Per the PRD, drift detection is keyword-free / answer-text-free for routing
+signals; outcome / keyword-coverage / red-flag kinds (#45) inspect answer
+text via the `canary_outcome` deep module. An LLM-judge layer can be added
+later as `answer_drifted` if rule-based proves too brittle.
 """
 
 from __future__ import annotations
@@ -51,17 +61,15 @@ DriftKind = Literal[
     "outcome_changed",
     "keyword_coverage_dropped",
     "red_flag_emerged",
-    "retry_depth_changed",
-    "chunk_set_changed",
     "latency_p95_regression",
 ]
 Severity = Literal["minor", "major"]
 
-# Locked thresholds — see issue #39 § Drift detection + #45 § 5.
-JACCARD_MAJOR_BELOW = 0.4
-JACCARD_MINOR_BELOW = 0.7
-LATENCY_MINOR_MULTIPLIER = 1.25
-LATENCY_MAJOR_MULTIPLIER = 1.50
+# Thresholds — outcome bands locked by issue #39 § Drift detection + #45 § 5.
+# Latency tightened in Session 62 (was 1.25 / 1.50) because sub-1.5x ratios
+# turned out to be API-load wobble, not regression. Keyword bands unchanged.
+LATENCY_MINOR_MULTIPLIER = 1.50
+LATENCY_MAJOR_MULTIPLIER = 2.00
 KEYWORD_COVERAGE_MINOR_DROP = 0.2
 KEYWORD_COVERAGE_MAJOR_DROP = 0.5
 
@@ -75,8 +83,6 @@ class AggregatedCanaryRun:
     event_type: str
     outcome: Outcome
     median_latency_ms: float
-    chunk_set: frozenset[tuple[str, str]]
-    max_attempts: int
     keyword_coverage: float | None
     red_flag: bool
     git_sha: str | None
@@ -114,16 +120,6 @@ def aggregate_question(
     """
     if not records:
         raise ValueError("aggregate_question requires at least one replicate")
-    chunk_sets = [
-        frozenset(
-            (c.get("source_file", ""), c.get("section_heading", ""))
-            for c in r.retrieved_chunks
-        )
-        for r in records
-    ]
-    intersection: frozenset[tuple[str, str]] = chunk_sets[0]
-    for s in chunk_sets[1:]:
-        intersection = intersection & s
 
     if question is not None:
         outcomes = [derive_outcome(r, question) for r in records]
@@ -153,8 +149,6 @@ def aggregate_question(
         event_type=_majority(r.event_type for r in records),
         outcome=outcome,
         median_latency_ms=median(r.latency_ms.get("total", 0) for r in records),
-        chunk_set=intersection,
-        max_attempts=max(len(r.attempts) for r in records),
         keyword_coverage=keyword_coverage,
         red_flag=red_flag,
         git_sha=records[0].git_sha,
@@ -178,35 +172,6 @@ def _group_by_question(
     for r in records:
         grouped.setdefault(r.question, []).append(r)
     return grouped
-
-
-def _retry_depth_severity(baseline_max: int, current_max: int) -> Severity | None:
-    if baseline_max == current_max:
-        return None
-    delta = abs(baseline_max - current_max)
-    # Major when crossing the 1 ↔ 3+ boundary (clean ↔ retry-exhausted).
-    if (baseline_max <= 1 and current_max >= 3) or (baseline_max >= 3 and current_max <= 1):
-        return "major"
-    if delta == 1:
-        return "minor"
-    # Larger jumps not crossing the 1↔3+ boundary (e.g. 2 → some hypothetical
-    # 5) read as major; v1 has MAX_ATTEMPTS=3 so this branch is unreachable
-    # today. Treating it as major keeps the threshold monotone if the cap moves.
-    return "major"
-
-
-def _jaccard(a: frozenset, b: frozenset) -> float:
-    if not a and not b:
-        return 1.0
-    return len(a & b) / len(a | b)
-
-
-def _chunk_severity(jaccard: float) -> Severity | None:
-    if jaccard >= JACCARD_MINOR_BELOW:
-        return None
-    if jaccard < JACCARD_MAJOR_BELOW:
-        return "major"
-    return "minor"
 
 
 def _latency_severity(baseline_ms: float, current_ms: float) -> Severity | None:
@@ -308,26 +273,6 @@ def detect_drift(
                     f"Canary {question!r} now generates a `must_not_appear` "
                     f"phrase that was absent on baseline."
                 ),
-            ))
-
-        retry_sev = _retry_depth_severity(base.max_attempts, cur.max_attempts)
-        if retry_sev is not None:
-            flags.append(CanaryDriftFlag(
-                question=question, kind="retry_depth_changed", severity=retry_sev,
-                headline=f"Retry depth changed: {base.max_attempts} → {cur.max_attempts}",
-                detail=(f"Max attempts across replicates moved from "
-                        f"{base.max_attempts} to {cur.max_attempts}."),
-            ))
-
-        jaccard = _jaccard(base.chunk_set, cur.chunk_set)
-        chunk_sev = _chunk_severity(jaccard)
-        if chunk_sev is not None:
-            flags.append(CanaryDriftFlag(
-                question=question, kind="chunk_set_changed", severity=chunk_sev,
-                headline=f"Chunk set drifted (Jaccard {jaccard:.2f})",
-                detail=(f"Stable retrieval set changed: baseline "
-                        f"{sorted(base.chunk_set)} → current "
-                        f"{sorted(cur.chunk_set)}."),
             ))
 
         latency_sev = _latency_severity(base.median_latency_ms, cur.median_latency_ms)

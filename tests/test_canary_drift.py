@@ -120,28 +120,6 @@ def test_aggregate_question_uses_median_total_latency():
     assert aggregate_question(replicates).median_latency_ms == 1000
 
 
-def test_aggregate_question_intersects_chunk_sets_across_replicates():
-    """Intersection over the N replicates — only chunks every replicate
-    retrieved survive into the aggregate. Drift is then detected against the
-    *stable* set, not the union, so a single flaky retrieval doesn't move
-    the baseline."""
-    replicates = [
-        _r(chunks=[("a.md", "Alpha"), ("b.md", "Beta")], replicate_index=0),
-        _r(chunks=[("a.md", "Alpha"), ("c.md", "Gamma")], replicate_index=1),
-        _r(chunks=[("a.md", "Alpha"), ("b.md", "Beta")], replicate_index=2),
-    ]
-    assert aggregate_question(replicates).chunk_set == frozenset([("a.md", "Alpha")])
-
-
-def test_aggregate_question_takes_max_attempts_across_replicates():
-    replicates = [
-        _r(attempts=1, replicate_index=0),
-        _r(attempts=2, replicate_index=1),
-        _r(attempts=3, replicate_index=2),
-    ]
-    assert aggregate_question(replicates).max_attempts == 3
-
-
 # ----- detect_drift: branch_changed -----------------------------------------
 
 
@@ -178,113 +156,30 @@ def test_detect_drift_flags_event_type_change_as_major():
     assert flags[0].severity == "major"
 
 
-# ----- detect_drift: retry_depth_changed ------------------------------------
-
-
-def test_detect_drift_flags_retry_depth_minor_when_delta_is_one():
-    corpus = [_q()]
-    baseline = [_r(attempts=1, run_id="run-A")]
-    current = [_r(attempts=2, run_id="run-B")]
-    flags = [f for f in detect_drift(current, baseline, corpus)
-             if f.kind == "retry_depth_changed"]
-    assert len(flags) == 1
-    assert flags[0].severity == "minor"
-
-
-def test_detect_drift_flags_retry_depth_major_when_jumping_to_three_plus():
-    """Jump from clean (1 attempt) to retry-exhausted (3 attempts) = major."""
-    corpus = [_q()]
-    baseline = [_r(attempts=1, run_id="run-A")]
-    current = [_r(attempts=3, run_id="run-B")]
-    flags = [f for f in detect_drift(current, baseline, corpus)
-             if f.kind == "retry_depth_changed"]
-    assert len(flags) == 1
-    assert flags[0].severity == "major"
-
-
-def test_detect_drift_flags_retry_depth_major_when_dropping_from_three_plus():
-    """Reverse jump (was retry-exhausted, now clean) is also major — same
-    delta magnitude, same operator-attention-worthy event (something changed
-    enough to re-pass on first attempt)."""
-    corpus = [_q()]
-    baseline = [_r(attempts=3, run_id="run-A")]
-    current = [_r(attempts=1, run_id="run-B")]
-    flags = [f for f in detect_drift(current, baseline, corpus)
-             if f.kind == "retry_depth_changed"]
-    assert len(flags) == 1
-    assert flags[0].severity == "major"
-
-
-def test_detect_drift_silent_when_retry_depth_unchanged():
-    corpus = [_q()]
-    baseline = [_r(attempts=2, run_id="run-A")]
-    current = [_r(attempts=2, run_id="run-B")]
-    flags = [f for f in detect_drift(current, baseline, corpus)
-             if f.kind == "retry_depth_changed"]
-    assert flags == []
-
-
-# ----- detect_drift: chunk_set_changed --------------------------------------
-
-
-def test_detect_drift_flags_chunk_set_minor_when_jaccard_in_minor_band():
-    """Jaccard ∈ [0.4, 0.7) → minor. Two-out-of-five overlap = 2/8 = 0.25 →
-    major; we want a minor here. Use sets of size 4 with 2 overlap → 2/6 = 0.33
-    → still major. Use 3-of-4 overlap: 3/5 = 0.6 ∈ [0.4, 0.7) → minor."""
-    corpus = [_q()]
-    baseline = [_r(chunks=[("a.md", "A"), ("b.md", "B"), ("c.md", "C")],
-                    run_id="run-A")]
-    current = [_r(chunks=[("a.md", "A"), ("b.md", "B"), ("c.md", "C"), ("d.md", "D"), ("e.md", "E")],
-                   run_id="run-B")]
-    # baseline ∩ current = {a, b, c} (size 3); ∪ = {a, b, c, d, e} (size 5)
-    # Jaccard = 3/5 = 0.6 ∈ [0.4, 0.7) → minor
-    flags = [f for f in detect_drift(current, baseline, corpus)
-             if f.kind == "chunk_set_changed"]
-    assert len(flags) == 1
-    assert flags[0].severity == "minor"
-
-
-def test_detect_drift_flags_chunk_set_major_when_jaccard_below_minor_band():
-    """Jaccard < 0.4 → major. baseline {a, b}, current {c, d, e} → no overlap →
-    Jaccard = 0 → major."""
-    corpus = [_q()]
-    baseline = [_r(chunks=[("a.md", "A"), ("b.md", "B")], run_id="run-A")]
-    current = [_r(chunks=[("c.md", "C"), ("d.md", "D"), ("e.md", "E")],
-                   run_id="run-B")]
-    flags = [f for f in detect_drift(current, baseline, corpus)
-             if f.kind == "chunk_set_changed"]
-    assert len(flags) == 1
-    assert flags[0].severity == "major"
-
-
-def test_detect_drift_silent_when_chunk_set_identical():
-    corpus = [_q()]
-    chunks = [("a.md", "A"), ("b.md", "B")]
-    baseline = [_r(chunks=chunks, run_id="run-A")]
-    current = [_r(chunks=chunks, run_id="run-B")]
-    flags = [f for f in detect_drift(current, baseline, corpus)
-             if f.kind == "chunk_set_changed"]
-    assert flags == []
-
-
 # ----- detect_drift: latency_p95_regression ---------------------------------
+# Mechanism kinds (chunk_set_changed, retry_depth_changed) were dropped in
+# Session 62. Their false-positive rate dwarfed real signal — DB rebuilds flip
+# Jaccard, single-attempt retry variance is normal LLM mood. Quality
+# regressions caused by retrieval shifts surface via keyword_coverage_dropped
+# (downstream effect), not the chunk-set delta itself.
 
 
-def test_detect_drift_flags_latency_minor_when_median_grows_more_than_25_percent():
-    """Aggregated median latency grew >25% but ≤50% → minor."""
+def test_detect_drift_flags_latency_minor_when_median_grows_more_than_50_percent():
+    """Aggregated median latency grew >50% but ≤100% → minor."""
     corpus = [_q()]
     baseline = [_r(total_ms=1000, run_id="run-A")]
-    current = [_r(total_ms=1300, run_id="run-B")]   # 30% increase → minor
+    current = [_r(total_ms=1700, run_id="run-B")]   # 70% increase → minor
     flags = [f for f in detect_drift(current, baseline, corpus)
              if f.kind == "latency_p95_regression"]
     assert len(flags) == 1
     assert flags[0].severity == "minor"
 
 
-def test_detect_drift_flags_latency_major_when_median_grows_more_than_50_percent():
+def test_detect_drift_flags_latency_major_when_median_grows_more_than_100_percent():
+    """Doubled latency or worse → major."""
     corpus = [_q()]
     baseline = [_r(total_ms=1000, run_id="run-A")]
-    current = [_r(total_ms=1700, run_id="run-B")]   # 70% increase → major
+    current = [_r(total_ms=2300, run_id="run-B")]   # 130% increase → major
     flags = [f for f in detect_drift(current, baseline, corpus)
              if f.kind == "latency_p95_regression"]
     assert len(flags) == 1
@@ -292,9 +187,11 @@ def test_detect_drift_flags_latency_major_when_median_grows_more_than_50_percent
 
 
 def test_detect_drift_silent_when_latency_within_tolerance():
+    """Sub-1.5x ratios are API-load wobble, not regression. Tightened from
+    1.25x in Session 62 to reduce false positives."""
     corpus = [_q()]
     baseline = [_r(total_ms=1000, run_id="run-A")]
-    current = [_r(total_ms=1100, run_id="run-B")]   # 10% — within 25%
+    current = [_r(total_ms=1400, run_id="run-B")]   # 40% — within new 1.5x band
     flags = [f for f in detect_drift(current, baseline, corpus)
              if f.kind == "latency_p95_regression"]
     assert flags == []

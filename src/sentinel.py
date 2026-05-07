@@ -1073,6 +1073,16 @@ class _HFWithLocalCanaryOverlay:
             self._primary.invalidate_cache()
 
 
+def _wrap_with_canary_overlay_if_hf(reader: LogReader) -> LogReader:
+    """If ``reader`` is an ``HFLogReader``, wrap it with
+    ``_HFWithLocalCanaryOverlay`` so today's local canary records overlay
+    onto the HF live records. Pass-through for any other reader (LocalReader
+    already includes canaries; mocks in tests should not be wrapped)."""
+    if isinstance(reader, HFLogReader):
+        return _HFWithLocalCanaryOverlay(reader)
+    return reader
+
+
 def _default_reader() -> LogReader:
     """Selects the read backend via ``log_reader.make_log_reader`` (#49):
     ``HF_TOKEN`` + ``HF_DATASET_REPO`` set → ``HFLogReader`` against the
@@ -1083,10 +1093,7 @@ def _default_reader() -> LogReader:
     When the resolved backend is HF, the reader is wrapped with
     ``_HFWithLocalCanaryOverlay`` so today's local canary records appear
     in the same Sentinel session as live HF traffic."""
-    primary = make_log_reader()
-    if isinstance(primary, HFLogReader):
-        return _HFWithLocalCanaryOverlay(primary)
-    return primary
+    return _wrap_with_canary_overlay_if_hf(make_log_reader())
 
 
 def _source_label(reader: LogReader) -> str:
@@ -3687,5 +3694,7 @@ def _parse_cli_args(argv: list[str] | None = None):
 
 if __name__ == "__main__":
     args = _parse_cli_args()
-    reader = make_log_reader(force_local=args.local)
+    reader = _wrap_with_canary_overlay_if_hf(
+        make_log_reader(force_local=args.local)
+    )
     build_app(reader=reader).launch(inbrowser=True)
