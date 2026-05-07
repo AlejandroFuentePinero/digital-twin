@@ -50,7 +50,7 @@ flowchart TD
   TOOL -.->|"tool-fetched content<br/>recomposed into judge prompt<br/>so guardrail sees what model grounded in<br/>(LIMITATIONS::R1)"| JUDGE
   GEN --> JUDGE["Guardrail — Claude Sonnet 4.6<br/>same composed prompt + answer<br/>distinct model family"]:::llm
   JUDGE --> ACCEPT{"is_acceptable?"}:::decision
-  ACCEPT -->|yes| LOG["InteractionLog append (JSONL, schema v3)<br/>branch, classifier_labels, attempts,<br/>retrieved_chunks, tool_calls (with attempt_index),<br/>latency_ms, contact_offered, contact_provided,<br/>is_canary, run_id, replicate_index"]:::sideEffect
+  ACCEPT -->|yes| LOG["InteractionLog append (JSONL, schema v4)<br/>branch, classifier_labels, classification_confidence,<br/>event_type, attempts, retrieved_chunks,<br/>tool_calls (with attempt_index), latency_ms, knew_answer,<br/>contact_offered, contact_provided,<br/>git_sha, model_id, temperature, prompt_hash,<br/>is_canary, run_id, replicate_index"]:::sideEffect
   ACCEPT -->|"no — rejection feedback<br/>wraps into next system prompt"| RETRY{"attempts &lt; MAX_ATTEMPTS = 3?"}:::decision
   RETRY -->|yes| GEN
   RETRY -->|no| REFUSE["CANNED_REFUSAL<br/>polite decline + contact email"]:::refusal

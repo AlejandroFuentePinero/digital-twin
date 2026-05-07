@@ -320,7 +320,7 @@ The Drift / Quality / Latency health blocks render a 5-column trajectory per met
 
 **Drift counts in the Drift block:** the Benchmark column reads em-dash by construction (drift against itself is structurally zero). Each `+N` column carries the drift-flag count for that run vs the frozen baseline — so the operator sees `+1: 1 major / 2 minor`, `+2: 3 major / 4 minor`, `+3: 5 major / 6 minor` and can read "drift accumulating run-over-run" at a glance.
 
-### Eight drift kinds × two severity tiers
+### Six drift kinds × two severity tiers
 
 | Kind | Major when | Minor when |
 |---|---|---|
@@ -329,11 +329,11 @@ The Drift / Quality / Latency health blocks render a 5-column trajectory per met
 | `outcome_changed` | always (post-`#45` headline drift kind) | — |
 | `keyword_coverage_dropped` | drop ≥ 0.5 baseline → current | drop ≥ 0.2 baseline → current |
 | `red_flag_emerged` | always (asymmetric: clearing a red flag is improvement, not drift) | — |
-| `retry_depth_changed` | crosses 1↔3+ boundary | delta ±1 within mid-band |
-| `chunk_set_changed` | Jaccard < 0.4 | Jaccard ∈ [0.4, 0.7) |
-| `latency_p95_regression` | median grew >50% | median grew >25% |
+| `latency_p95_regression` | median grew >100% | median grew >50% |
 
-Replicates are aggregated *first* (majority branch / event_type / outcome, median latency, intersected chunk-set, max attempts, median keyword coverage, OR'd red flag) and the drift detector compares aggregates per question. A flaky single-replicate retrieval doesn't move the baseline; the operator sees stable signal.
+All six are outcome / quality signals. Pre-Session 62 the detector also flagged `chunk_set_changed` (Jaccard threshold) and `retry_depth_changed` (1↔3+ delta); those mechanism kinds were retired because they overfired on every legitimate `ingest.py` rebuild and on natural LLM stochastic variance — drift counts swelled with noise rather than signal. Retrieval-driven quality regressions now surface through `keyword_coverage_dropped` (the downstream effect that actually matters) rather than the chunk-set delta itself. Latency thresholds tightened in the same pass — sub-1.5x ratios are API-load wobble, not regression.
+
+Replicates are aggregated *first* (majority branch / event_type / outcome, median latency, median keyword coverage, OR'd red flag) and the drift detector compares aggregates per question. A flaky single-replicate retrieval doesn't move the baseline; the operator sees stable signal.
 
 ### Per-question drift table
 

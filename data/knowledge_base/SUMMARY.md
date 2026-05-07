@@ -28,7 +28,7 @@ Aggregate, cross-file facts for holistic queries: counts, totals, timelines, and
 | 2017–2018 | Research & Conservation Leader | Kaa-Iya National Park / WCS | Bolivia |
 | 2016–2017 | Head Biologist | CONAF, Puyehue National Park | Chile |
 
-**Total distinct roles: 7** | **Years in Australia: 2019–present (~6 years)**
+**Total distinct roles: 7** | **Years in Australia: 2019–present (~7 years)**
 
 ---
 
