@@ -3,8 +3,8 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-07 (Session 61 — Phase 6 slice E (`#50`) shipped: contacts.jsonl through the same HF abstraction. New `src/hf_contact_log.py` with `HFContactWriter` (subclasses `HFLogWriter` via class-attr override of `PATH_PREFIX="contacts/"` + `WRITES_STATE_FILE=False`) + `HFContactReader` (lists `contacts/*.jsonl`, dedupes on `(session_id, timestamp)`, per-session caching). `make_contact_writer` / `make_contact_reader` factories mirror the interaction-log pair. `install_sigterm_handler` now variadic — one signal drains both writers. `read_provided_session_ids()` falls through to `make_contact_reader()` when called with no args, so Sentinel becomes HF-aware automatically. **Phase 6 closed.** Suite +21.)
-**Current phase:** **Phase 6 — HuggingFace Dataset migration** (issue `#5`) — **closed**. All 5 slices shipped. Suite at **619 passing**. Next: Phase 7 (HF Spaces deploy, issue `#6`).
+**Last updated:** 2026-05-07 (Session 62 — Phase 7 slice 1 (`#51`) shipped: Space deployed to <https://alejandrofupi-digital-twin.hf.space> on cpu-basic. README YAML frontmatter + requirements.txt for HF Spaces packaging; app.py polish — WELCOME_TAGLINE + PRIVACY_NOTE module-level constants, privacy footer Markdown row under the contact form, .privacy-note CSS rule. New `tests/test_app_session_state.py` (4 smoke tests). Deploy via `scripts/deploy_to_space.py` using `HfApi.upload_folder` — git push fails because Spaces' pre-receive hook rejects the historical >10 MB blobs in this repo. 11-step smoke test against the live Space passed: 4/5 branches exercised (LOGISTICAL not asked), p50 ≈ 12.7 s / p95 ≈ 17.3 s on cpu-basic, contact submission's first production write to `contacts/` succeeded and joined to its 6-turn session, slice-D writer-health state file fresh on prod. Suite +4 (619 → 623).)
+**Current phase:** **Phase 7 — HF Spaces deploy** (issue `#6`). Slice 1 (`#51`) closed; slice 2 (`#52`, portfolio iframe embed) next. Suite at **623 passing**.
 
 **Locked next-step order:**
 1. **Phase 6 — HF Dataset migration** (issue `#5`). `LogReader.HFReader` / `LogWriter.HFWriter` implementation; buffered append; schema versioning carry-through; HF token in env / Spaces secrets.
@@ -226,11 +226,10 @@ Sliced into five GitHub issues (`#46`–`#50`). Slices A / B / C / D / E closed 
 
 ## Phase 7 — Deploy to HuggingFace Spaces
 
-- [ ] Package `app.py` for HF Spaces.
-- [ ] Configure Space secrets: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `HF_WRITE_TOKEN`.
-- [ ] Smoke test: classifier, all 5 branches, guardrail+retry, log writes, deflection, periodic invitation, contact form.
-- [ ] Latency baseline check (p50/p95).
-- [ ] Embed Space iframe on `alejandrofuentepinero.github.io` home page (with plain-text fallback link); verify chat works inside the iframe on desktop + mobile. Repo: `AlejandroFuentePinero/alejandrofuentepinero.github.io` (Jekyll/AcademicPages).
+Sliced into two GitHub issues (`#51`, `#52`).
+
+- [x] **Slice 1 — Space deploy + production polish + smoke-test pass (`#51`).** README YAML frontmatter; `requirements.txt` mirroring `pyproject.toml`; `app.py` polish (`WELCOME_TAGLINE` + `PRIVACY_NOTE` constants, privacy footer); `.privacy-note` CSS; 4-test `tests/test_app_session_state.py`; `scripts/deploy_to_space.py` (Hub API — `git push` rejected by Spaces' >10 MB pre-receive hook); `docs/deployment-runbook.md`. Live at <https://alejandrofupi-digital-twin.hf.space>; smoke test passed 4/5 branches (LOGISTICAL not asked), p50 ≈ 12.7 s / p95 ≈ 17.3 s on cpu-basic; first production write to `contacts/` succeeded and joined to its 6-turn session via `session_id`; slice-D writer-health state file fresh on prod. Cold-start latency capture deferred to first organic visitor on a slept Space. v6 eval skipped — no eval-relevant content changed since v4. Suite +4 (619 → 623).
+- [ ] **Slice 2 — Portfolio iframe embed (`#52`).** Add the iframe + fallback link to the home page on `AlejandroFuentePinero/alejandrofuentepinero.github.io` (Jekyll/AcademicPages); run the parent-PRD step 12 (embedded smoke test) on desktop + mobile.
 
 ---
 

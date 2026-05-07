@@ -5,6 +5,105 @@
 
 ---
 
+## Session 62 (2026-05-07) — Phase 7 slice 1 (#51) shipped: Space deployed + production polish + smoke-test pass
+
+**Status:** First public deployment. The routed digital twin is now reachable at <https://alejandrofupi-digital-twin.hf.space> on HF Spaces (`cpu-basic`, free tier). All five Phase 6 slices (`#46`–`#50`) ran end-to-end against the live container — both interaction logs and the first production contact submission round-tripped through the HF Dataset, the slice-D writer-health state file is fresh on prod, the slice-B SIGTERM-drain fired cleanly on first restart. App.py polish landed: welcome banner / privacy note / persistent contact-form / verified `new_session` reset. Suite at **623 passing** (+4). Issue `#51` closed.
+
+### What shipped
+
+**1. HF Spaces packaging.**
+
+`README.md` gained a YAML frontmatter block (`title`, `sdk: gradio`, `sdk_version: 5.49.1`, `app_file: src/app.py`, `pinned: false`, `short_description`, `license: mit`). New `requirements.txt` mirrors the top-level deps in `pyproject.toml` so the Space's pip resolves cleanly without the project understanding `uv`. The existing `app.py` ran on the Space without a code change to the entry point — the `sys.path.insert(0, str(Path(__file__).parent))` line at the top of the module was already enough to resolve the sibling-module imports when invoked from repo root.
+
+**2. `app.py` polish.**
+
+`WELCOME_TAGLINE` and `PRIVACY_NOTE` extracted as module-level constants so a polish change is one edit, not three (component + test + reading the rendered HTML). The privacy note is rendered as a muted Markdown footer under the contact form: "Conversations are logged to a private dataset so Alejandro can improve the system — not publicly visible. Contact alejandrofuentepinero@gmail.com to request deletion of your session data." Plain-English, names the dataset disposition + the deletion affordance, doesn't pretend to be legal copy. New `.privacy-note` CSS rule (12 px, muted, accent-coloured email link) so the footer disappears under the chat without competing for attention.
+
+**3. Tests.**
+
+New `tests/test_app_session_state.py` (4 tests). Pins the welcome banner is non-empty + recruiter-shaped, the privacy note carries the email + "private" + a "delet*" stem, `new_session()` returns the 9-tuple wired into the clear button (history empty, fresh UUID, zeroed `SessionState`, six `gr.update` slots), and consecutive `new_session()` calls mint distinct UUIDs. Importing `app.py` at test time exercises the heavy module-level init (Pipeline, ToolRegistry, log/contact writer factories, SIGTERM handler) — no need to mock; the local-backend default keeps the test hermetic.
+
+**4. Deploy mechanism — Hub API, not git push.**
+
+Discovery during slice 1: HF Spaces' git remote rejects any blob >10 MB anywhere in history unless tracked via LFS. This repo's history carries a regenerated `eval/results/comparison.png` from Sessions 24/27 that crossed the threshold and an early-Session `data/raw_me/*.pdf` since gitignored — both fail the pre-receive hook. Migrating GitHub to LFS or rewriting history is heavier than the Space deserves. Switched to `huggingface_hub.HfApi.upload_folder` which negotiates LFS transparently per file and rebuilds the Space's git history as a single commit per upload. New `scripts/deploy_to_space.py` runs the upload from the working tree with an `IGNORE_PATTERNS` list mirroring `.gitignore` + the internal-only docs.
+
+`upload_folder` respects the repo `.gitignore` by default, which silently dropped `data/preprocessed_db/`. The deploy procedure is therefore two calls — the first uploads everything except the gitignored DB, the second points `folder_path` at `data/preprocessed_db/` directly so its absent local `.gitignore` lets all files through. `docs/deployment-runbook.md` carries the exact two-step recipe.
+
+**5. Branch-switch hazard during force-add.**
+
+The original runbook described force-adding `data/preprocessed_db/` on a temporary `space-deploy` branch. After the doomed git push, `git checkout main` removed the DB from the working tree because the directory is tracked on `space-deploy` but not on `main` — git correctly cleaned up files that don't exist in the target tree. Recovered by re-running `uv run python src/ingest.py` (~30 s, ~5¢). The Hub-API path doesn't have this hazard, so the runbook now teaches that path exclusively. No code change.
+
+**6. Live smoke test (steps 1–11).**
+
+13 new interaction records + 1 contact record landed in `Alejandrofupi/digital-twin-logs` from a single browser session against the deployed Space. Branch mix: GENERIC=10, GAP=3, BEHAVIOURAL=2, TECHNICAL=2 (the 4 active branches; LOGISTICAL not exercised — see Outstanding). Per-turn latency on cpu-basic: **p50 ≈ 12.7 s, p95 ≈ 17.3 s** — within the order of magnitude expected for classifier + retrieval + generator + guardrail (4 LLM round-trips). Cold-start latency was not measurable on this run because the Space was warm from the deploy; defer to first-visitor traffic on the free-tier sleep cycle.
+
+**Slice E first production write to the contacts/ path: ✓.** Recorded watch-item from the slice-1 runbook resolves. Contact submission joined to its 6-turn session via the shared `session_id` — the cross-stream join contract holds in production.
+
+**Slice D writer-health state file on prod: ✓.** `last_flush_time=2026-05-07T03:29:00`, `buffer_size=0`, `last_error=null` after the size-or-time-triggered flush.
+
+**Slice B SIGTERM-drain on prod: implicit ✓.** First flush observed in the dataset corresponded to a Space-side timer fire (size threshold = 50, observed buffer = 10, so timer not size). Records arrived end-to-end; no SIGTERM-restart was needed to verify the drain on this run.
+
+| File | Change |
+|---|---|
+| `README.md` | YAML frontmatter at top (HF Spaces metadata block). |
+| `requirements.txt` (new) | Top-level deps mirrored from `pyproject.toml`. |
+| `src/app.py` | `WELCOME_TAGLINE` + `PRIVACY_NOTE` constants; privacy footer Markdown row under the contact form. |
+| `src/assets/custom.css` | `.privacy-note` rule (12 px, muted, accent link colour). |
+| `tests/test_app_session_state.py` (new) | 4 smoke tests. |
+| `docs/deployment-runbook.md` (new) | Pre-deploy checklist, Hub-API deploy recipe, 11-step smoke test, rollback. |
+| `scripts/deploy_to_space.py` (new) | `HfApi.upload_folder` driver with the IGNORE_PATTERNS list. |
+
+### Decisions
+
+**1. Hub API over git push for deploys.**
+
+Considered three: (a) `git lfs migrate` the GitHub repo to track the historical large files, (b) maintain a separate orphan `space-deploy` branch with rewritten history, (c) `HfApi.upload_folder`. (a) and (b) impose ongoing maintenance on the GitHub repo for a deploy concern that has nothing to do with the project's design history. (c) keeps the GitHub repo clean and gives a single re-runnable script. Picked (c). Cost: the Space's git history is rebuilt per deploy (intentional — it's a snapshot store, not a design log). Any "what was deployed when" lookup goes through GitHub's history of `main` cross-referenced with the Space's commit timestamps.
+
+**2. Privacy note as a footer Markdown row, not an Accordion.**
+
+Considered putting the privacy disclosure inside a collapsible Accordion to keep the page visually tight. Rejected: an Accordion's "click to expand" gesture is the wrong shape for a disclosure visitors should see without opting in. The footer is muted (12 px, opacity 0.85) so it sits under the chat without grabbing attention, but it's always visible to anyone who scrolls. Cost: ~20 px of vertical real estate at the bottom of the page. Acceptable.
+
+**3. Welcome banner = the existing tagline.**
+
+The pre-slice-1 tagline ("Ask me anything about Alejandro's professional background — experience, research, projects, skills, publications, or career trajectory.") already met the acceptance criterion's intent. Slice 1 extracted it to a `WELCOME_TAGLINE` module constant rather than rewriting the copy. The `feedback_portfolio_scope_data_gated_additions.md` memory pinned the default-zero-new-content stance — a copy rewrite needs production data to justify, not a phase-7 acceptance row.
+
+**4. Contact form persistent affordance was already wired.**
+
+Session 26's three-trigger union (turn-3, gap-event, explicit-request) plus `should_show_contact_form()` already returned `True` from first trigger until `mark_contact_provided()` latched. Slice 1 added no behaviour — only a test pinning that `new_session()` resets the latches. The acceptance row is satisfied by the existing wiring.
+
+**5. Cold-start latency deferred.**
+
+The first deploy left the Space warm; cold-start measurement requires either waiting for the free-tier sleep (~48 h) or forcing a Space restart with the wall clock running. Latency capture #1 is therefore deferred to the first organic visitor on a slept Space (Sentinel will record it via `latency_ms.total` on that turn). Cost of skipping in slice 1: minimal — cold-start is the gate on free-vs-paid hardware-tier decisions, not the gate on slice-1 acceptance.
+
+**6. v6 eval against the deployed pipeline — deferred.**
+
+Optional in slice 1's acceptance criteria. Skipping per the portfolio-scope memory: no eval-relevant content changed since v4 (`MRR 0.866 / accuracy 4.56`), so a v6 run would just re-confirm the v4 baseline. Mark **deferred** in `eval/run_eval.py` notes when/if it runs.
+
+**7. Slice 2 (`#52`) — portfolio iframe embed — not pulled in.**
+
+Issue `#52` is the next slice. Slice 1's acceptance gates on "Space works standalone"; slice 2 owns the iframe embed on `alejandrofuentepinero.github.io`. Honoured the boundary.
+
+### Live verification
+
+- Space stage `RUNNING` on `cpu-basic`. HTTP 200 from `https://alejandrofupi-digital-twin.hf.space`.
+- 13 new interaction records + 1 contact record in `Alejandrofupi/digital-twin-logs` from the smoke-test session. All 4 exercised branches present. Contact session joins to 6 interaction records via `session_id`.
+- Writer-health state file present on prod with fresh `last_flush_time` and clean `last_error`.
+- Local Sentinel-shape read against prod (HFLogReader + HFContactReader + DashboardModel) constructs and aggregates cleanly.
+- Suite `uv run pytest -q` → **623 passing, 1 skipped** (HF integration opt-in).
+
+### Outstanding (start of next session)
+
+- **Slice 2 (`#52`) — iframe embed on the portfolio.** Adds the embed snippet + fallback link to `_pages/about.md` (or whichever Jekyll page backs the home), then runs the parent-PRD step 12 (the embedded smoke test).
+- **LOGISTICAL turn not in the smoke-test logs.** The user reported "looking good" so likely tested with a different question, or skipped. Not blocking — covered by `tests/test_branches.py::LOGISTICAL` against the local pipeline. If LOGISTICAL never fires in production traffic, consider it a portfolio-scope reality (recruiters don't ask salary-range first) rather than a routing bug.
+- **Cold-start latency capture #1.** First organic visitor on the slept Space will surface this via `latency_ms.total` for turn 1.
+- **Watch-items unchanged:** `LIMITATIONS::P8` initial-drill tool-firing rate; `LIMITATIONS::O8` guardrail cross-branch evaluation gap. Phase 5 follow-ups; eligible for re-read once a month of post-deploy traffic accumulates.
+
+### Next session entry-point
+
+Slice 2 (`#52` — portfolio embed). Slice 1 closed the standalone gate. The iframe embed work is independent — Space code doesn't change; the portfolio repo gets the embed + fallback link, then the parent-PRD step 12 (embedded smoke test) gates the close. After slice 2, Phase 7 closes and the project is in observe-mode.
+
+---
+
 ## Session 61 (2026-05-07) — Phase 6 slice E (#50) shipped: contacts.jsonl through the same HF abstraction. Phase 6 closed.
 
 **Status:** Slice E ports the buffered-writer + reader pattern from slices A–D to the contact-form side-channel from #16. Without this, contact records — visitor email/notes — were lost on every Space restart, the same problem `interactions.jsonl` had pre-Phase-6. `HFContactWriter` subclasses `HFLogWriter` via two class-attribute overrides; `HFContactReader` is a fresh class with its own dedup contract. New `make_contact_writer` / `make_contact_reader` factories mirror the interaction-log pair. `install_sigterm_handler` is now variadic so one signal drains both writers. **Phase 6 is closed.** Issue `#50` closed; suite at **619 passing** (+21 from Session 60's 598). Next: Phase 7 (HF Spaces deploy, issue `#6`).

@@ -35,36 +35,40 @@ The Space and the dataset both live under the `Alejandrofupi` namespace.
    - `HF_DATASET_REPO` — `Alejandrofupi/digital-twin-logs`.
    - `DIGITAL_TWIN_LOG_BACKEND` — `hf`.
    All five are required. With `DIGITAL_TWIN_LOG_BACKEND=hf` set and `HF_DATASET_REPO` missing, the Space will fail at startup (`make_log_writer` raises `RuntimeError`). With `HF_TOKEN` missing, writes will fail silently and `hf_writer_state.json` will surface the error in Sentinel.
-3. **Add the Space remote** to the local repo (one-time):
-   ```bash
-   git remote add space https://huggingface.co/spaces/Alejandrofupi/digital-twin
-   ```
-
 ---
 
 ## Deploy
 
-Production deploys go through a temporary `space-deploy` branch so the GitHub `main` history stays clean. The branch force-adds `data/preprocessed_db/` (gitignored on `main` because it's regenerable + 23 MB of binary) so the Space gets the vector store immediately at first launch.
+Deploys go through `scripts/deploy_to_space.py` (the HuggingFace Hub Python API), **not** `git push`. The Space's git remote rejects any blob >10 MB across the entire history unless tracked via LFS, and this repo's history carries a few historical large files (regenerated `eval/results/comparison.png` from Sessions 24/27, an early-Session `data/raw_me/*.pdf` since gitignored). Migrating GitHub to LFS is heavier than the Space deserves; `upload_folder` negotiates LFS transparently per file and rebuilds the Space's git history as a single commit per deploy.
 
 ```bash
-# From a clean main (no uncommitted changes)
-git checkout -b space-deploy
+# 1. Re-ingest if the KB changed since last deploy. data/preprocessed_db/ is
+#    gitignored (regenerable + binary) and uploaded directly from the working
+#    tree by the deploy script.
+uv run python src/ingest.py
 
-# Force-add the gitignored vector store; it's needed for retrieval at runtime.
-git add -f data/preprocessed_db/
-git commit -m "Deploy: include vector store"
-
-# Push the deploy branch as the Space's main.
-git push space space-deploy:main --force
-
-# Return to main and discard the deploy branch.
-git checkout main
-git branch -D space-deploy
+# 2. Upload the working tree to the Space. Reads HF_TOKEN from .env.
+#    IGNORE_PATTERNS in the script mirrors .gitignore + skips internal-only docs.
+#    NOTE: huggingface_hub.upload_folder respects the repo .gitignore by default,
+#    which would exclude data/preprocessed_db/ — so the script does a second
+#    targeted upload pointing folder_path directly at the DB folder.
+uv run python scripts/deploy_to_space.py
+uv run python -c "
+from dotenv import load_dotenv; load_dotenv('.env', override=True)
+import os
+from huggingface_hub import HfApi
+HfApi(token=os.environ['HF_TOKEN']).upload_folder(
+    folder_path='data/preprocessed_db',
+    path_in_repo='data/preprocessed_db',
+    repo_id='Alejandrofupi/digital-twin',
+    repo_type='space',
+    commit_message='Deploy: include vector store',
+)"
 ```
 
-**Why `--force`:** every deploy rewrites the Space's `main`. The Space's git history is intentionally throwaway — it carries the deploy snapshot, not the design history. The canonical history is on GitHub.
+The two-step shape (everything-except-DB, then DB) is necessary because `upload_folder` with `folder_path=.` honours the repo-root `.gitignore` and silently drops `data/preprocessed_db/`. Pointing `folder_path` at the DB directory itself bypasses the filter — there's no `.gitignore` inside the DB folder, so all files upload.
 
-**Alternative (not recommended for first deploy):** drop the force-add step and run `python src/ingest.py` as part of the Space's startup. Adds ~30 s + a few cents of embedding cost to every cold start; only worthwhile if the KB churns more than weekly.
+**Alternative (not recommended for first deploy):** drop the second upload and run `python src/ingest.py` as part of the Space's startup. Adds ~30 s + a few cents of embedding cost to every cold start; only worthwhile if the KB churns more than weekly.
 
 ---
 
@@ -124,15 +128,13 @@ uv run python eval/run_eval.py --tag v6 --notes "Run against deployed Space via 
 
 ## Rollback
 
-The Space's git history is a series of deploy snapshots. Reverting is one git push:
+The Space's git history is a series of deploy snapshots written by the Hub API. The cleanest rollback is to re-deploy the previous good local state:
 
 ```bash
-# Find the Space commit you want to roll back to.
-git fetch space
-git log space/main --oneline | head -10
-
-# Force-push that commit as the new main. Replace <sha> with the target.
-git push space <sha>:main --force
+# Check out the GitHub commit that was on main at the time of the last good deploy.
+git checkout <good-sha>
+uv run python scripts/deploy_to_space.py  # +DB upload step from above
+git checkout main
 ```
 
 The HF Spaces UI also exposes a "factory rebuild" button on the Space page (Settings → Factory rebuild) which clears the build cache without a code change — use this when the symptom is "build cache is wedged" rather than "the latest commit is broken."
