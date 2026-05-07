@@ -1,0 +1,304 @@
+/* Digital Twin — portfolio rebrand
+ * Palette: warm-monochrome + single amber accent. Explicitly not the default
+ * Gradio blue. Layered on top of gr.themes.Base() (theme handles base tokens;
+ * this file targets Gradio-specific selectors the theme can't reach).
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+    --bg: #0b0b0d;
+    --surface: #16171a;
+    --border: #23252b;
+    --text: #ededed;
+    --muted: #8a8d94;
+    --accent: #d4a574;
+}
+
+/* --- Hide Gradio chrome ---------------------------------------------------*/
+footer { display: none !important; }
+.footer { display: none !important; }
+.show-api { display: none !important; }
+button[title="Use via API"],
+button[title="Settings"],
+a[href*="gradio.app"] { display: none !important; }
+
+/* --- Body / container ----------------------------------------------------- */
+body, gradio-app, .gradio-container {
+    background: var(--bg) !important;
+    color: var(--text) !important;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important;
+    font-size: 15px;
+    line-height: 1.6;
+}
+
+.gradio-container {
+    max-width: 1080px !important;
+    margin: 0 auto !important;
+    padding: 32px 32px !important;
+}
+
+/* Some Gradio versions wrap content in an inner div with its own width cap.
+ * Force it to the parent's width so our max-width: 1080px takes effect. */
+.gradio-container > .main,
+.gradio-container .wrap.contain,
+.gradio-container .contain {
+    max-width: 100% !important;
+    width: 100% !important;
+}
+
+/* Block backgrounds — flat, no card chrome */
+.gradio-container .block,
+.gradio-container .form,
+.gradio-container .panel {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* --- Typography ----------------------------------------------------------- */
+h1, h2, h3, h4 {
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 600 !important;
+    color: var(--text) !important;
+    letter-spacing: -0.01em;
+}
+
+.prose, .markdown, .gradio-container p {
+    color: var(--text);
+}
+
+.muted, .secondary {
+    color: var(--muted) !important;
+}
+
+code, pre, .mono {
+    font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace !important;
+    font-size: 13px;
+}
+
+/* --- Identity block ------------------------------------------------------- */
+.identity-block {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 0 18px 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+}
+.identity-monogram {
+    flex: 0 0 auto;
+    width: 42px;
+    height: 42px;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 500;
+    font-size: 14px;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+}
+.identity-text { flex: 1 1 auto; min-width: 0; }
+.identity-name {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0;
+    line-height: 1.2;
+}
+.identity-role {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--muted);
+    margin: 4px 0 0 0;
+}
+.identity-links {
+    margin-top: 6px;
+    font-size: 13px;
+}
+.identity-links a {
+    color: var(--accent);
+    text-decoration: none;
+    margin-right: 14px;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s ease;
+}
+.identity-links a:hover {
+    border-bottom-color: var(--accent);
+}
+
+.tagline {
+    color: var(--muted) !important;
+    font-size: 14px !important;
+    margin: 0 0 12px 0 !important;
+}
+
+/* --- Chatbot -------------------------------------------------------------- */
+/* Gradio's chatbot defaults to a slate/blue surface that bleeds through the
+ * theme. Force every layer of the chatbot DOM to our dark surface. */
+.gradio-container [data-testid="chatbot"],
+.gradio-container .chatbot,
+.gradio-container [class*="chatbot"],
+.gradio-container .bubble-wrap,
+.gradio-container .message-wrap,
+.gradio-container .placeholder-content {
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    box-shadow: none !important;
+    color: var(--text) !important;
+}
+
+/* Inner panels (placeholder area when empty, message list container) */
+.gradio-container [data-testid="chatbot"] > div,
+.gradio-container .chatbot > div,
+.gradio-container [class*="chatbot"] > div {
+    background: transparent !important;
+    border: none !important;
+}
+
+/* Message bubbles — keep subtle but distinct so user/bot turns are readable */
+.gradio-container [data-testid="user"],
+.gradio-container [data-testid="bot"],
+.gradio-container .message,
+.gradio-container .message-row {
+    background: transparent !important;
+    border-radius: 6px !important;
+    color: var(--text) !important;
+}
+
+/* --- Inputs --------------------------------------------------------------- */
+textarea, input[type="text"] {
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 6px !important;
+    color: var(--text) !important;
+    font-family: 'Inter', sans-serif !important;
+    transition: border-color 0.15s ease;
+}
+textarea:focus, input[type="text"]:focus {
+    border-color: var(--accent) !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+textarea::placeholder, input::placeholder {
+    color: var(--muted) !important;
+}
+
+/* --- Buttons -------------------------------------------------------------- */
+button.gr-button, .gradio-container button {
+    background: transparent !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 6px !important;
+    color: var(--text) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 500 !important;
+    box-shadow: none !important;
+    transition: border-color 0.15s ease, color 0.15s ease;
+}
+button.gr-button:hover, .gradio-container button:hover {
+    border-color: var(--accent) !important;
+    color: var(--accent) !important;
+}
+button.gr-button.primary, .gradio-container button.primary {
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+    color: var(--bg) !important;
+}
+button.gr-button.primary:hover, .gradio-container button.primary:hover {
+    color: var(--bg) !important;
+    opacity: 0.9;
+}
+
+/* "New conversation" — same chip treatment as starter prompts but in a cool
+ * neutral so visitors read warm chips as "ask" and this as "reset". Both are
+ * the same shape so they pair visually, just different roles. */
+.new-conversation-link {
+    justify-content: flex-end !important;
+    margin-bottom: 8px !important;
+}
+.new-conversation-link button {
+    background: rgba(237, 237, 237, 0.10) !important;
+    border: 1px solid rgba(237, 237, 237, 0.40) !important;
+    color: #ffffff !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    padding: 6px 14px !important;
+    border-radius: 999px !important;
+    width: auto !important;
+    flex: 0 0 auto !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.new-conversation-link button:hover {
+    background: rgba(237, 237, 237, 0.22) !important;
+    border-color: #ffffff !important;
+    color: #ffffff !important;
+}
+
+/* Starter prompt chips — dim amber surface, lifts to full accent on hover */
+.starter-prompts button {
+    background: rgba(212, 165, 116, 0.10) !important;
+    border: 1px solid rgba(212, 165, 116, 0.35) !important;
+    color: var(--accent) !important;
+    font-size: 13px !important;
+    padding: 6px 14px !important;
+    border-radius: 999px !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.starter-prompts button:hover {
+    background: rgba(212, 165, 116, 0.22) !important;
+    border-color: var(--accent) !important;
+    color: var(--text) !important;
+}
+
+/* --- Tips panel ----------------------------------------------------------- */
+/* Same warm-amber surface as the starter chips so visually they read as part
+ * of the same "guidance" grouping. Heading sits between body and h1 in size. */
+.tips-box {
+    background: rgba(212, 165, 116, 0.10);
+    border: 1px solid rgba(212, 165, 116, 0.35);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 8px 0 16px 0;
+}
+.tips-heading {
+    font-family: 'Inter', sans-serif;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 8px;
+    letter-spacing: -0.01em;
+}
+.tips-list {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+}
+.tips-list li {
+    margin: 4px 0;
+}
+.tips-list li i {
+    color: var(--muted);
+}
+
+/* --- Accordions ----------------------------------------------------------- */
+.gradio-container details, .gradio-container .accordion {
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 6px !important;
+}
+.gradio-container details summary, .gradio-container .accordion summary {
+    color: var(--text) !important;
+    font-weight: 500 !important;
+}
+
+/* --- Tagline / muted markdown helper ------------------------------------- */
+.tagline-block p {
+    color: var(--muted) !important;
+    font-size: 14px;
+    margin: 0 0 14px 0;
+}

@@ -47,6 +47,28 @@ from tools import ToolRegistry, make_litellm_tool_callable
 
 MAX_HISTORY_TURNS = 10  # last N user+assistant pairs passed to the pipeline
 
+# Starter prompts shown as clickable chips above the input. Short label =
+# button text; full question = what gets submitted. General-purpose entry
+# points spanning research, engineering, and trajectory — let visitors pick
+# the angle that matches their interest.
+STARTER_PROMPTS: list[tuple[str, str]] = [
+    # "Transferable skills" hits the profile.md transfer_principles section
+    # (loaded by GENERIC + TECHNICAL): 6 named analytical bridges from
+    # quantitative ecology to AI engineering. Use verb "transfer" so the
+    # framing matches the source material.
+    (
+        "Transferable skills",
+        "What from your academic research transfers into your AI engineering work?",
+    ),
+    ("Top AI projects", "What are your top AI projects?"),
+    (
+        "Impactful research",
+        "Provide a summary of your Global Change Biology (2023, 2025) and Nature Climate Change papers.",
+    ),
+    ("Academic background", "Tell me about your academic background."),
+    ("AI background", "Tell me about your background as an AI engineer."),
+]
+
 # ---------------------------------------------------------------------------
 # Module-level singletons (constructed once at import; profile.md read once).
 # ToolRegistry hard-fails at startup if data/readmes/registry.json is missing
@@ -88,7 +110,9 @@ def respond(
     state.record_turn()
     chat_history = [
         {"role": m["role"], "content": m["content"]}
-        for m in history[-(MAX_HISTORY_TURNS * 2):]  # each turn = 1 user + 1 assistant msg
+        for m in history[
+            -(MAX_HISTORY_TURNS * 2) :
+        ]  # each turn = 1 user + 1 assistant msg
     ]
 
     # Trigger detection — explicit request from user message (before generation)
@@ -111,7 +135,9 @@ def respond(
             contact_provided=state.contact_provided,
         )
     except Exception as e:
-        print(f"[app] Pipeline.run raised outside its retry loop: {type(e).__name__}: {e}")
+        print(
+            f"[app] Pipeline.run raised outside its retry loop: {type(e).__name__}: {e}"
+        )
         reply = CANNED_REFUSAL
 
     # Trigger detection — gap event from assistant reply (after generation)
@@ -196,16 +222,71 @@ def new_session():
     )
 
 
-with gr.Blocks(title="Alejandro de la Fuente — Digital Twin", theme=gr.themes.Soft()) as demo:
+# Theme — neutral grays as the base; the custom CSS file layers the warm-amber
+# accent and Inter/JetBrains Mono typography on top. Keeping the theme minimal
+# so most styling lives in src/assets/custom.css (one place to edit).
+# neutral_hue="gray" is more neutral than "slate" (which has blue undertones
+# that bleed through into the chatbot's default surface). custom.css overrides
+# the chatbot background separately.
+_THEME = gr.themes.Base(
+    primary_hue="orange",
+    neutral_hue="gray",
+    font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
+    font_mono=[gr.themes.GoogleFont("JetBrains Mono"), "monospace"],
+)
+_CSS_PATH = Path(__file__).parent / "assets" / "custom.css"
+_CUSTOM_CSS = _CSS_PATH.read_text() if _CSS_PATH.exists() else ""
+
+with gr.Blocks(
+    title="Alejandro de la Fuente · AI Engineer",
+    theme=_THEME,
+    css=_CUSTOM_CSS,
+) as demo:
     session_id = gr.State(str(uuid.uuid4()))
     history = gr.State([])
     state = gr.State(SessionState())
 
+    # Identity block — monogram, name, role, links. Rendered as raw HTML so the
+    # CSS class names in custom.css can target precise structure (a Markdown-
+    # rendered version would lose the .identity-monogram / .identity-text split).
+    gr.HTML("""
+        <div class="identity-block">
+          <div class="identity-monogram">AF</div>
+          <div class="identity-text">
+            <div class="identity-name">Alejandro de la Fuente</div>
+            <div class="identity-role">AI Engineer · Melbourne</div>
+            <div class="identity-links">
+              <a href="https://github.com/AlejandroFuentePinero" target="_blank" rel="noopener">GitHub</a>
+              <a href="https://www.linkedin.com/in/alejandro-dela-fuente/" target="_blank" rel="noopener">LinkedIn</a>
+              <a href="https://alejandrofuentepinero.github.io/" target="_blank" rel="noopener">Portfolio</a>
+            </div>
+          </div>
+        </div>
+        """)
+
     gr.Markdown(
-        "## Alejandro de la Fuente\n"
-        "Ask me anything about Alejandro's professional background — experience, research, "
-        "projects, skills, publications, or career trajectory."
+        "Ask me anything about Alejandro's professional background — experience, "
+        "research, projects, skills, publications, or career trajectory.",
+        elem_classes=["tagline-block"],
     )
+
+    # Tips panel — same warm chip palette as the starter prompts so it visually
+    # belongs to the same "guidance" surface, distinct from the chat itself.
+    gr.HTML("""
+        <div class="tips-box">
+          <div class="tips-heading">Tips for the best answers</div>
+          <ul class="tips-list">
+            <li><b>Be specific.</b> <i>"Tell me about Alejandro's RAG project"</i> works better than <i>"Tell me about his work."</i></li>
+            <li><b>Start a new conversation when changing topics.</b> Past turns stay in context and can bias later answers — use <b>New conversation</b> above the chat to reset cleanly.</li>
+            <li><b>One question at a time.</b> Multi-part questions sometimes get partial answers.</li>
+          </ul>
+        </div>
+        """)
+
+    # "New conversation" — sits above the chat as a small right-aligned text link.
+    # Lets visitors reset cleanly when changing topics (per the How-to-use copy).
+    with gr.Row(elem_classes=["new-conversation-link"]):
+        clear = gr.Button("New conversation", size="sm", variant="secondary")
 
     chatbot = gr.Chatbot(
         type="messages",
@@ -224,8 +305,14 @@ with gr.Blocks(title="Alejandro de la Fuente — Digital Twin", theme=gr.themes.
             submit_btn=True,
         )
 
-    with gr.Row():
-        clear = gr.Button("New conversation", size="sm", variant="secondary")
+    # Starter prompts — short labels, full question submitted on click.
+    # Same handler chain as msg.submit so each click runs the full pipeline turn.
+    gr.Markdown("*Or try one of these:*", elem_classes=["tagline-block"])
+    with gr.Row(elem_classes=["starter-prompts"]):
+        starter_buttons = [
+            gr.Button(label, size="sm", variant="secondary")
+            for label, _ in STARTER_PROMPTS
+        ]
 
     # Contact form — hidden by default; becomes visible when any trigger fires
     # (turn 3+, gap event, or explicit user request) and persists until submit
@@ -236,7 +323,9 @@ with gr.Blocks(title="Alejandro de la Fuente — Digital Twin", theme=gr.themes.
         contact_prompt = gr.Markdown(INITIAL_FORM_PROMPT)
         with gr.Row():
             contact_name = gr.Textbox(label="Name (optional)", scale=1)
-            contact_email = gr.Textbox(label="Email", placeholder="you@example.com", scale=1)
+            contact_email = gr.Textbox(
+                label="Email", placeholder="you@example.com", scale=1
+            )
         contact_note = gr.Textbox(
             label="Anything you'd like to share? (optional)",
             lines=2,
@@ -251,26 +340,50 @@ with gr.Blocks(title="Alejandro de la Fuente — Digital Twin", theme=gr.themes.
         respond,
         inputs=[msg, history, session_id, state],
         outputs=[msg, history, state, contact_form, contact_prompt],
-    ).then(
-        lambda h: h, inputs=[history], outputs=[chatbot]
-    )
+    ).then(lambda h: h, inputs=[history], outputs=[chatbot])
+
+    # Starter-prompt wiring — populate msg with the full question, then run the
+    # same respond → chatbot chain msg.submit uses. Default-arg captures the
+    # question per button (closure over loop variable would otherwise bind all
+    # buttons to the last question).
+    for btn, prompt in zip(starter_buttons, STARTER_PROMPTS):
+        question = prompt[1]
+        btn.click(
+            lambda q=question: q,
+            outputs=[msg],
+        ).then(
+            respond,
+            inputs=[msg, history, session_id, state],
+            outputs=[msg, history, state, contact_form, contact_prompt],
+        ).then(lambda h: h, inputs=[history], outputs=[chatbot])
 
     contact_submit.click(
         submit_contact,
         inputs=[contact_name, contact_email, contact_note, session_id, state],
-        outputs=[contact_form, contact_status, state, contact_name, contact_email, contact_note],
+        outputs=[
+            contact_form,
+            contact_status,
+            state,
+            contact_name,
+            contact_email,
+            contact_note,
+        ],
     )
 
     clear.click(
         new_session,
         outputs=[
-            history, session_id, state,
-            contact_form, contact_status, contact_prompt,
-            contact_name, contact_email, contact_note,
+            history,
+            session_id,
+            state,
+            contact_form,
+            contact_status,
+            contact_prompt,
+            contact_name,
+            contact_email,
+            contact_note,
         ],
-    ).then(
-        lambda h: h, inputs=[history], outputs=[chatbot]
-    )
+    ).then(lambda h: h, inputs=[history], outputs=[chatbot])
 
 
 if __name__ == "__main__":
