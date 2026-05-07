@@ -44,7 +44,7 @@ Classifier (gpt-4.1-nano)
 Branch composer
     │  loads named profile.md sections + branch rules + retrieved chunks
     ▼
-Generator (gpt-4.1)  ──► [TECHNICAL only: tool loop with fetch_project_readme]
+Generator (gpt-4.1)  ──► [GENERIC / GAP / TECHNICAL: tool loop with fetch_project_readme]
     │
     ▼
 Guardrail (Claude Sonnet 4.6, branch-aware rules)
@@ -59,10 +59,10 @@ Enriched interaction log  ──►  HuggingFace Dataset (prod) / local JSONL (d
 **Key structural facts:**
 - `profile.md` (~2–2.5k tokens) is the always-on **Frame** — sectioned by named `##` blocks loaded selectively per branch. Lives at `data/profile.md`, outside the KB folder, never ingested.
 - `data/knowledge_base/` is the **Substance** — retrieved on demand, one ChromaDB collection.
-- `data/readmes/` is **tool-only content** — 24 distilled project / paper docs the TECHNICAL branch can fetch via `fetch_project_readme`. Outside `data/knowledge_base/`, never ingested. Registry at `data/readmes/registry.json` (24 keys; ToolRegistry hard-fails at startup if any referenced file is missing).
+- `data/readmes/` is **tool-only content** — 28 distilled project / paper docs the GENERIC, GAP, and TECHNICAL branches can fetch via `fetch_project_readme` (per `branches.REGISTRY`; widened from TECHNICAL-only in Session 56 commit `219bfb8`). Outside `data/knowledge_base/`, never ingested. Registry at `data/readmes/registry.json` (28 keys; ToolRegistry hard-fails at startup if any referenced file is missing).
 - `data/canaries/` is **drift-detection content** (#39) — `corpus.json` (50 curated probe questions) + `baseline.json` (frozen golden run pointer). Replayed via `uv run python src/canary_runner.py` at operator cadence; not auto-refreshed.
 - One enriched interaction log (schema v4 — `is_canary` / `run_id` / `replicate_index` added in #39 at v3, `event_type` upgraded to four values in #42 at v4) replaces the three-file plan in the original PLAN.md. Schema at `interaction_log.InteractionRecord`. Live and canary records share `data/logs/interactions.jsonl`; the `is_canary` flag is the only discriminator. `DashboardModel` filters canary records out by default so live tabs are unaffected. Read-time migration in `schema_migrations.py` (slice C / `#48`) keeps the dashboard insulated from future bumps.
-- `fetch_project_readme` is the only model-callable tool; available only in the TECHNICAL branch.
+- `fetch_project_readme` is the only model-callable tool; available to GENERIC, GAP, and TECHNICAL per `branches.REGISTRY` (widened from TECHNICAL-only in Session 56 commit `219bfb8`). LOGISTICAL and BEHAVIOURAL stay tool-free.
 - Per-session **contact-flow** (#16) runs as a side-channel: `SessionState` (in `gr.State`) tracks turn count + contact-provided latch; collapsible contact form appears at turn 3; on submit, writes `ContactRecord` to `data/logs/contacts.jsonl` joinable to `interactions.jsonl` on `session_id`. App-level concern, separate from the per-turn pipeline.
 - **Canary side-channel** (#39) runs as a CLI batch: `canary_runner.py` replays the corpus N=3 times per question through the same `Pipeline.run()` live turns use. The runner wraps `LogWriter` in a `_CanaryLogWriter` that injects `is_canary=True` + shared `run_id` + per-replicate `replicate_index`. Records land in the canonical log; the Sentinel Canary tab reads them via `DashboardModel(records, include_canary=True, only_canary=True)`. Manual-only — not auto-refreshed on Sentinel launch.
 

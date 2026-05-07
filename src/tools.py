@@ -1,4 +1,8 @@
-"""Tool registry for the TECHNICAL branch (ADR-0003 + #18).
+"""Tool registry for branches that expose model-callable tools (ADR-0003 + #18).
+
+`fetch_project_readme` is wired into `GENERIC`, `GAP`, and `TECHNICAL` per
+`branches.REGISTRY` (originally TECHNICAL-only; widened in Session 56 commit
+`219bfb8`). `LOGISTICAL` and `BEHAVIOURAL` stay tool-free.
 
 Loads `data/readmes/registry.json` mapping project keys to distilled README
 files. Hard-fails at startup if the registry is missing/malformed or any

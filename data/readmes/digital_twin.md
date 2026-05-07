@@ -23,7 +23,7 @@ Selects from five branches: `GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGIS
 ChromaDB top-6 against an LLM-enriched chunk store: each chunk embeds `headline + summary + verbatim source` as one vector, so query phrasing has multiple match surfaces. Four-stage retrieval: query rewriting → dual retrieval pass (original + rewritten) → chunk merge → LLM rerank to final-k.
 
 ### 4. Generator
-`gpt-4.1` produces the answer. The `TECHNICAL` branch enters a bounded tool loop (`MAX_TOOL_CALLS = 3`) with `fetch_project_readme` for one of 24 distilled project / paper docs. The tool's argument is a `Literal[*REGISTRY.keys()]` pinned to the known project keys at startup; misconfiguration fails at import, not on first user turn.
+`gpt-4.1` produces the answer. The `GENERIC`, `GAP`, and `TECHNICAL` branches each enter a bounded tool loop (`MAX_TOOL_CALLS = 3`) with `fetch_project_readme` for one of 28 distilled project / paper docs. The tool's argument is a `Literal[*REGISTRY.keys()]` pinned to the known project keys at startup; misconfiguration fails at import, not on first user turn. `LOGISTICAL` and `BEHAVIOURAL` are tool-free.
 
 ### 5. Guardrail
 `Claude Sonnet 4.6` — a model from a different family — judges the answer against the same composed prompt the generator saw. Up to 3 retries with structured rejection feedback wrapped into the next attempt's system prompt; falls back to a polite canned-refusal floor if all attempts fail.
@@ -40,7 +40,7 @@ Frame-vs-Substance separation is load-bearing (see [ADR-0001](https://github.com
 
 - **Distinct model families for generator and guardrail.** OpenAI for generation, Anthropic for the guardrail. Shared training data and shared prompt-injection susceptibilities are real risks when both come from the same family — splitting families reduces shared failure modes at no architectural cost.
 
-- **Tool access scoped to one branch.** Only `TECHNICAL` has `fetch_project_readme` in its spec. Other branches don't have the tool — the model literally can't invent it, and the guardrail can't reject a tool-grounded answer for "fabrication" because the tool surface is whitelisted.
+- **Tool access scoped, not maximal.** `fetch_project_readme` is wired into `GENERIC`, `GAP`, and `TECHNICAL` — the three branches whose questions can land on a named project. `LOGISTICAL` and `BEHAVIOURAL` are deliberately tool-free; their question shapes don't surface project depth, so handing them a tool would only be a fabrication vector. The model can't invent a tool where it isn't wired, and the guardrail can't reject a tool-grounded answer for "fabrication" because the tool surface is whitelisted. The original design (Session 12 ADR-0003) gated tool access to `TECHNICAL` only; widening to `GENERIC`/`GAP` (Session 56) was empirical — recruiters phrase "what is AI-JIE?" as GENERIC and "do you have RAG experience?" as GAP, and starving those branches of the tool produced gap-phrase responses on questions where the README content already existed.
 
 - **Outcome-based canary contract, not mechanism-based.** A 50-question canary corpus replays through the pipeline on operator cadence; the drift detector flags `branch_changed`, `event_type_changed`, `outcome_changed`, `keyword_coverage_dropped`, `red_flag_emerged`, `latency_p95_regression`. It deliberately does NOT flag retrieved-chunk-set or retry-depth deltas — those mechanism signals fire on every legitimate KB rebuild and add noise without adding signal. Drift means *"did the system stop doing what we wanted"*, not *"did it do it differently"*.
 

@@ -45,7 +45,7 @@ flowchart TD
     USER([Visitor asks a question]):::io
     USER --> CLASSIFY["1. Sort the question<br/>What kind is this?<br/>research · AI engineering · behavioural ·<br/>logistics · off-topic"]:::llm
     CLASSIFY --> COMPOSE["2. Build the prompt<br/>Load topic-specific rules,<br/>the right slice of profile,<br/>and retrieved facts from the KB"]:::pure
-    COMPOSE --> GENERATE["3. Generate the answer<br/>GPT-4.1<br/>For technical questions, the model<br/>can fetch full project READMEs"]:::llm
+    COMPOSE --> GENERATE["3. Generate the answer<br/>GPT-4.1<br/>For broad / gap / technical questions,<br/>the model can fetch full project READMEs"]:::llm
     GENERATE --> GUARD["4. Quality check<br/>A different model (Claude Sonnet 4.6)<br/>reads the answer + ground truth<br/>and accepts or rejects it"]:::llm
     GUARD --> ACCEPT{Accepted?}:::decision
     ACCEPT -->|yes| LOG["5. Log everything<br/>branch, retries, latency, retrieval,<br/>tool calls, contact-flow state"]:::sideEffect
@@ -61,7 +61,7 @@ flowchart TD
 - **Classify-then-route.** A small, cheap model (`gpt-4.1-nano`) labels each question. Different question types load different rules and profile sections — a behavioural question needs personal-stories context; a technical question needs transferable-skill framing and the ability to fetch project docs.
 - **Frame vs Substance.** A small always-on profile (~2 k tokens) supplies identity and rules ("Frame"); a larger knowledge base is retrieved on demand ("Substance"). Frame stays consistent; Substance scales without bloating context.
 - **Model-as-judge guardrail.** A second model from a different family reviews each answer against the same context the generator saw. Three rejection-feedback retries before fallback.
-- **Tool use, scoped.** Only the technical branch can fetch project READMEs via a registered `fetch_project_readme` tool. Other branches don't have access — the model can't invent it.
+- **Tool use, scoped.** Three of five branches (GENERIC, GAP, TECHNICAL) can fetch project READMEs via a registered `fetch_project_readme` tool. LOGISTICAL and BEHAVIOURAL don't have access — the model can't invent the tool where it isn't wired.
 - **One log, every turn.** A single JSONL log captures the full record: classifier output, retrieval, attempts, latency, tool calls, contact-flow state. Live and canary runs share the same schema, distinguished by an `is_canary` flag.
 
 ## Module graph
@@ -241,7 +241,7 @@ digital-twin/
 ├── data/
 │   ├── profile.md              # Always-on Frame (~2k tokens)
 │   ├── knowledge_base/         # Substance — RAG'd on demand
-│   ├── readmes/                # Tool-only project docs (24 entries)
+│   ├── readmes/                # Tool-only project docs (28 entries)
 │   ├── canaries/               # Drift-detection corpus + baseline
 │   └── logs/                   # JSONL interaction + contact logs
 ├── docs/

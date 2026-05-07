@@ -6,19 +6,22 @@ For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural 
 **Last updated:** 2026-05-07 (Session 63 — **Phase 7 slice 2 (`#52`) shipped; Phase 7 closed**. Project enters observe-mode. Iframe embed live on `alejandrofuentepinero.github.io`; parent-PRD step 12 embedded smoke test passed (tool call fired on live Space, status success). Digital-twin self-reference content shipped: `data/readmes/digital_twin.md` rewrite + new `## Digital Twin` section in `data/knowledge_base/projects_ai_flagship.md`. `AlejandroFuentePinero/digital-twin` repo confirmed PUBLIC; Source links resolve. Drift detector cleanup landed mid-session (52 → 12 flags same data). Documentation consistency pass: SUMMARY.md / pipeline_diagram.mmd / CONTEXT.md / SENTINEL.md / CLAUDE.md / TESTING.md all reconciled to current state. Issues `#52` and `#6` (parent Phase 7 PRD) closed. Suite at **620 passing**.)
 **Current phase:** **Observe-mode**. All seven architecture phases done. No active engineering work scheduled. Re-engage on (a) real-recruiter traffic surfacing a new failure mode, (b) content updates, or (c) canary trajectory drift worth investigating. Suite at **620 passing**.
 
-**Locked next-step order:**
-1. **Phase 6 — HF Dataset migration** (issue `#5`). `LogReader.HFReader` / `LogWriter.HFWriter` implementation; buffered append; schema versioning carry-through; HF token in env / Spaces secrets.
-2. **Phase 7 — HF Spaces deploy** (issue `#6`). Package `app.py`, configure secrets, smoke-test all 5 branches + tool fires + contact form, embed Space iframe on portfolio site.
-3. **Iterate from real-recruiter traffic.** Both Phase 5 watch-items (`P8` initial-drill firing + `O8` cross-branch guardrail) resolve into fix-candidate-or-accept once production traffic accumulates ~1 month of data.
-4. **Tier B band tuning** (7%/15% placeholders) — recalibrate after a month of post-deploy traffic.
+**Build phase closed.** All seven architecture phases shipped. Pre-redesign locked-next-step list (Phase 6 / Phase 7 / iterate from traffic / Tier B band tuning) is preserved in git history; the post-Phase-7 surface is reactive only — see [`docs/MAINTENANCE.md`](./MAINTENANCE.md) for the operator runbook.
 
-**Deferred (gated on Phase 5 trip-wires):**
-- **Producer-rule v2** (`LIMITATIONS::P17`) — branch-identity-canonical conflation surfaced by Session 55 freeze. Defer until Phase 5 traffic shows the cost. New PRD if/when a trip-wire fires.
-- **Reproducibility provenance surface** (`LIMITATIONS::P16`) — `model_id` / `temperature` / `prompt_hash` are write-only; ship the failure-drilldown surface only when an incident actually reaches for them.
-- **HuggingFace Dataset migration** (issue `#5`, Phase 6) — sequenced after Phase 5.
-- **HuggingFace Spaces deploy** (issue `#6`, Phase 7) — sequenced last.
+**Reactive backlog (gated on production signal — observe-mode triggers):**
 
-**Audit-first discipline (slices 1–4):** every slice ships with a written audit at `docs/audits/slice-<N>-<name>.md` listing field readers, predicted behaviour change, fixtures requiring updates, and workarounds removed. Audit lands first; code change lands second; PR review verifies the change matches the audit.
+- **Tier B band tuning** (7% / 15% placeholders) — recalibrate after ~1 month of post-deploy traffic accumulates. Ungated until then.
+- **Producer-rule v2** (`LIMITATIONS::P17`) — branch-identity-canonical conflation surfaced by Session 55 freeze. New PRD only if a trip-wire fires.
+- **Reproducibility provenance surface** (`LIMITATIONS::P16`) — `model_id` / `temperature` / `prompt_hash` write-only; ship the failure-drilldown surface only when a real incident reaches for them.
+- **`LIMITATIONS::P8`** initial-drill tool-firing rate + **`LIMITATIONS::O8`** guardrail cross-branch evaluation gap — eligible for re-read after a month of post-deploy traffic; convert to fix-candidate-or-accept based on observed signal.
+- **Canary follow-ups** (Session 62, observation-driven):
+  - Drop fuzzy off-topic corpus questions ("favourite colour", "breakfast") with no defensible correct branch.
+  - Tighten `branch_changed` to unanimous-vote across N=3 replicates.
+  - Per-question canary stability scoring — downweight chronically-unstable questions in the drift count.
+- **v6 eval against the deployed pipeline** — only if real-recruiter traffic surfaces an answer-quality regression worth measuring.
+- **Pin `requirements.txt` to exact `uv.lock` versions** — only if a future redeploy surfaces version-drift symptoms.
+
+**Audit-first discipline (slices 1–4):** every slice shipped with a written audit at `docs/audits/slice-<N>-<name>.md` listing field readers, predicted behaviour change, fixtures requiring updates, and workarounds removed. Convention preserved if any of the reactive-backlog items above re-open as a sliced PRD.
 
 ---
 
@@ -44,10 +47,10 @@ Content-only phase. No code changes. Sets up the **Frame** (loaded by branches i
   - [x] `## gap_inventory` (~630 tokens) — **5** gaps in the canonical CONTEXT.md Gap-aware response shape: specific gap with **calibration-ladder** exposure rung + **Broader skill** with named KB-verifiable evidence + **Active learning** with concrete credentials and status. Industry experience, DevOps, cloud, frontend, deep learning. Officeworks AI engineer offer (start 13 May 2026) closes the industry-experience gap structurally.
   - [x] `## logistics` (~195 tokens) — Melbourne, AU PR full work rights, Officeworks AI engineer 13 May 2026 (hybrid), industry exclusions, comp/travel opt-out, Officeworks-confidentiality redirect.
   - [x] `## personal_stories` (~980 tokens) — **pulled forward from Phase 5 to Phase 1.** Seven recruiter-bar stories with explicit routing table. Story 6 (origin — grandmother and rural Spain) gated to surface only on "tell me something not in your CV that defines you" / "what drives you" prompts. Override of the Phase 5 deferral was Alejandro's call: the work is done at recruiter-bar, no benefit to delaying.
-- [ ] Rewrite `data/knowledge_base/positioning.md` — remove transfer-principle prose that moves to `profile.md`. Keep parallels table, worked examples, "what he doesn't bring."
-- [ ] Add `## Career Timeline` section to `data/knowledge_base/experience.md` — explicit start/end years per role so chunk headlines surface dates. Fixes temporal retrieval (v3 MRR 0.783).
-- [ ] Re-ingest KB. `profile.md` is naturally skipped (lives outside `data/knowledge_base/`). Verify chunk count and category distribution.
-- [ ] Sample-check chunks via `sample_chunks.py` — confirm temporal chunks now have dates in headlines.
+- [x] Rewrite `data/knowledge_base/positioning.md` — transfer-principle prose moved to `profile.md`. Current `positioning.md` carries: core argument, parallels table (research method ↔ AI engineering equivalent), why-the-transition, what-Alejandro-doesn't-bring, how-this-shows-up-in-interviews.
+- [x] Add `## Career Timeline` section to `data/knowledge_base/experience.md` — present at line 3; explicit start/end years per role.
+- [x] Re-ingest KB. Run repeatedly through Phases 2–7; current count 105 chunks per Session 63.
+- [x] Sample-check chunks via `sample_chunks.py` — verified during phases 1–3.
 
 Phase 1 deliverable: `profile.md` is content-complete (**including** `personal_stories` — pulled forward from Phase 5), KB rewrites are merged, ChromaDB is re-ingested. No code changes.
 
@@ -72,11 +75,11 @@ Per ADR-0003. The current `answer.py`, `guardrail.py`, and `logger.py` are repla
 - [x] **`guardrail.py`** — replaced. Branch-aware via composed system prompt. Universal rules (persona/scope/security/numerical_completeness) imported by both `composer.py` (used by generator) and `guardrail.py` indirectly through the same composer call — drift prevention. Old monolithic `evaluate()` and `SYSTEM_PROMPT` shim removed at step 10. **Branch-specific** rules (calibration_ladder / deflection_rule / tool_rules) land with their branches: issues #15 / #17 / #18.
 
 ### New modules
-- [ ] `classifier.py` — cheap classifier (`gpt-4.1-nano`) returning `{labels, confidence}`; sees last 2 turns + current question; defaults to GENERIC on low confidence.
-- [ ] Branch composers (one module or `src/branches/`) — one named function per branch (GAP, BEHAVIOURAL, TECHNICAL, GENERIC, LOGISTICAL). Each composes its system prompt from shared constants + selected `profile.md` sections + retrieval results.
-- [ ] `LogReader` abstraction — `LocalReader` (JSONL) + `HFReader` (placeholder, real impl in Phase 6). Used by Sentinel.
-- [ ] `tools/fetch_project_readme.py` — registry-driven tool with `Literal[*REGISTRY.keys()]` enum.
-- [ ] `data/readmes/registry.json` + 5–8 cached project READMEs.
+- [x] `classifier.py` — `gpt-4.1-nano` classifier with `{labels, confidence}` + GENERIC fallback at confidence < 0.5.
+- [x] Branch composers — wired as `composer.py` + `branches.REGISTRY` (one `BranchSpec` per branch declares profile sections + final_k + branch_rules + tools).
+- [x] `LogReader` abstraction — `log_reader.py` carries `LocalReader` + `HFLogReader` (real impl shipped in Phase 6 / `#46`–`#49`); used by Sentinel.
+- [x] `fetch_project_readme` — lives in `tools.py` + `tool_loop.py` (one module each kept the surface area small); registry-driven `Literal[*REGISTRY.keys()]` enum on the tool definition.
+- [x] `data/readmes/registry.json` + cached READMEs (28 entries — overshot the 5–8 estimate; covers every flagship project + paper).
 
 ### Universal rules (loaded in every branch)
 - [x] Persona block.
@@ -88,22 +91,22 @@ Per ADR-0003. The current `answer.py`, `guardrail.py`, and `logger.py` are repla
 
 All new and rebuilt test files follow the convention in [`TESTING.md`](./TESTING.md): matching `tests/test_<module>.py`, mock only at I/O boundaries, no LLM API calls. New `test_*.py` files appear in the `module_health` dashboard automatically.
 
-- [ ] `tests/test_classifier.py` (new) — confidence behaviour, history-aware disambiguation, multi-label, default-to-GENERIC.
-- [ ] `tests/test_branches.py` (new) — per-branch composition correctness; section selection.
-- [ ] `tests/test_readme_registry.py` (new) — registry/disk drift detection.
-- [ ] `tests/test_answer.py` (rebuild) — full routed pipeline integration; existing tests are tied to `answer_with_guardrail`'s monolithic shape and become stale.
-- [ ] `tests/test_guardrail.py` (rebuild) — branch-aware evaluation.
-- [ ] `tests/test_logger.py` (rebuild) — enriched schema, all event types.
+- [x] `tests/test_classifier.py` (new) — confidence behaviour, history-aware disambiguation, multi-label, default-to-GENERIC.
+- [x] `tests/test_branches.py` (new) — per-branch composition correctness; section selection.
+- [x] Registry/disk drift detection — folded into `tests/test_tools.py` rather than a separate `test_readme_registry.py` file.
+- [x] Pipeline integration tests — `tests/test_pipeline.py` (replaces the planned `test_answer.py` after `answer.py` was deleted in favour of `pipeline.py`). Full routed-pipeline integration via boundary-mocked Fakes.
+- [x] `tests/test_guardrail.py` (rebuild) — branch-aware evaluation.
+- [x] Logger tests — `tests/test_interaction_log.py` (replaces the planned `test_logger.py` after the `logger.py` → `interaction_log.py` rename). Enriched schema + all event types.
 - [x] `tests/test_eval.py` (build on; surgical updates) — pure-function metric tests (`_reciprocal_rank`, `_dcg`, `_ndcg`, `_mean`, aggregation, versioning, `load_tests`) survive intact. Step 10 flipped `run_eval.py`'s import from `answer` to `retrieval`+`pipeline`. The branch-label integration update to `eval_retrieval` lands with the v4 eval rewrite (Phase 3 / issue #2).
-- [ ] `tests/test_ingest.py` (survives unchanged).
+- [x] `tests/test_ingest.py` (survives unchanged).
 
 ### `app.py` updates (build on existing scaffold)
 The current `app.py` already has: UUID `session_id`, Gradio `gr.State` for session/history, history truncation to last 10 turns, chat-input + new-conversation button, avatar. Additions only:
-- [ ] Per-session state: `turn_counter`, `contact_provided` flag (alongside existing `session_id` and `history`).
-- [ ] Periodic invitation hook at turn 3 (single-fire), suppressed when `contact_provided=True`.
-- [ ] `log_user_details` form affordance: collapsible row at the bottom of the chat, persistently visible after first invitation. On submit, write a record stamped with `session_id`, `turn_index`, `timestamp`, and the form fields, so the submission can be joined back to the enriched interaction log on `session_id` to reconstruct the conversation that led to the contact request.
-- [ ] `new_session()` resets the new flags too.
-- [ ] Wire to the routed `answer` entry point (was `answer_with_guardrail`).
+- [x] Per-session state — `SessionState` in `session_state.py` (`turn_counter`, `contact_provided` + `gap_event_seen` + `explicit_request_seen`).
+- [x] Periodic invitation expanded to three triggers (Session 26): turn 3+, gap-phrase event, explicit user request. All suppressed once `contact_provided=True` latches.
+- [x] Contact form affordance shipped as a collapsible Accordion (`#16`); writes `ContactRecord` to `data/logs/contacts.jsonl` (or HF `contacts/YYYY-MM-DD.jsonl` in prod), joinable to `interactions.jsonl` on `session_id`.
+- [x] `new_session()` resets all flags (verified by `tests/test_app_session_state.py`).
+- [x] Wired to the routed pipeline — `app.py` calls `Pipeline.run()` directly.
 
 ---
 
@@ -235,25 +238,30 @@ Sliced into five GitHub issues (`#46`–`#50`). Slices A / B / C / D / E closed 
 Sliced into two GitHub issues (`#51`, `#52`).
 
 - [x] **Slice 1 — Space deploy + production polish + smoke-test pass (`#51`).** README YAML frontmatter; `requirements.txt` mirroring `pyproject.toml`; `app.py` polish (`WELCOME_TAGLINE` + `PRIVACY_NOTE` constants, privacy footer); `.privacy-note` CSS; 4-test `tests/test_app_session_state.py`; `scripts/deploy_to_space.py` (Hub API — `git push` rejected by Spaces' >10 MB pre-receive hook); `docs/deployment-runbook.md`. Live at <https://alejandrofupi-digital-twin.hf.space>; smoke test passed 4/5 branches (LOGISTICAL not asked), p50 ≈ 12.7 s / p95 ≈ 17.3 s on cpu-basic; first production write to `contacts/` succeeded and joined to its 6-turn session via `session_id`; slice-D writer-health state file fresh on prod. Cold-start latency capture deferred to first organic visitor on a slept Space. v6 eval skipped — no eval-relevant content changed since v4. Suite +4 (619 → 623).
-- [ ] **Slice 2 — Portfolio iframe embed (`#52`).** Add the iframe + fallback link to the home page on `AlejandroFuentePinero/alejandrofuentepinero.github.io` (Jekyll/AcademicPages); run the parent-PRD step 12 (embedded smoke test) on desktop + mobile.
+- [x] **Slice 2 — Portfolio iframe embed (`#52`).** Iframe + fallback link landed on `alejandrofuentepinero.github.io` home; Phase 7 PRD step 12 (embedded smoke test) passed — tool call fired correctly inside the iframe (status success). Issue `#52` closed.
 
 ---
 
 ## Open implementation details (not blocking architecture)
 
-- Final phrasing for: deflection rule, periodic-invitation closing line, contact-form copy.
-- Selection of 5–8 flagship project READMEs to cache in `data/readmes/`.
-- Formal test plan (one document covering all phases — written when test surface is concrete).
-- **Gradio UI polish session** — dedicated standalone session (planned per Session 26 smoke-test feedback; not gated on Phase 3+ work). Concrete items surfaced from live testing:
-  - Welcome message + framing (currently a one-line Markdown header)
-  - Theme review (cohesion across chat / accordion / form / buttons)
-  - Mobile responsiveness (untested; chat layout assumes desktop width)
-  - Form layout polish — initial Session 26 fix (Accordion + tighter row layout) was a quick fix; revisit for visual hierarchy, spacing, microcopy
-  - Accordion default-open vs default-closed when first triggered
-  - Loading states / response streaming (currently full reply appears at once)
-  - Visual feedback for tool fetches (TECHNICAL turns currently silent during the multi-second tool loop)
-  - Error state UI (canned-refusal currently appears as a regular assistant message)
-- **Replace [`data/readmes/digital_twin.md`](../data/readmes/digital_twin.md) with Alejandro-authored version.** Currently a Claude-authored placeholder distilled from `CLAUDE.md` + `docs/adr/` + a direct read of `src/`. Architecturally accurate but not in Alejandro's voice. The self-reference doc is the one TECHNICAL recruiters most likely to drill into ("how does this very chatbot work?"), so voice and emphasis matter. Keep the locked Q11 shape (Source link → What it is → Architecture → Key engineering decisions → Stack and discipline) when replacing. Two release-blocking gates in [`RELEASE_CHECKLIST.md::Portfolio / external`](./RELEASE_CHECKLIST.md): (1) content replacement, (2) Source link resolution (the `AlejandroFuentePinero/digital-twin` repo is currently private — the GitHub Source link returns 404 for unauthenticated visitors; either make the repo public or redirect the Source line to a public resource).
+Resolved or operator-decided as of Phase 7 close:
+
+- [x] Final phrasing for deflection rule, periodic-invitation closing line, contact-form copy — landed iteratively across Phases 2–6 (`rules.DEFLECTION` / `INITIAL_FORM_PROMPT` / `RE_INVITATION_FORM_PROMPT` / `WELCOME_TAGLINE` / `PRIVACY_NOTE`).
+- [x] Selection of flagship project READMEs to cache — 28 entries in `data/readmes/registry.json` (every flagship project + paper covered).
+- [x] Formal test plan — supplanted by [`docs/TESTING.md`](./TESTING.md) (matching `test_<module>.py` rule, mock-at-boundary policy, exemption list, module-health dashboard).
+- [x] Source link resolution for `data/readmes/digital_twin.md` — `AlejandroFuentePinero/digital-twin` repo confirmed PUBLIC at Phase 7 close; Source links resolve cleanly for unauthenticated visitors.
+
+Deferred — observation-driven, no scheduled trigger:
+
+- **Gradio UI polish session** — dedicated standalone session listed in `RELEASE_CHECKLIST.md::L79` as `🟡 deferred`. Concrete items surfaced from live testing:
+  - Theme cohesion across chat / accordion / form / buttons
+  - Mobile responsiveness at common breakpoints (375 / 768 / 1024 px)
+  - Form layout polish (visual hierarchy, spacing, microcopy beyond Session 26's quick Accordion fix)
+  - Loading / streaming states for assistant replies
+  - Visual feedback during multi-second TECHNICAL tool fetches
+  - Error-state UI (canned-refusal currently appears as a regular assistant message)
+  Re-engage when (a) real-recruiter feedback flags a specific surface, or (b) the operator decides to take a deliberate UX session.
+- **`data/readmes/digital_twin.md` Alejandro-voice rewrite** — Session 63 decision #5 accepted the Claude-distilled rewrite (matches the corpus convention; other 27 READMEs are also Claude-distilled). Audit 2026-05-07 (H3) re-confirmed shape + voice + depth match siblings. The locked Q11 shape (Source link → What it is → Architecture → Key engineering decisions → Stack and discipline) is preserved as a re-edit target if a future real-voice rewrite is wanted.
 
 ---
 

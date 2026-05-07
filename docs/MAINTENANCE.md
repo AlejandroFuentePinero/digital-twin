@@ -26,9 +26,9 @@ This file is the entry point when re-engaging. Read this before opening any othe
 
 ### Quarterly
 
-- [ ] **Run the full eval** (retrieval + answer) against the current pipeline. Compare to v4 baseline (MRR 0.866, accuracy 4.56). Major regression → investigate.
+- [ ] **Run the full eval** (retrieval + answer) against the current pipeline. Compare to v4 baseline (MRR 0.866, accuracy 4.56). Major regression → investigate. The `run_id` is auto-derived (`v<N>_<YYYY-MM-DD>`); pass `--notes` to record the trigger.
   ```bash
-  uv run python eval/run_eval.py --tag v$(date +%Y%m%d) --notes "Quarterly maintenance run"
+  uv run python eval/run_eval.py --notes "Quarterly maintenance run"
   ```
 - [ ] **Audit content for stale tense / dates** — walk `data/profile.md` + `data/knowledge_base/*.md` for "currently" / "present" / "now" references that no longer match reality (role changes, completed courses, new projects).
 - [ ] **Audit canary corpus for KB drift** — if KB rewrites changed >20% of section content since the last audit, walk `data/canaries/corpus.json` line-by-line; replace questions whose grounding was removed; add questions for new flagship content. (`LIMITATIONS::P13`.)

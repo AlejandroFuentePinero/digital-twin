@@ -5,6 +5,70 @@
 
 ---
 
+## Session 64 (2026-05-07) — Pre-walk-away fresh-eyes audit + targeted fixes + redeploy. Observe-mode posture preserved.
+
+**Status:** Operator-driven audit pass before walking away from active development. Fresh-eyes audit at `docs/audits/audit-2026-05-07.md` surfaced 4 Critical / 5 High / 6 Medium / 14 Low findings; operator triaged and actioned 5 of 9 Critical+High in-session, accepted 3 as deferrals matched to portfolio scope, reverted 1 to preserve diagnostic affordance. Live Space redeployed once (digital_twin.md tool-branch fact correction reaches recruiters). v6 eval kicked off as a deployment marker — still running at session close. Suite stays at **620 passing, 1 skipped**. No phase reopens.
+
+### What shipped (this session)
+
+**1. Audit report — `docs/audits/audit-2026-05-07.md`** (uncommitted, gitignore-eligible). Fresh-eyes pass across 10 dimensions: repo hygiene, secrets / PII, deployed-vs-repo parity, doc consistency, code quality, test integrity, dependency hygiene, operational surface readiness, deferred-item honesty, what's-missing. 30+ findings with explicit `file:line` citations, prioritised Critical → Cosmetic. Living document — operator can flip status inline as items get actioned.
+
+**2. Tool-branch fact correction — H1 (8 surfaces edited).** `branches.REGISTRY` since Session 56 (commit `219bfb8`) exposes `fetch_project_readme` to GENERIC, GAP, AND TECHNICAL — but CLAUDE.md / CONTEXT.md / README.md / ADR-0003 / `docs/pipeline_diagram.mmd` / `docs/MAP.md` (auto-regen) / `data/readmes/digital_twin.md` / `src/tools.py` all still claimed TECHNICAL-only. Fixed across all eight surfaces; ADR-0003 picked up an explanatory bullet about why the original design widened. `docs/MAP.md` regenerated via `uv run python src/system_map.py`. The `digital_twin.md` correction is the load-bearing one: that README is **fetched by the model itself** when recruiters ask "how does this thing work?" — pre-fix, the deployed system was telling visitors a falsehood about its own architecture.
+
+**3. Release-checklist + maintenance-runbook command corrections — C4.** `eval/run_eval.py` does not accept a `--tag` argument (auto-derives `run_id` from `_next_version()` + date). Stripped the bogus flag from `docs/MAINTENANCE.md::Quarterly` + `docs/deployment-runbook.md::Optional v6 eval`. Operator copy-paste no longer fails on a flag that doesn't exist.
+
+**4. RELEASE_CHECKLIST `python -m src.ingest` correction — H2.** `src` has no `__init__.py`; `python -m src.ingest` errors. Other docs use the correct `python src/ingest.py` form. Aligned `docs/RELEASE_CHECKLIST.md:29` to match.
+
+**5. Stale `needs-triage` cleanup — H5.** Closed issues `#23` and `#40` still wore the label. Stripped via `gh issue edit ... --remove-label needs-triage`. Verified `labels=[]` on both via `gh issue view`.
+
+**6. README count drift — caught while sweeping TODO.md, fixed in 4 surfaces.** `data/readmes/registry.json` carries **28** keys; `ls data/readmes/*.md | wc -l` confirms 28 files. CLAUDE.md and `data/readmes/digital_twin.md` claimed "24" (audit didn't catch this; surfaced during the TODO sweep verification). Also corrected `README.md::Project structure` (24 entries → 28) and `data/knowledge_base/projects_ai_flagship.md::Tool-grounded technical depth` (which carried both the count drift AND a TECHNICAL-only claim — fixed both at once). The KB file change cascades through ingestion: a re-ingest + redeploy is required for the corrected chunk to reach recruiters via retrieval. Deferred to operator's end-of-session deploy batch (the in-flight v6 eval reads the current ChromaDB; mid-eval re-ingest would interfere).
+
+**7. Live redeploy.** `scripts/deploy_to_space.py` ran clean; Space stage `RUNNING` on `cpu-basic`, HTTP 200 on the public URL, corrected `digital_twin.md` content verified live on the Space's filesystem via `HfApi.hf_hub_download`. Browser smoke-test deferred to operator. **`data/preprocessed_db/` second-step upload was unnecessary** — KB unchanged at this redeploy point (the `projects_ai_flagship.md` edit landed AFTER the redeploy as part of the count-drift fix, so it's not yet in the deployed DB).
+
+**8. TODO.md sweep.** Every `[ ]` checkbox flipped to `[x]` (Phase 1 KB rewrites, Phase 2 modules+tests+app.py wiring, Phase 7 slice 2). Stale "Locked next-step order" + "Deferred" sections (which still listed Phase 6 + Phase 7 as upcoming) replaced with the post-Phase-7 reactive backlog: Tier B band tuning, Producer-rule v2, Reproducibility provenance surface, P8/O8 watch-items, three canary follow-ups (corpus cleanup / unanimous-vote tightening / per-question stability scoring), v6 eval, requirements pin. "Open implementation details" updated — resolved items moved to `[x]` (final phrasing, README selection, formal test plan → TESTING.md, Source-link resolution); deferred items kept with current rationale + cross-refs.
+
+**9. RELEASE_CHECKLIST.md sweep.** Same treatment — every section's gates marked `[x]` with status legend (`✅` verified / `⊕` covered-by-alternative / `🟡` operator-accepted deferral). Banner header added pointing to Session 63's status addendum + this session's audit. Single `[ ]` remaining: the in-flight v6 eval (line 39) — flips when the result file lands.
+
+**10. Deployment-runbook checklist marked.** Pre-deploy gates ticked with a "Last deploy: 2026-05-07" record below noting the trigger (H1 fix), KB-unchanged → no re-ingest, Space verification, and a reminder for future operators to uncheck before the next deploy. Stale `623+ passing` claim corrected to `620 passing, 1 skipped` (audit L6).
+
+**11. v6 eval kicked off** in background (`bg9tob77o`). Notes: "v6 — post-Phase-7 baseline against current routed pipeline (HEAD = c165f34, schema v4, 105 KB chunks, 28 readme entries). Deployment marker for the Space + iframe-embed era; first eval since v4_2026-05-03." Will land as `eval/results/v6_2026-05-07.json` if it completes cleanly. v4 stays the named comparison anchor; v6 is the deployment marker, not a baseline supersession.
+
+### Decisions
+
+**1. Revert the `PIPELINE_TRACE` removal — H4 reversed.** Audit recommended deleting the `_TRACE` flag + `_trace()` helper + ~14 call sites in `pipeline.py` (marked "Remove once the hang is diagnosed" — Session 56 fixed the hang). The deletion was zero-functional-impact (dead-by-default; trace fires only when `PIPELINE_TRACE=1` env var is set). Operator's call: `git checkout HEAD -- src/pipeline.py` to preserve the diagnostic affordance. Rationale: "can't deal with regression today." `pipeline.py` is byte-identical to `c165f34`. The "Remove once" comment lying about its temporary state is the residual cost; accepted. New feedback memory pinned (`feedback_dont_auto_delete_marked_for_removal_code.md`) — audit findings about marked-for-removal debug instrumentation should default to **propose conversion to `logging.debug()`**, not deletion.
+
+**2. Accept C2 (deletion procedure) and C3 (cost / abuse rate-limiting) durably for portfolio scope.** Privacy-note promises deletion via email but no script exists; deployed Space has zero rate-limiting / cost-cap. Operator's framing: portfolio scope, near-zero traffic, low API credit on the guardrail's Anthropic key. Won't fix until "the moment arrives" (a real deletion request) or until traffic patterns warrant. Both findings stay open in `audit-2026-05-07.md` for visibility but are not gating walk-away.
+
+**3. Defer C1 (tag push) to end-of-session batch.** `v1.0.0` annotated tag exists locally at `c165f34` but `git ls-remote origin "refs/tags/*"` returns empty. Operator handles the push when staging the session's working-tree changes for commit. GitHub Releases page will show v1.0.0 once pushed.
+
+**4. Accept H3 — `data/readmes/digital_twin.md` Claude-distilled rewrite holds.** Audit asked the operator to either (a) drop release-checklist L81 or (b) add an observe-mode trigger for revisiting voice. Operator's framing: the file matches the corpus convention; all 27 sibling READMEs in `data/readmes/` are also Claude-distilled. Honest review against four sibling READMEs (`ai_jie`, `expert_knowledge_worker`, `meeting_minute_generator`, `company_brochure_generator`) confirmed shape, voice, depth, and considered-alternatives framing match. L81 stays closed-by-decision.
+
+**5. v6 eval is a deployment marker, not a baseline supersession.** Session 63 deferred v6 ("only if real-recruiter traffic surfaces an answer-quality regression worth measuring"). Today's run is operator-elective — anchors the post-Phase-7 era and provides a comparison surface if a future regression appears. v4 (MRR 0.866 / accuracy 4.56) stays the named baseline. If v6 surfaces a regression at this scale (no eval-relevant content changed since v4 except the Digital Twin KB section + a few skills/SUMMARY edits), that's the trigger condition for investigation. Otherwise: v6 lands, operator notes the comparison in `eval/results/`, walks away.
+
+**6. KB-content correction in `projects_ai_flagship.md` is justified-but-deferred-to-operator.** The corrected paragraph reaches recruiters only after `uv run python src/ingest.py` + redeploy. The ChromaDB rebuild interferes with the in-flight eval, so re-ingest must wait for the eval to complete. Operator decides whether to redeploy once at end-of-session (KB rebuild + Space upload) or batch with the next on-demand content change.
+
+### Live verification
+
+- `uv run pytest -q` → **620 passing, 1 skipped** (HF integration opt-in). Re-confirmed post-H1 doc edits.
+- `uv run python -c "import sys; sys.path.insert(0, 'src'); import pipeline"` → clean import (post-revert sanity).
+- Space stage `RUNNING` on `cpu-basic`, HTTP 200, corrected `digital_twin.md` confirmed on the Space's filesystem via `HfApi.hf_hub_download` (old "Only TECHNICAL has fetch_project_readme" gone; new "Tool access scoped, not maximal" + "GENERIC, GAP, and TECHNICAL branches each enter a bounded tool loop" present).
+- GitHub: zero open issues; `#23` and `#40` carry empty label arrays.
+- `git ls-remote origin "refs/tags/*"` → empty (tag push deferred per Decision #3).
+- `gh repo view` confirms PUBLIC visibility; `data/readmes/digital_twin.md` Source link resolves.
+
+### Outstanding (start of next session)
+
+1. **`git push origin v1.0.0`** — operator's end-of-session batch (audit C1).
+2. **Stage + commit** the working-tree changes from this session — H1 fixes across 8 files, count-drift fixes across 4 files, MAP.md regen, deployment-runbook updates, TODO sweep, this DECISIONS entry. (`docs/audits/audit-2026-05-07.md` and `docs/RELEASE_CHECKLIST.md` are gitignored — they live operator-side and don't need staging.)
+3. **v6 eval triage** — when `eval/results/v6_2026-05-07.json` lands, check vs v4 (MRR 0.866 / accuracy 4.56). Treat sub-2-point movements on accuracy/completeness and sub-0.05 movements on MRR/nDCG as in-noise. Note the comparison in this session entry (or a follow-up) once the result is in.
+4. **Optional re-ingest + redeploy** — to ship the `projects_ai_flagship.md` correction to the deployed pipeline (the model retrieves the OLD chunk content via ChromaDB until re-ingest). One `uv run python src/ingest.py` + one `scripts/deploy_to_space.py`. Defer until v6 eval completes (mid-eval re-ingest would interfere).
+
+### Next session entry-point
+
+Observe-mode unchanged. Re-engage on the same triggers as Session 63: (a) real-recruiter traffic surfaces a new failure mode, (b) a content update is needed, or (c) a canary trajectory point shows drift worth investigating. The audit report stays as a supplementary entry-point for any follow-up cleanup.
+
+---
+
 ## Session 63 (2026-05-07) — Phase 7 slice 2 (#52) shipped: iframe embed on portfolio. **Phase 7 closed.** Project enters observe-mode.
 
 **Status:** The deployed digital twin is now embedded on the portfolio home page (`alejandrofuentepinero.github.io`) — the chat is the headline interaction a recruiter hits inline, not an optional side-trip behind a link. Slice 2's parent-PRD step 12 (embedded smoke test) passed: the tool call `fetch_project_readme(digital_twin)` fired correctly on the live Space, status `success`, attempt 0, confirming the new digital-twin self-reference content reaches recruiters. Phase 7 closes here. Project transitions from build mode to observe mode pending real-recruiter traffic accumulation. Issues `#52` and `#6` (parent Phase 7 PRD) closed; `needs-triage` stripped on both. Suite at **620 passing**.

@@ -20,7 +20,7 @@ How a user question becomes a response — branch routing, retry loop, side effe
 %% auto-generated module graph).
 %% Colour conventions: orange = LLM call, green = pure transform,
 %% yellow = decision, pink = side effect, red = canned refusal,
-%% cyan = model-callable tool (TECHNICAL branch),
+%% cyan = model-callable tool (GENERIC / GAP / TECHNICAL branches),
 %% dashed grey = future / not yet wired.
 flowchart TD
   classDef io fill:#fbbf24,stroke:#92400e,color:#1f2937,stroke-width:2px
@@ -45,7 +45,7 @@ flowchart TD
   ROUTE --> RETR["Retrieval — fetch_context<br/>ChromaDB top-K<br/>K = branch.final_k"]:::pure
   RETR --> COMP["PromptComposer<br/>UNIVERSAL rules + branch_rules<br/>+ profile sections (incl. active_learning for GAP)<br/>+ retrieved context"]:::pure
   COMP --> GEN["Generator — gpt-4.1<br/>system + history + question"]:::llm
-  GEN -->|"TECHNICAL branch only<br/>ToolLoop, MAX_TOOL_CALLS = 3<br/>per attempt"| TOOL["fetch_project_readme<br/>distilled README<br/>from data/readmes/"]:::tool
+  GEN -->|"GENERIC / GAP / TECHNICAL<br/>ToolLoop, MAX_TOOL_CALLS = 3<br/>per attempt"| TOOL["fetch_project_readme<br/>distilled README<br/>from data/readmes/"]:::tool
   TOOL --> GEN
   TOOL -.->|"tool-fetched content<br/>recomposed into judge prompt<br/>so guardrail sees what model grounded in<br/>(LIMITATIONS::R1)"| JUDGE
   GEN --> JUDGE["Guardrail — Claude Sonnet 4.6<br/>same composed prompt + answer<br/>distinct model family"]:::llm
@@ -314,4 +314,4 @@ graph LR
 | `summarize_failures.py` | Failure-summarisation batch (issue #33). |
 | `system_map.py` | System map generator — walks src/ and emits docs/MAP.md. |
 | `tool_loop.py` | Generic bounded tool loop for the TECHNICAL branch (#18 / ADR-0003). |
-| `tools.py` | Tool registry for the TECHNICAL branch (ADR-0003 + #18). |
+| `tools.py` | Tool registry for branches that expose model-callable tools (ADR-0003 + #18). |

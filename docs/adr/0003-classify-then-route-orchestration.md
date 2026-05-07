@@ -8,10 +8,10 @@ The table below was the original ADR design. Implementation (Sessions 17–24) r
 
 | Branch | `profile_sections` | `branch_rules` (on top of UNIVERSAL) | `final_k` | `tools` |
 |---|---|---|---|---|
-| **GENERIC** | identity + narrative_summary + transfer_principles | concise_disclosure | 6 | — |
-| **GAP** | identity + gap_inventory + active_learning | calibration_ladder + concise_disclosure | 6 | — |
-| **LOGISTICAL** | identity + logistics | concise_disclosure | 6 | — |
-| **BEHAVIOURAL** | identity + personal_stories | deflection + concise_disclosure | 6 | — |
+| **GENERIC** | identity + narrative_summary + transfer_principles | concise_disclosure + deflection_instructions + tool_rules | 6 | `fetch_project_readme` |
+| **GAP** | identity + gap_inventory + active_learning | calibration_ladder + concise_disclosure + tool_rules | 6 | `fetch_project_readme` |
+| **LOGISTICAL** | identity + logistics | concise_disclosure + deflection_instructions | 6 | — |
+| **BEHAVIOURAL** | identity + personal_stories | deflection + concise_disclosure + deflection_instructions | 6 | — |
 | **TECHNICAL** | identity + transfer_principles + active_learning | tool_rules + concise_disclosure | 6 | `fetch_project_readme` |
 
 `UNIVERSAL` rules load on every branch: `persona`, `scope`, `security`, `numerical_completeness`, `project_links`. Notable refinements vs. the original ADR table:
@@ -20,6 +20,7 @@ The table below was the original ADR design. Implementation (Sessions 17–24) r
 - TECHNICAL adds `active_learning` to `profile_sections` per `LIMITATIONS.md::O2` mitigation — the classifier over-fires TECHNICAL on tool-name probes ("have you used CUDA?"), and the always-on `active_learning` Layer 1 grounding handles those cases without requiring a tool fetch.
 - `concise_disclosure` (Session 20 / #25) is a cross-branch pattern rule applied to every branch.
 - `project_links` (Session 24 / #18) is a universal rule governing canonical-source-link surfacing across all branches.
+- `fetch_project_readme` was originally TECHNICAL-only (the ADR's first design). Session 56 (commit `219bfb8`) widened access to `GENERIC` and `GAP` because the classifier legitimately routes named-project questions outside TECHNICAL ("what is AI-JIE?" reads as GENERIC; "do you have RAG experience?" reads as GAP), and starving those branches of the tool surface produced gap-phrase responses on questions where the README content existed. `LOGISTICAL` and `BEHAVIOURAL` stay tool-free — neither has a defensible use case for project-doc fetch.
 
 A cheap classifier (`gpt-4.1-nano`) takes the last 2 turns of history plus the current question and returns `{labels: list[str], confidence: float}`. High confidence + single label → that branch. Multi-label (max 2) → composition takes the union of needed sections. Low confidence → defaults to GENERIC. Misclassifications are logged with the confidence score so the **Sentinel** can flag persistent low-confidence patterns.
 

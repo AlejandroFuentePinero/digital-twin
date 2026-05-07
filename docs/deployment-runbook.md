@@ -10,12 +10,14 @@ The Space is the **standalone** delivery surface — public on `*.hf.space`. Sli
 
 Before pushing to the Space remote:
 
-- [ ] All Phase 1–6 work merged into `main` (issues `#1`–`#5` closed).
-- [ ] Local `uv run pytest` passes (`623+ passing, 1 skipped`).
-- [ ] `data/preprocessed_db/` exists and is up-to-date — re-run `uv run python src/ingest.py` if the KB has changed since last ingest.
-- [ ] `.env` carries `OPENAI_API_KEY` + `ANTHROPIC_API_KEY` + `HF_TOKEN` (write scope on `Alejandrofupi/digital-twin-logs`).
-- [ ] `data/profile.md` reads as Alejandro would write it — production traffic sees this verbatim.
-- [ ] `README.md` frontmatter at the top of the file (between `---` fences) lists `sdk_version` matching a real Gradio release.
+- [x] All Phase 1–6 work merged into `main` (issues `#1`–`#5` closed).
+- [x] Local `uv run pytest` passes (`620 passing, 1 skipped` as of 2026-05-07; the skipped one is the HF integration opt-in gated on `HF_INTEGRATION_TEST=1`).
+- [x] `data/preprocessed_db/` exists and is up-to-date — re-run `uv run python src/ingest.py` if the KB has changed since last ingest.
+- [x] `.env` carries `OPENAI_API_KEY` + `ANTHROPIC_API_KEY` + `HF_TOKEN` (write scope on `Alejandrofupi/digital-twin-logs`).
+- [x] `data/profile.md` reads as Alejandro would write it — production traffic sees this verbatim.
+- [x] `README.md` frontmatter at the top of the file (between `---` fences) lists `sdk_version` matching a real Gradio release.
+
+> **Last deploy:** 2026-05-07 (audit-driven redeploy after Phase 7 close). Trigger: H1 fix in `data/readmes/digital_twin.md` (tool-branch scope was misstated as TECHNICAL-only; corrected to GENERIC/GAP/TECHNICAL per `branches.REGISTRY`). KB unchanged → no re-ingest. Space stage `RUNNING` on `cpu-basic`, HTTP 200 on the public URL, corrected README verified live on the Space's filesystem. Browser smoke-test (steps 1–11 below) deferred to operator. Uncheck the gates above before the next deploy and re-run.
 
 ---
 
@@ -119,10 +121,10 @@ Story 13 from the parent PRD (`#6`). Skip on first deploy unless the smoke test 
 If running:
 
 ```bash
-uv run python eval/run_eval.py --tag v6 --notes "Run against deployed Space via in-process pipeline; deployment marker."
+uv run python eval/run_eval.py --notes "Run against deployed Space via in-process pipeline; deployment marker."
 ```
 
-(The eval is in-process — it doesn't actually hit the Space's HTTP endpoint. The "v6" tag is the deployment marker on the result file.)
+(The eval is in-process — it doesn't actually hit the Space's HTTP endpoint. `run_id` is auto-derived as `v<N>_<YYYY-MM-DD>` from the count of prior runs in `eval/results/`; the `--notes` field is where you mark this as the deployment marker.)
 
 ---
 

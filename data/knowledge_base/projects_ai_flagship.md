@@ -145,7 +145,7 @@ A multi-LLM conversational agent that answers professional questions about Aleja
 **What it delivers:**
 - **Branch-routed answers:** every turn classified into one of five branches — `GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGISTICAL` — each with its own profile sections, rules, and tool surface.
 - **Calibrated gap responses:** for skills not yet demonstrated, the system surfaces the specific gap, the broader transferable skill with named evidence, and the active-learning context (e.g. Ed Donner production track currently in progress).
-- **Tool-grounded technical depth:** the `TECHNICAL` branch can fetch any of 24 distilled project / paper README files via `fetch_project_readme` (bounded loop, max 3 calls per turn).
+- **Tool-grounded technical depth:** the `GENERIC`, `GAP`, and `TECHNICAL` branches can each fetch any of 28 distilled project / paper README files via `fetch_project_readme` (bounded loop, max 3 calls per turn). `LOGISTICAL` and `BEHAVIOURAL` are tool-free.
 - **Deflection floor on out-of-scope and harmful prompts:** canonical "I don't have that information" gap phrase short-circuits the guardrail; injection attempts and harmful asks are deflected to email contact.
 
 **Pipeline architecture (5 stages):**
