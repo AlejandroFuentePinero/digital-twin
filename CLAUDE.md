@@ -24,10 +24,7 @@ A conversational agent representing Alejandro de la Fuente professionally — an
 - **Project history:** [`docs/DECISIONS.md`](./docs/DECISIONS.md) — session-by-session log including the redesign (Session 12).
 - **Testing convention:** [`docs/TESTING.md`](./docs/TESTING.md) — matching `test_<module>.py` rule, mock-at-boundary policy, no-LLM-API-calls in tests, exemption list. Run the local module-health dashboard with `uv run python src/module_health.py`.
 - **System map:** [`docs/MAP.md`](./docs/MAP.md) — top section is the hand-edited runtime pipeline diagram ([`docs/pipeline_diagram.mmd`](./docs/pipeline_diagram.mmd)); below it the auto-generated module graph + glossary. Refresh both with `uv run python src/system_map.py` after touching modules in `src/` *or* after editing the pipeline diagram. Update the .mmd file whenever runtime behaviour changes (new branch, new tool, new decision point, retry policy change, new log field).
-- **Release checklist:** [`docs/RELEASE_CHECKLIST.md`](./docs/RELEASE_CHECKLIST.md) — end-of-project verification list. Walk through this before declaring the project finished or shipping a major release: doc freshness, code/test integrity, KB integrity, eval baseline, live behaviour, observability, deployment, and portfolio readiness.
 - **Limitations register:** [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md) — living register of observed and predicted system-wide limitations and operational risks, with explicit trip-wire conditions per entry. Read this when interpreting smoke-test results or planning new branches; update after every smoke-test round, ADR change, or production incident. Companion to ADR-0003's Operational risks section.
-
-**Pre-redesign artifacts** (`docs/PLAN.md`, `ARCHITECTURE.md`) are kept as historical record but are partially superseded by the ADRs. Read CONTEXT.md and the ADRs first.
 
 ### Architecture summary (post-redesign)
 
@@ -76,16 +73,10 @@ The `example/rag-example/` directory contains a reference implementation (brande
 - v3 baseline (pre-redesign): MRR 0.868, accuracy 4.46, gap rate 0.7%
 - v4+ measure the routed system; the v3 → v4 comparison has caveats (routing reshapes retrieval).
 
-## Agent skills
+## Issue tracking
 
-### Issue tracker
+Issues live in GitHub Issues at [`AlejandroFuentePinero/digital-twin`](https://github.com/AlejandroFuentePinero/digital-twin/issues). Default label vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`.
 
-Issues live in GitHub Issues (`AlejandroFuentePinero/digital-twin`). See `docs/agents/issue-tracker.md`.
+## Domain docs
 
-### Triage labels
-
-Default label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Single-context — one [`CONTEXT.md`](./CONTEXT.md) + [`docs/adr/`](./docs/adr/) at the repo root.

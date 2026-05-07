@@ -1,18 +1,46 @@
-course_skills.md
+# --- Secrets ---------------------------------------------------------------
 .env
+
+# --- Python ----------------------------------------------------------------
 .venv/
-course-notebooks/
-example/
-CLAUDE.md
-.DS_Store
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache
+.coverage
+htmlcov/
+coverage.xml
+
+# --- IDE / OS --------------------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+
+# --- AI tooling state ------------------------------------------------------
 .claude/
-CONTEXT.md
+
+# --- Generated artifacts ---------------------------------------------------
 .module_health_report.json
+docs/MAP.html
+/pipeline_diagram.mmd
+*.log
+
+# --- Vector store + interaction logs (regenerable / privacy) --------------
 data/preprocessed_db/
 data/logs/
-.pytest_cache
+
+# --- Personal raw drafts (not for public repo) ----------------------------
 data/raw_me/
-docs/MAP.html
-pipeline_diagram.mmd
+course_skills.md
+course-notebooks/
+example/
+
+# --- Internal-only docs ---------------------------------------------------
+docs/audits/
+docs/agents/
+docs/RELEASE_CHECKLIST.md
+docs/HUMAN_EVAL_QUESTIONS.md
+docs/PLAN.md
+docs/ARCHITECTURE.md
