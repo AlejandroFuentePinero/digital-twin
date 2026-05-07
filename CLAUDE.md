@@ -16,15 +16,21 @@ Environment variables live in `.env` at the repo root (loaded via `python-dotenv
 
 A conversational agent representing Alejandro de la Fuente professionally — answering recruiter and professional questions about skills, experience, research, and projects.
 
+**Project state: Observe-mode (Phase 7 closed at Session 63, 2026-05-07).** All seven architecture phases done; system is deployed, embedded, and instrumented. No active engineering work scheduled.
+
+**Entry point when re-engaging:** [`docs/MAINTENANCE.md`](./docs/MAINTENANCE.md). Read this before anything else. It carries the periodic / on-demand / triggered checklist plus quick-reference commands. `docs/TODO.md` is now the historical phase plan, not the active to-do.
+
 **The architecture was redesigned on 2026-04-29.** Canonical sources:
 
+- **Maintenance entry point:** [`docs/MAINTENANCE.md`](./docs/MAINTENANCE.md) — operator runbook for observe-mode. Periodic checks (monthly / quarterly / annually), on-demand procedures (after content / code / outage / feedback), trip-wires, and the canonical command reference.
 - **Glossary:** [`CONTEXT.md`](./CONTEXT.md) — every domain term used in this project.
 - **Architectural decisions:** [`docs/adr/`](./docs/adr/) — three ADRs covering the Frame/Substance split (0001), HF Dataset as canonical log store (0002), and classify-then-route orchestration (0003).
-- **Active phase plan:** [`docs/TODO.md`](./docs/TODO.md) — current 7-phase rebuild.
-- **Project history:** [`docs/DECISIONS.md`](./docs/DECISIONS.md) — session-by-session log including the redesign (Session 12).
+- **Phase history (closed):** [`docs/TODO.md`](./docs/TODO.md) — the 7-phase rebuild that ran from the 2026-04-29 redesign through Phase 7 close at Session 63.
+- **Project history:** [`docs/DECISIONS.md`](./docs/DECISIONS.md) — session-by-session log including the redesign (Session 12) and Phase 7 close (Session 63).
 - **Testing convention:** [`docs/TESTING.md`](./docs/TESTING.md) — matching `test_<module>.py` rule, mock-at-boundary policy, no-LLM-API-calls in tests, exemption list. Run the local module-health dashboard with `uv run python src/module_health.py`.
 - **System map:** [`docs/MAP.md`](./docs/MAP.md) — top section is the hand-edited runtime pipeline diagram ([`docs/pipeline_diagram.mmd`](./docs/pipeline_diagram.mmd)); below it the auto-generated module graph + glossary. Refresh both with `uv run python src/system_map.py` after touching modules in `src/` *or* after editing the pipeline diagram. Update the .mmd file whenever runtime behaviour changes (new branch, new tool, new decision point, retry policy change, new log field).
 - **Limitations register:** [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md) — living register of observed and predicted system-wide limitations and operational risks, with explicit trip-wire conditions per entry. Read this when interpreting smoke-test results or planning new branches; update after every smoke-test round, ADR change, or production incident. Companion to ADR-0003's Operational risks section.
+- **Deployment runbook:** [`docs/deployment-runbook.md`](./docs/deployment-runbook.md) — pre-flight checklist, push recipe, smoke test, rollback procedures.
 
 ### Architecture summary (post-redesign)
 
