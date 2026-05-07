@@ -302,3 +302,18 @@ button.gr-button.primary:hover, .gradio-container button.primary:hover {
     font-size: 14px;
     margin: 0 0 14px 0;
 }
+
+/* --- Privacy footer ------------------------------------------------------- */
+/* Smaller + more muted than .tagline-block so the chat / contact form stay
+ * the visual focus while the data-flow disclosure stays discoverable. */
+.privacy-note p {
+    color: var(--muted) !important;
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 12px 0 4px 0;
+    opacity: 0.85;
+}
+.privacy-note a {
+    color: var(--accent);
+    text-decoration: underline;
+}

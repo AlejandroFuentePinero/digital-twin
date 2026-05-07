@@ -48,6 +48,26 @@ from tools import ToolRegistry, make_litellm_tool_callable
 
 MAX_HISTORY_TURNS = 10  # last N user+assistant pairs passed to the pipeline
 
+# Welcome banner shown above the chat. Recruiters landing on the Space see
+# this first; sets expectations for what to ask. Module-level constant so
+# tests can verify it renders without inspecting the Blocks tree.
+WELCOME_TAGLINE = (
+    "Ask me anything about Alejandro's professional background — experience, "
+    "research, projects, skills, publications, or career trajectory."
+)
+
+# Privacy note rendered as a muted footer line under the chat. Plain-English,
+# non-legalistic per the parent PRD (#6); makes the data-flow visible without
+# scaring visitors. Email + dataset name are deliberately concrete so a
+# deletion request is actionable. Module-level constant so tests can pin the
+# wording without scraping rendered HTML.
+PRIVACY_NOTE = (
+    "Conversations are logged to a private dataset so Alejandro can improve "
+    "the system — not publicly visible. Contact "
+    "[alejandrofuentepinero@gmail.com](mailto:alejandrofuentepinero@gmail.com) "
+    "to request deletion of your session data."
+)
+
 # Starter prompts shown as clickable chips above the input. Short label =
 # button text; full question = what gets submitted. General-purpose entry
 # points spanning research, engineering, and trajectory — let visitors pick
@@ -275,11 +295,7 @@ with gr.Blocks(
         </div>
         """)
 
-    gr.Markdown(
-        "Ask me anything about Alejandro's professional background — experience, "
-        "research, projects, skills, publications, or career trajectory.",
-        elem_classes=["tagline-block"],
-    )
+    gr.Markdown(WELCOME_TAGLINE, elem_classes=["tagline-block"])
 
     # Tips panel — same warm chip palette as the starter prompts so it visually
     # belongs to the same "guidance" surface, distinct from the chat itself.
@@ -346,6 +362,10 @@ with gr.Blocks(
             contact_submit = gr.Button("Send", variant="primary", size="sm", scale=0)
 
     contact_status = gr.Markdown(visible=False)
+
+    # Privacy footer — last thing on the page. Muted styling via .privacy-note
+    # so it's discoverable without competing with the chat for attention.
+    gr.Markdown(PRIVACY_NOTE, elem_classes=["privacy-note"])
 
     msg.submit(
         respond,

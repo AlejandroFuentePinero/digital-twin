@@ -1,3 +1,13 @@
+---
+title: Digital Twin
+sdk: gradio
+sdk_version: 5.49.1
+app_file: src/app.py
+pinned: false
+short_description: Conversational agent representing Alejandro de la Fuente
+license: mit
+---
+
 # Digital Twin
 
 A conversational agent that answers professional questions about Alejandro de la Fuente — experience, research, projects, skills, and career trajectory — grounded in a curated knowledge base.
