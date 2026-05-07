@@ -14,6 +14,9 @@ A conversational agent that answers professional questions about Alejandro de la
 
 Built as a portfolio piece to demonstrate production-grade RAG, branch-routed prompting, model-as-judge evaluation, and observability — not a generic chatbot wrapper.
 
+**Live demo:** [alejandrofupi-digital-twin.hf.space](https://alejandrofupi-digital-twin.hf.space) — deployed on HuggingFace Spaces. Conversations are logged to a private dataset; contact alejandrofuentepinero@gmail.com to request deletion.
+
+[![Open in Spaces](https://img.shields.io/badge/HuggingFace-Open%20in%20Spaces-orange?logo=huggingface)](https://alejandrofupi-digital-twin.hf.space)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![uv](https://img.shields.io/badge/managed%20with-uv-purple)](https://github.com/astral-sh/uv)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -298,6 +301,7 @@ The system was redesigned in 2026-04. Three short ADRs capture the load-bearing 
 | [`docs/DECISIONS.md`](./docs/DECISIONS.md) | Session-by-session log |
 | [`docs/TESTING.md`](./docs/TESTING.md) | Testing conventions |
 | [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md) | Known limitations register |
+| [`docs/deployment-runbook.md`](./docs/deployment-runbook.md) | Deploy to HF Spaces — pre-flight checklist, push recipe, smoke test, rollback |
 
 ## Contact
 
