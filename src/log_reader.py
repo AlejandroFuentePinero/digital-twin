@@ -16,6 +16,7 @@ from typing import Protocol
 
 from interaction_log import DEFAULT_LOG_PATH, SCHEMA_VERSION, InteractionRecord
 from rules import GAP_PHRASE
+from schema_migrations import SchemaVersionHandler
 
 _log = logging.getLogger(__name__)
 
@@ -31,17 +32,7 @@ class LocalReader:
     def read(self, days: int | None = None) -> list[InteractionRecord]:
         if not self._path.exists():
             return []
-        records: list[InteractionRecord] = []
-        with self._path.open("r", encoding="utf-8") as f:
-            for lineno, line in enumerate(f, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    record = InteractionRecord.model_validate(json.loads(line))
-                except (json.JSONDecodeError, ValueError) as exc:
-                    _log.warning("Skipping malformed log line %s:%d (%s)", self._path, lineno, exc)
-                    continue
-                records.append(_smart_normalize_event_type(record))
+        records = _parse_jsonl_to_records(self._path, source=str(self._path))
         if days is not None:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
             records = [r for r in records if r.timestamp >= cutoff]
@@ -145,13 +136,26 @@ class HFLogReader:
 
 
 def _parse_jsonl_to_records(path: Path, *, source: str) -> list[InteractionRecord]:
+    """Shared parse path for both `LocalReader` and `HFLogReader`.
+
+    Each line is JSON-decoded → run through ``SchemaVersionHandler`` to
+    upgrade pre-current-version records (fill optional fields added by
+    later schema bumps; raise on missing required) → validated into
+    ``InteractionRecord`` → smart-normalized for pre-v4 GAP_PHRASE
+    surfacing. Any of those steps can raise; ``ValueError`` (which
+    ``MissingRequiredFieldError`` subclasses) and ``JSONDecodeError``
+    are caught here and become a skip-with-warning so one bad line
+    can't take down a read.
+    """
     out: list[InteractionRecord] = []
     with path.open("r", encoding="utf-8") as f:
         for lineno, line in enumerate(f, start=1):
             if not line.strip():
                 continue
             try:
-                record = InteractionRecord.model_validate(json.loads(line))
+                raw = json.loads(line)
+                migrated = SchemaVersionHandler(raw)
+                record = InteractionRecord.model_validate(migrated)
             except (json.JSONDecodeError, ValueError) as exc:
                 _log.warning("Skipping malformed log line %s:%d (%s)", source, lineno, exc)
                 continue

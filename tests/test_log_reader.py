@@ -375,6 +375,69 @@ def test_read_does_not_apply_deflection_markers_to_pre_v4_records(tmp_path):
     )
 
 
+# ---------------------------------------------------------------------------
+# Schema-migration layer (issue #48 / Phase 6 slice C) — reader integration
+# ---------------------------------------------------------------------------
+
+
+def test_read_migrates_v1_shape_record_through_local_reader(tmp_path):
+    """End-to-end: a record on disk in genuine v1 shape — no
+    classifier_labels, no reproducibility fields, no canary fields —
+    reads back through ``LocalReader.read()`` without raising. Proves
+    ``SchemaVersionHandler`` is wired into the parse path and that the
+    cumulative defaults map covers the real legacy shape (the 85+ live
+    records the schema bumps grew out of)."""
+    log_path = tmp_path / "interactions.jsonl"
+    v1 = _record() | {"schema_version": "1"}
+    for key in (
+        "classifier_labels",
+        "git_sha",
+        "model_id",
+        "temperature",
+        "prompt_hash",
+        "is_canary",
+        "replicate_index",
+        "run_id",
+    ):
+        v1.pop(key, None)
+    _write_jsonl(log_path, [v1])
+
+    out = LocalReader(log_path).read()
+
+    assert len(out) == 1, "v1 record must round-trip; the reader must not skip it"
+    assert out[0].schema_version == "1", "on-disk v1 stamp preserved through migration"
+    assert out[0].classifier_labels == []
+    assert out[0].git_sha is None
+    assert out[0].is_canary is False
+    assert out[0].run_id is None
+
+
+def test_read_skips_record_missing_required_field_with_warning(tmp_path, caplog):
+    """A record on disk missing a required field (e.g. ``timestamp``)
+    must be skipped — not crash the read — with a warning that names
+    the field and the record's session_id + turn_index. This is the
+    ``MissingRequiredFieldError`` path; it subclasses ``ValueError`` so
+    the existing ``except (json.JSONDecodeError, ValueError)`` in
+    ``_parse_jsonl_to_records`` catches it without code change."""
+    import logging as _logging
+
+    log_path = tmp_path / "interactions.jsonl"
+    bad = _record(turn_index=0)
+    bad.pop("timestamp")  # required at every schema version
+    good = _record(timestamp="2026-05-07T12:00:00+00:00", turn_index=1)
+    _write_jsonl(log_path, [bad, good])
+
+    with caplog.at_level(_logging.WARNING, logger="log_reader"):
+        out = LocalReader(log_path).read()
+
+    assert [r.turn_index for r in out] == [1], (
+        "the malformed record must be skipped, the well-formed one survives"
+    )
+    msg = " ".join(rec.message for rec in caplog.records)
+    assert "timestamp" in msg, "warning must name the missing field"
+    assert "sess-abc" in msg, "warning must name the record's session_id for triage"
+
+
 def test_read_passes_v4_records_through_without_normalize(tmp_path):
     """v4 records carry the real producer-emitted event_type — the read path
     must trust them and not second-guess. Even if the answer text contains

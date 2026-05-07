@@ -5,6 +5,79 @@
 
 ---
 
+## Session 59 (2026-05-07) — Phase 6 slice C (#48) shipped: read-time schema migration
+
+**Status:** Slice C insulates the reader from every schema bump shipped so far (#37 / #39 / #42) and from future ones. New `src/schema_migrations.py` declares the per-version required-field set + cumulative optional-field defaults + a pure `SchemaVersionHandler` that fills missing optionals, raises a clear catchable error on missing required, and passes future-version records through unchanged with a warning. Wired upstream of `InteractionRecord.model_validate` in `_parse_jsonl_to_records`; `LocalReader.read()` was refactored to share that helper with `HFLogReader.read()` so a single wiring point covers both backends. Issue `#48` closed; Slices D / E (`#49` / `#50`) untouched. Suite at **582 passing** (+10 from Session 58's 572: 8 handler + 2 reader-integration).
+
+### What shipped
+
+**1. `src/schema_migrations.py` — pure-function migration layer.**
+
+`REQUIRED_FIELDS` is the frozen set of 11 fields required at every schema version. `OPTIONAL_DEFAULTS_BY_VERSION` is a per-version dict of cumulative optional defaults: v1 (base optionals — `classifier_labels`/`tool_calls`/`contact_offered`/`contact_provided`), v2 (+ `git_sha`/`model_id`/`temperature`/`prompt_hash`), v3 (+ `is_canary`/`replicate_index`/`run_id`), v4 (field-identical to v3 — `#42` was a producer-side fix). The handler resolves which set to use from `target_version`, not from the record's own version, so a v1 record on disk gets all v4-shape optionals filled even though v1's expected set is smaller — the goal is to migrate UP to the reader's target shape. `MissingRequiredFieldError(ValueError)` is the catchable error type; the message names the missing field plus `session_id` + `turn_index` so a malformed line is locatable.
+
+**2. Wired into `_parse_jsonl_to_records` upstream of `model_validate`.**
+
+The order is: `json.loads` → `SchemaVersionHandler` → `InteractionRecord.model_validate` → `_smart_normalize_event_type`. The existing `except (json.JSONDecodeError, ValueError)` already catches `MissingRequiredFieldError` because it subclasses `ValueError` — no new try/except needed. One bad line still becomes a skip-with-warning; the rest of the file reads through.
+
+**3. `LocalReader.read()` refactored to share the helper.**
+
+Before: `LocalReader.read()` had its own inline `for line in f` loop, `HFLogReader.read()` called `_parse_jsonl_to_records`. Two places to wire the migration. After: `LocalReader.read()` is one call to `_parse_jsonl_to_records(self._path, source=str(self._path))`, then the days-filter + sort. One wiring point covers both backends; the consolidation also removes a small amount of duplicated parse + warning code.
+
+**4. On-disk records left byte-identical.**
+
+`data/logs/interactions.jsonl` is untouched — read-time migration is the whole pattern. Backfilling would defeat the purpose by erasing the v1 / v2 / v3 stamps that the smart-normalize layer (and future migrations) need to make decisions.
+
+| File | Change |
+|---|---|
+| `src/schema_migrations.py` (new, 144 lines) | `REQUIRED_FIELDS` + `OPTIONAL_DEFAULTS_BY_VERSION` + `SchemaVersionHandler` + `MissingRequiredFieldError`. |
+| `src/log_reader.py` | Imports `SchemaVersionHandler`. `LocalReader.read()` now delegates to `_parse_jsonl_to_records`. `_parse_jsonl_to_records` runs the handler before `model_validate`. |
+| `src/system_map.py` | `schema_migrations` registered under `"Logging"` so `test_every_src_module_has_an_explicit_category` keeps the architecture map honest. |
+| `tests/test_schema_migrations.py` (new) | 8 unit tests: per-version migration (v1/v2/v3-full), missing-required raises with field+session+turn, error subclasses `ValueError`, future-version pass-through+warning, target-default tracks `SCHEMA_VERSION`, no input mutation. |
+| `tests/test_log_reader.py` (+63 lines) | 2 reader-integration tests: v1-shape record round-trips through `LocalReader.read()`; record missing `timestamp` is skipped (not crashing) with a warning naming the field + session_id. |
+| `docs/MAP.md` | Regenerated — picks up `schema_migrations` in the Logging cluster + glossary. |
+
+### Decisions
+
+**1. Forward-compat: future-version records pass through unchanged + warning, not raise.**
+
+A producer running schema v5 against a v4 reader is a real failure mode (Slices D + E may bump the schema before they roll out everywhere; the HF dataset is shared between deployments). The dashboard losing a tab because one record from a future producer broke validation would be the worst outcome. So the handler logs one warning and returns the record byte-identical. Pydantic then decides whether the extra/missing fields validate — which it usually will, since the v5 producer would only have *added* fields. If pydantic does reject, the per-line `except ValueError` skip-with-warning path catches it and the read continues. Two layers of resilience for one error case.
+
+**2. `MissingRequiredFieldError` subclasses `ValueError` rather than its own root.**
+
+The reader's existing `except (json.JSONDecodeError, ValueError)` is the right resilience pattern for malformed log lines — skip one, keep going. Adding a third clause would have been a no-op after this slice but a hazard later (next time someone refactored the catch they'd have to remember the third type). Subclassing `ValueError` means the migration layer's contract docks cleanly into the reader's existing contract: one bad line is one warning, no special-casing.
+
+**3. Refactor `LocalReader.read()` to share `_parse_jsonl_to_records`.**
+
+The slice spec said "both readers go through this helper, so wiring it once covers both" — but in fact only `HFLogReader` was using it. Two options: wire the migration twice (in `LocalReader.read()` inline AND in `_parse_jsonl_to_records`), or refactor `LocalReader.read()` to use the helper. I picked the refactor because (a) the inline parse loop and the helper were ~95% identical anyway, (b) a single wiring point removes a class of "did slice D remember to wire it in both places?" bugs. The cost is one extra abstraction level when reading a JSONL file in dev — small price.
+
+**4. "Missing `schema_version`" defaults to current, not v1.**
+
+A record on disk without a `schema_version` stamp at all is ambiguous. Pre-this-slice, pydantic's field default ("4") kicked in. The migration could plausibly read it as "this is unstamped, assume oldest" or "this is unstamped, assume current". The existing test `test_read_tolerates_records_missing_optional_fields` locked the latter — and on reflection that's the right call: a producer that doesn't stamp a `schema_version` is by definition a current-shape producer (no historical record was ever written without the field). Treating absence as v1 would mean spuriously fewer fields filled for hand-crafted test fixtures. So the handler's `record_version = str(record.get("schema_version", target_version))` lookup falls back to `target_version`, and the handler also `setdefault`s `schema_version` so the upgraded dict carries an explicit stamp.
+
+### Live verification
+
+- Full suite: **582/582 passing** (+10 from Session 58's 572). 1 opt-in HF integration test still gated on `HF_INTEGRATION_TEST=1`, skipped in default runs.
+- New test surface: 8 handler unit tests cover every required+optional combination; 2 reader-integration tests prove a v1-shape record on disk round-trips and a record missing a required field is skipped (not crashing) with a warning.
+- `data/logs/interactions.jsonl` unchanged — `git diff` shows zero bytes touched in the live log.
+
+### Decisions deferred to future slices
+
+- **Producer-side migration on writes** — the current handler is read-only. If a future slice wants to upgrade records on the way INTO the dataset (e.g. to remove `knew_answer` after a v5 bump retires it), the migration logic could be reused, but the trigger is different (per-append vs per-read). Out of scope for slice C.
+- **Migration for fields that are renamed, not just added** — `OPTIONAL_DEFAULTS_BY_VERSION` is additive only. A future schema bump that renames a field (e.g. `prompt_hash` → `prompt_fingerprint`) needs a different mechanism — likely a per-version transform function. The current map is documented as "cumulative additions"; adding a transform layer is a slice-D concern if it ever comes up.
+
+### Outstanding (start of next session)
+
+- **Slice D (`#49`)** — next slice in Phase 6. Per the persistent feedback memory `feedback_read_latest_decisions_session.md`, open the issue body before starting and read this Session 59 entry for any decisions tightened beyond the bare spec.
+- **Slice E (`#50`)** — sequenced after D per the issue dependencies.
+- **Phase 7 (HF Spaces deploy, issue `#6`)** — final phase before public traffic.
+- **Watch-items unchanged:** `LIMITATIONS::P8` initial-drill tool-firing rate; `LIMITATIONS::O8` guardrail cross-branch evaluation gap.
+
+### Next session entry-point
+
+Phase 6 slice D (`#49`). The read path is now schema-skew-tolerant end to end: any record from v1 forward reads back through both `LocalReader` and `HFLogReader` without raising; future-version records pass through with a warning. Subsequent slices can rely on "the reader doesn't care what schema version a record was written under" without further qualifications.
+
+---
+
 ## Session 58 (2026-05-07) — Phase 6 slice B (#47) shipped: graceful shutdown + crash recovery for HF writer
 
 **Status:** Slice B closes the durability gap left at the end of Slice A. The buffered HF writer was already non-blocking and had `start()`/`stop()`; what was missing was (a) a way for SIGTERM to drain the buffer before the process dies, and (b) a way for a buffer file left behind by a crashed process to ship on next startup without waiting for the next size/time trigger. Both shipped. Issue `#47` closed; Slices C–E (`#48`–`#50`) untouched. Suite at **572 passing** (+5 from Session 57: 3 new for crash-recovery startup-flush, 2 for the SIGTERM helper). End-to-end manual verification against `Alejandrofupi/digital-twin-logs` passed for both halves.

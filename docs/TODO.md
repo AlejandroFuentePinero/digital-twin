@@ -3,8 +3,8 @@
 Active task list for the post-redesign rebuild. Updated each session.
 For the canonical glossary see [`CONTEXT.md`](../CONTEXT.md). For architectural decisions see [`adr/`](./adr/). For session history see `DECISIONS.md`. `PLAN.md` and `ARCHITECTURE.md` are pre-redesign and partially superseded.
 
-**Last updated:** 2026-05-07 (Session 58 — Phase 6 slice B (`#47`) shipped: graceful shutdown + crash recovery. `HFLogWriter.__init__` immediate-flushes a non-empty disk buffer; new `install_sigterm_handler` wired in `app.py`. Manual round-trip against `Alejandrofupi/digital-twin-logs` verified for both halves. Suite +5.)
-**Current phase:** **Phase 6 — HuggingFace Dataset migration** (issue `#5`). Slices A + B closed. Suite at **572 passing**.
+**Last updated:** 2026-05-07 (Session 59 — Phase 6 slice C (`#48`) shipped: read-time schema migration. New `src/schema_migrations.py` with `SchemaVersionHandler` (pure function) + `MissingRequiredFieldError` (subclasses `ValueError` so the reader's existing skip-with-warning path catches it). Wired into `_parse_jsonl_to_records`; `LocalReader` now shares the same parse path as `HFLogReader`. Suite +10.)
+**Current phase:** **Phase 6 — HuggingFace Dataset migration** (issue `#5`). Slices A + B + C closed. Suite at **582 passing**.
 
 **Locked next-step order:**
 1. **Phase 6 — HF Dataset migration** (issue `#5`). `LogReader.HFReader` / `LogWriter.HFWriter` implementation; buffered append; schema versioning carry-through; HF token in env / Spaces secrets.
@@ -214,11 +214,11 @@ The canary baseline is now a Tier B trajectory anchor (deltas from `run-20260505
 
 ## Phase 6 — HF Dataset migration
 
-Sliced into five GitHub issues (`#46`–`#50`). Slice A closed Session 57.
+Sliced into five GitHub issues (`#46`–`#50`). Slices A / B / C closed Sessions 57 / 58 / 59.
 
 - [x] **Slice A — Buffered HF writer + reader round-trip (`#46`).** `LogBuffer` (in-memory + disk-backed at `data/logs/.hf_buffer.jsonl`). `HFLogWriter` (non-blocking append, size-or-time flush, group-by-UTC-date commits, append-don't-overwrite, background poller). `HFLogReader` (per-day file download + dedup on `(session_id, turn_index, run_id, replicate_index)` — slice's single dedup choke point). `make_log_writer()` factory keyed on `DIGITAL_TWIN_LOG_BACKEND=local|hf`; hf path auto-starts thread + registers `atexit` stop. `Alejandrofupi/digital-twin-logs` private dataset created. Opt-in `HF_INTEGRATION_TEST=1` round-trip verified.
 - [x] **Slice B — Graceful shutdown + crash recovery (`#47`).** `HFLogWriter.__init__` triggers an immediate flush when `data/logs/.hf_buffer.jsonl` was non-empty at construction (records left behind by a crashed process ship within seconds of restart, not at the next size/time trigger). New `install_sigterm_handler(writer)` free function in `hf_log_writer.py` registers a SIGTERM handler that calls `writer.stop()` then `sys.exit(0)`; wired into `app.py` next to `make_log_writer()`. Local backend is a no-op (no `stop` method). End-to-end manual verification against the real HF Dataset passed for both halves (crash recovery + SIGTERM). +5 unit tests; suite at 572 passing.
-- [ ] **Slice C (`#48`)** — see issue body.
+- [x] **Slice C — Read-time schema migration (`#48`).** New `src/schema_migrations.py` declares `REQUIRED_FIELDS` (the 11 fields required at every schema version) + `OPTIONAL_DEFAULTS_BY_VERSION` (cumulative optional sets for v1 / v2 / v3 / v4) + `SchemaVersionHandler(record, target_version=SCHEMA_VERSION)` + `MissingRequiredFieldError(ValueError)`. Future-version records pass through unchanged with one warning so a producer running ahead of the reader can't crash the dashboard. Handler runs upstream of `InteractionRecord.model_validate` in `_parse_jsonl_to_records`; `LocalReader.read()` now shares that helper with `HFLogReader.read()` (one-line refactor) so the wiring covers both. On-disk records are never rewritten — backfilling defeats the read-time-migration purpose. +10 unit tests (8 handler + 2 reader-integration); suite at 582 passing.
 - [ ] **Slice D (`#49`)** — see issue body.
 - [ ] **Slice E (`#50`)** — see issue body.
 

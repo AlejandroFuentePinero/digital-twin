@@ -50,6 +50,7 @@ MODULE_CATEGORY: dict[str, str] = {
     "interaction_log": "Logging",
     "hf_log_writer": "Logging",
     "log_reader": "Logging",
+    "schema_migrations": "Logging",
     "session_state": "Logging",
     "contact_log": "Logging",
     "pipeline": "Pipeline",

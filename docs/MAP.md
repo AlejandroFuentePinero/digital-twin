@@ -134,8 +134,10 @@ graph LR
   subgraph sg_logging["Logging"]
     direction TB
     contact_log["contact_log.py"]:::logging
+    hf_log_writer["hf_log_writer.py"]:::logging
     interaction_log["interaction_log.py"]:::logging
     log_reader["log_reader.py"]:::logging
+    schema_migrations["schema_migrations.py"]:::logging
     session_state["session_state.py"]:::logging
   end
 
@@ -167,6 +169,7 @@ graph LR
     direction TB
     ext_ChromaDB(["ChromaDB"]):::external
     ext_Gradio__UI_(["Gradio (UI)"]):::external
+    ext_HuggingFace_Hub(["HuggingFace Hub"]):::external
     ext_OpenAI___Anthropic_API__via_LiteLLM_(["OpenAI / Anthropic API (via LiteLLM)"]):::external
     ext_OpenAI_API(["OpenAI API"]):::external
   end
@@ -177,6 +180,7 @@ graph LR
   app --> contact_log
   app --> generator
   app --> guardrail
+  app --> hf_log_writer
   app --> interaction_log
   app --> pipeline
   app --> profile
@@ -207,6 +211,7 @@ graph LR
   guardrail --> rules
   log_reader --> interaction_log
   log_reader --> rules
+  log_reader --> schema_migrations
   pipeline --> tool_loop
   pipeline --> branches
   pipeline --> classifier
@@ -218,6 +223,7 @@ graph LR
   pipeline --> retrieval
   pipeline --> rules
   pipeline --> tools
+  schema_migrations --> interaction_log
   sentinel --> branches
   sentinel --> cluster_gaps
   sentinel --> canary_runner
@@ -241,6 +247,7 @@ graph LR
   cluster_gaps --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   generator --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   guardrail --> ext_OpenAI___Anthropic_API__via_LiteLLM_
+  hf_log_writer --> ext_HuggingFace_Hub
   ingest --> ext_ChromaDB
   ingest --> ext_OpenAI_API
   module_health --> ext_Gradio__UI_
@@ -284,17 +291,19 @@ graph LR
 | `flag_detector.py` | Sentinel anomaly flags (issue #34). |
 | `generator.py` | Generator — wraps the answer LLM call. |
 | `guardrail.py` | Guardrail — branch-aware quality evaluator (ADR-0003). |
+| `hf_log_writer.py` | HuggingFace-Dataset-backed log writer for the production Space (issue #46). |
 | `ingest.py` | Ingest the digital twin knowledge base into ChromaDB. |
 | `interaction_log.py` | Enriched per-turn interaction log (ADR-0002 / issue #13 step 7). |
 | `kb_corpus.py` | Lightweight KB section inventory — no ChromaDB / OpenAI imports. |
 | `log_reader.py` | Sentinel-facing typed reader over the canonical interaction log (issue #28). |
-| `metric_status.py` | Per-metric thresholds + week-over-week deltas — Sentinel's observability |
+| `metric_status.py` | Per-metric thresholds + shift-status + week-over-week deltas — Sentinel's |
 | `module_health.py` | Local Gradio dashboard showing pass/fail status of digital-twin tests. |
 | `pipeline.py` | Per-turn orchestrator (ADR-0003). |
 | `profile.py` | Always-on profile loader (the Frame, per ADR-0001 / ADR-0003). |
 | `retrieval.py` | Retrieval helpers — embedding, ChromaDB query, merge, rewrite, rerank, format. |
 | `rules.py` | Shared rule fragments composed into generator and guardrail system prompts. |
 | `sample_chunks.py` | Sample and inspect chunks from the ChromaDB knowledge base. |
+| `schema_migrations.py` | Read-time schema migration for the canonical interaction log (issue #48). |
 | `sentinel.py` | Local Gradio dashboard over the canonical interaction log (Phase 4). |
 | `session_state.py` | Per-session state for #16's contact-flow. |
 | `summarize_failures.py` | Failure-summarisation batch (issue #33). |
