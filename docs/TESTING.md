@@ -23,6 +23,7 @@ These files have no matching `test_*.py` because they have no testable behavior:
 | --- | --- |
 | `src/app.py` | Gradio glue — verified by launching the chat UI |
 | `src/sample_chunks.py` | One-off diagnostic script |
+| `src/_retry_policy.py` | A bare `tenacity.retry` decorator + a small `should_retry_exc` predicate — wrapping these in tests would assert tenacity's behavior, not ours. The real verification is downstream: `tests/test_pipeline.py` exercises the retry path end-to-end via mocked LLM clients. |
 | `eval/plot_eval.py` | Matplotlib glue — verified visually |
 
 `src/module_health.py` is a partial exemption: its pure helpers (`humanize`, `parse_report`) are covered in `tests/test_module_health.py`; the Gradio rendering, subprocess invocation, and `build_app()` wiring are not — they are tooling glue, verified by launching the dashboard.
