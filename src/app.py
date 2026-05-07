@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from branches import REGISTRY
 from classifier import Classifier
 from composer import PromptComposer
-from contact_log import ContactRecord, ContactWriter
+from contact_log import ContactRecord, make_contact_writer
 from generator import Generator
 from guardrail import Guardrail
 from hf_log_writer import install_sigterm_handler
@@ -91,13 +91,16 @@ _pipeline = Pipeline(
     tool_registry=_tool_registry,
     tool_model_callable=make_litellm_tool_callable(),
 )
-_contact_writer = ContactWriter()
+_contact_writer = make_contact_writer()
 
 # SIGTERM handler — ensures HF Spaces' container-shutdown signal final-
-# flushes the buffered writer before the process dies (#47). Local
-# backend is a no-op. atexit (registered by make_log_writer) covers
-# the clean Python-exit path; this covers signal-driven termination.
-install_sigterm_handler(_log_writer)
+# flushes the buffered writers before the process dies (#47 / #50).
+# Variadic so a single signal drains both the interaction-log writer
+# and the contact-log writer. Local-backend writers (no `stop` method)
+# silently drop out of the drain list. atexit (registered by each
+# `make_*_writer`) covers the clean Python-exit path; this covers
+# signal-driven termination.
+install_sigterm_handler(_log_writer, _contact_writer)
 
 
 def respond(

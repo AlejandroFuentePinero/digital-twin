@@ -134,6 +134,7 @@ graph LR
   subgraph sg_logging["Logging"]
     direction TB
     contact_log["contact_log.py"]:::logging
+    hf_contact_log["hf_contact_log.py"]:::logging
     hf_log_writer["hf_log_writer.py"]:::logging
     interaction_log["interaction_log.py"]:::logging
     log_reader["log_reader.py"]:::logging
@@ -209,6 +210,8 @@ graph LR
   flag_detector --> dashboard_model
   flag_detector --> interaction_log
   guardrail --> rules
+  hf_contact_log --> contact_log
+  hf_contact_log --> hf_log_writer
   log_reader --> interaction_log
   log_reader --> rules
   log_reader --> schema_migrations
@@ -247,6 +250,7 @@ graph LR
   cluster_gaps --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   generator --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   guardrail --> ext_OpenAI___Anthropic_API__via_LiteLLM_
+  hf_contact_log --> ext_HuggingFace_Hub
   hf_log_writer --> ext_HuggingFace_Hub
   ingest --> ext_ChromaDB
   ingest --> ext_OpenAI_API
@@ -291,6 +295,7 @@ graph LR
 | `flag_detector.py` | Sentinel anomaly flags (issue #34). |
 | `generator.py` | Generator — wraps the answer LLM call. |
 | `guardrail.py` | Guardrail — branch-aware quality evaluator (ADR-0003). |
+| `hf_contact_log.py` | HuggingFace-Dataset-backed contact-form writer + reader (issue #50). |
 | `hf_log_writer.py` | HuggingFace-Dataset-backed log writer for the production Space (issue #46). |
 | `ingest.py` | Ingest the digital twin knowledge base into ChromaDB. |
 | `interaction_log.py` | Enriched per-turn interaction log (ADR-0002 / issue #13 step 7). |

@@ -49,6 +49,7 @@ MODULE_CATEGORY: dict[str, str] = {
     "kb_corpus": "Retrieval (RAG)",
     "interaction_log": "Logging",
     "hf_log_writer": "Logging",
+    "hf_contact_log": "Logging",
     "log_reader": "Logging",
     "schema_migrations": "Logging",
     "session_state": "Logging",

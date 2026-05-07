@@ -5,6 +5,105 @@
 
 ---
 
+## Session 61 (2026-05-07) — Phase 6 slice E (#50) shipped: contacts.jsonl through the same HF abstraction. Phase 6 closed.
+
+**Status:** Slice E ports the buffered-writer + reader pattern from slices A–D to the contact-form side-channel from #16. Without this, contact records — visitor email/notes — were lost on every Space restart, the same problem `interactions.jsonl` had pre-Phase-6. `HFContactWriter` subclasses `HFLogWriter` via two class-attribute overrides; `HFContactReader` is a fresh class with its own dedup contract. New `make_contact_writer` / `make_contact_reader` factories mirror the interaction-log pair. `install_sigterm_handler` is now variadic so one signal drains both writers. **Phase 6 is closed.** Issue `#50` closed; suite at **619 passing** (+21 from Session 60's 598). Next: Phase 7 (HF Spaces deploy, issue `#6`).
+
+### What shipped
+
+**1. `src/hf_contact_log.py` — `HFContactWriter` + `HFContactReader`.**
+
+`HFContactWriter` subclasses `HFLogWriter` and overrides exactly two class attributes: `PATH_PREFIX = "contacts/"` (commits land at `contacts/YYYY-MM-DD.jsonl` rather than `logs/YYYY-MM-DD.jsonl`) and `WRITES_STATE_FILE = False` (the slice-D `hf_writer_state.json` diagnostic is deliberately skipped — see decision #2 below). The constructor sets a different default buffer path (`data/logs/.hf_contact_buffer.jsonl`) so the contact-form writer's un-flushed records don't collide with the interaction-log writer's. Everything else — buffered append, size-or-interval flush, group-by-UTC-date upload, append-don't-overwrite, background poller, `__init__`-time crash recovery, `start`/`stop` lifecycle — is inherited unchanged.
+
+`HFContactReader` is a fresh class (~80 lines). It mirrors `HFLogReader`'s per-session caching contract (one repo listing, per-file parse memoised, `invalidate_cache()` as the Refresh hook) but differs in three places: per-day file regex `^contacts/(\d{4}-\d{2}-\d{2})\.jsonl$`, dedup key `(session_id, timestamp)` (a flush retry produces the same key; collapse), and a simpler parse path that returns `list[dict]` rather than typed `InteractionRecord` (no schema-migration layer because `ContactRecord` has only ever had v1).
+
+**2. `src/contact_log.py` — `make_contact_writer` + `make_contact_reader` factories.**
+
+Mirror `interaction_log.make_log_writer` and `log_reader.make_log_reader`. Writer keyed on `DIGITAL_TWIN_LOG_BACKEND` (= `local` or unset → `ContactWriter`; = `hf` → `HFContactWriter` with thread auto-started + atexit-registered; misconfig raises). Reader keyed on `HF_TOKEN` + `HF_DATASET_REPO` (mirrors slice D), with `force_local=True` as the operator escape hatch paired with Sentinel's `--local` flag.
+
+**3. `read_provided_session_ids()` falls through to the factory.**
+
+Old signature: `read_provided_session_ids(path=DEFAULT_CONTACT_LOG_PATH)`. New signature: `read_provided_session_ids(path=None, *, reader=None)`. If `reader` is passed, use it directly; else if `path` is passed, use `ContactReader(path)` (back-compat for tests pinning the local file); else fall through to `make_contact_reader()`. Sentinel calls it with no args, so Sentinel running against `HF_TOKEN` + `HF_DATASET_REPO` automatically reads contacts from the dataset — no Sentinel-side changes were needed for slice E.
+
+**4. `install_sigterm_handler` now variadic.**
+
+Old signature: `install_sigterm_handler(writer)`. New: `install_sigterm_handler(*writers)`. The handler iterates `targets = [w for w in writers if hasattr(w, "stop")]` and calls `stop()` on each in a try/except so one writer's failure can't block the other. Existing callers passing a single writer (the slice-B `install_sigterm_handler(_log_writer)` pattern) still work — `*writers` accepts variadic positional. `app.py` updated to pass both writers: `install_sigterm_handler(_log_writer, _contact_writer)`.
+
+**5. `HFLogWriter` parameterized via class attributes.**
+
+To make `HFContactWriter` a thin subclass rather than a copy-paste sibling, `HFLogWriter` grew two class attributes — `PATH_PREFIX = "logs/"` (used in `_upload_grouped_by_day`'s `path_in_repo = f"{self.PATH_PREFIX}{day.isoformat()}.jsonl"`) and `WRITES_STATE_FILE = True` (used in `flush`'s post-attempt branch). Constructor signature unchanged; existing callers and tests untouched.
+
+| File | Change |
+|---|---|
+| `src/hf_contact_log.py` (new, ~140 lines) | `HFContactWriter(HFLogWriter)` thin subclass + `HFContactReader` fresh class + `_dedupe_by_session_and_timestamp` helper. |
+| `src/contact_log.py` | Module docstring updated. New `make_contact_writer` + `make_contact_reader` factories. `read_provided_session_ids` rewritten to support reader/path/factory fall-through. |
+| `src/hf_log_writer.py` | `HFLogWriter.PATH_PREFIX` + `WRITES_STATE_FILE` class attributes added; `_upload_grouped_by_day` uses `self.PATH_PREFIX`; `flush` gates state-file upload on `self.WRITES_STATE_FILE`. `install_sigterm_handler` reworked to accept variadic writers. |
+| `src/app.py` | Imports updated (`make_contact_writer` instead of `ContactWriter`). `_contact_writer = make_contact_writer()`. `install_sigterm_handler(_log_writer, _contact_writer)`. |
+| `src/system_map.py` | `hf_contact_log` registered under "Logging". |
+| `tests/test_hf_contact_log.py` (new) | 21 tests across HFContactWriter (path prefix, no state file, buffer path, failure preservation), HFContactReader (path filter, dedup, empty repo, caching, malformed-line resilience), factories (defaults, HF mode, force_local, half-config raises, `read_provided_session_ids` factory fall-through + back-compat), `install_sigterm_handler` (multi-writer drain, one-failure-doesn't-block-others, no-op when no writer has stop). |
+| `docs/MAP.md` | Regenerated. |
+
+### Decisions
+
+**1. `HFContactWriter` subclasses `HFLogWriter` rather than duplicating ~150 lines.**
+
+I considered three designs: (a) copy/paste the writer class with adjustments, (b) extract a `BufferedHFWriter` base class, (c) parameterize `HFLogWriter` with class attributes. Picked (c) because it's the smallest change to existing code (two new class attrs, two `self.X` lookups), keeps the canonical `HFLogWriter` name pointing at the canonical use case (interaction logs are the dominant traffic), and makes `HFContactWriter` a 10-line subclass that's almost self-documenting. Existing slice-A/B/D tests against `HFLogWriter` are untouched. Future "extract a real base class" refactor remains on the table if a third buffered writer ever shows up; not paying that cost on speculation.
+
+**2. No `hf_writer_state.json` for contact writer.**
+
+Slice D wrote the diagnostic state file on every flush attempt for the interaction-log writer because "is HF silently failing to flush?" is a real failure mode and stale `last_flush_time` is the signal. For contacts, the same signal is noisy: contact volume at portfolio scale is a few records per week, so "no flushes for 5 days" might just mean "no contacts that week" rather than a failure. The panel would surface false positives. Defer until either (a) traffic actually shows the failure mode or (b) the operator asks for the panel. Cost of skipping: zero — `WRITES_STATE_FILE = False` is the smallest opt-out.
+
+**3. `HFContactReader` is a fresh class, not a subclass of `HFLogReader`.**
+
+Different return shape (`list[dict]` not `list[InteractionRecord]`), different dedup key, different per-day regex, no schema-migration layer. The methods that would be inherited (`__init__`, `invalidate_cache`, `_download_and_parse`) would each need overriding anyway. Subclassing would buy a few line of inherited code at the cost of reading two files to understand one reader. Fresh class wins on clarity.
+
+**4. Dedup key `(session_id, timestamp)` for contacts (vs. the four-tuple for interactions).**
+
+Interaction records carry `run_id` + `replicate_index` for the canary side-channel (#39) — those plus `(session_id, turn_index)` form the dedup tuple. Contacts have no parallel canary surface — there's no canary contact-form runner — so `(session_id, timestamp)` is sufficient. Two different visitors would have different `session_id`s; one visitor submitting twice (rare but possible) would have different timestamps. A flush retry replays the exact same bytes, so the key collapses correctly. Symmetric to the interaction-log dedup contract: identity-based, not content-based.
+
+**5. `read_provided_session_ids()` keeps positional `path` arg for back-compat.**
+
+Tests in `test_contact_log.py` pass `path` positionally. Changing the signature to `read_provided_session_ids(*, reader=None)` would break those tests. So the new signature is `read_provided_session_ids(path=None, *, reader=None)` with the three-way fall-through described above. Slightly more cluttered than a clean rewrite, but back-compat is cheap here.
+
+**6. `install_sigterm_handler` variadic; existing single-writer call sites untouched.**
+
+`*writers` accepts any positional count, including one. The slice-B test `test_install_sigterm_handler_registers_handler_that_calls_stop(monkeypatch)` calls `install_sigterm_handler(writer)` and still passes — the old API is a special case of the new one. No deprecation, no shim, no follow-up.
+
+### Live verification
+
+- Full suite: **619/619 passing** (+21 from Session 60's 598). 1 opt-in HF integration test still gated on `HF_INTEGRATION_TEST=1`, skipped in default runs.
+- Module-health discovery: `hf_contact_log` registered in `MODULE_CATEGORY` under "Logging"; `system_map` regenerated `docs/MAP.md` cleanly.
+- Factory smoke-test: with no env vars set, `make_contact_writer()` returns `ContactWriter`, `make_contact_reader()` returns `ContactReader`. App import path verified clean.
+
+### Phase 6 — close-out
+
+| Slice | Issue | Session | Suite |
+|---|---|---|---|
+| A — Buffered HF writer + reader round-trip | #46 | 57 | 539 → 567 |
+| B — Graceful shutdown + crash recovery | #47 | 58 | 567 → 572 |
+| C — Read-time schema migration | #48 | 59 | 572 → 582 |
+| D — Sentinel HF auto-detection + writer health panel | #49 | 60 | 582 → 598 |
+| E — contacts.jsonl through the same HF abstraction | #50 | 61 | 598 → 619 |
+
+End-to-end durability path is now closed for both log streams: append → buffer → background flush + crash-recovery flush + SIGTERM-flush + atexit-flush → HF Dataset → reader. Sentinel runs against either backend (`HF_TOKEN` env-driven; `--local` override), with a writer-health panel for the interaction-log path and read-time schema migration that insulates the dashboard from any future schema bump.
+
+### Decisions deferred to Phase 7
+
+- **End-to-end live verification against `Alejandrofupi/digital-twin-logs`** — slice A/B's verification scripts cover the interaction-log path. A parallel script for the contact path (`scripts/verify_slice_e.py` analogous to `verify_slice_b.py`) is worth adding before Phase 7's smoke-test pass, but not strictly slice-E scope. Add it if the smoke-test discovers anything unexpected.
+- **State file for contact writer** — see decision #2. Reopen if Phase 7 traffic shows contact-flush failures aren't being noticed.
+- **Sentinel surface for contact records** — Sentinel currently consumes contacts only as a join key for `contact_conversion_rate`. A "Recent contact submissions" panel (recruiter name + email + note + linked session) is a Phase-7-ish operator surface, not a Phase-6 plumbing concern.
+
+### Outstanding (start of next session)
+
+- **Phase 7 (HF Spaces deploy, issue `#6`)** — the final phase. Package `app.py`, configure secrets (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `HF_TOKEN`, `HF_DATASET_REPO`, `DIGITAL_TWIN_LOG_BACKEND=hf`), smoke-test all 5 branches + tool fires + contact form, embed the Space iframe on the portfolio site.
+- **Watch-items unchanged:** `LIMITATIONS::P8` initial-drill tool-firing rate; `LIMITATIONS::O8` guardrail cross-branch evaluation gap.
+
+### Next session entry-point
+
+Phase 7 (HF Spaces deploy). Phase 6 plumbing is complete: both log streams persist durably to the HF Dataset, both readers round-trip cleanly, Sentinel surfaces operationally relevant signals over either backend. Phase 7 is mostly deployment configuration + a smoke-test pass against the live Space.
+
+---
+
 ## Session 60 (2026-05-07) — Phase 6 slice D (#49) shipped: Sentinel HF auto-detection + log writer health panel
 
 **Status:** Slice D closes the operability gap left by slices A–C: the same Sentinel binary can run against local dev logs OR the production HF dataset without configuration, and the operator gets a small "is HF actually flushing?" panel for the cases where the answer is no. New `make_log_reader()` factory + `--local` CLI escape hatch + per-session caching on `HFLogReader` + `hf_writer_state.json` written on every flush attempt + a Sentinel "Log writer health" panel that reads it. Issue `#49` closed; Slice E (`#50`) untouched. Suite at **598 passing** (+16 from Session 59's 582: 7 reader-factory/cache + 5 writer state-file + 4 panel).

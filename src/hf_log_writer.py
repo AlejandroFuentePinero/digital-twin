@@ -127,7 +127,16 @@ class HFLogWriter:
     flush groups records by UTC date, fetches each day's existing file
     if any, concatenates, and uploads. Failures are logged and leave
     the buffer untouched so the next attempt re-tries.
+
+    ``PATH_PREFIX`` and ``WRITES_STATE_FILE`` are class attributes so
+    ``HFContactWriter`` (#50) can subclass with different values without
+    touching the constructor signature or any of the upload/thread
+    logic. Existing call sites and tests against the canonical
+    interaction-log writer keep working unchanged.
     """
+
+    PATH_PREFIX: str = "logs/"
+    WRITES_STATE_FILE: bool = True
 
     def __init__(
         self,
@@ -203,11 +212,15 @@ class HFLogWriter:
             # (success OR failure). Wrapped in its own broad ``except``
             # so a state-upload failure can't mask a successful data
             # flush or break the next retry. Sentinel reads this file
-            # via ``read_writer_state`` (#49).
-            try:
-                self._upload_writer_state(buffer_size=self._buffer.size(), error=error)
-            except Exception:
-                _log.exception("HFLogWriter could not commit %s", WRITER_STATE_FILENAME)
+            # via ``read_writer_state`` (#49). Subclasses can opt out
+            # by setting ``WRITES_STATE_FILE = False`` (e.g.
+            # ``HFContactWriter`` — contact volume is too low for the
+            # staleness signal to be meaningful).
+            if self.WRITES_STATE_FILE:
+                try:
+                    self._upload_writer_state(buffer_size=self._buffer.size(), error=error)
+                except Exception:
+                    _log.exception("HFLogWriter could not commit %s", WRITER_STATE_FILENAME)
 
     def _upload_writer_state(self, *, buffer_size: int, error: str | None) -> None:
         state = {
@@ -235,7 +248,7 @@ class HFLogWriter:
             groups.setdefault(day, []).append(r)
 
         for day, day_records in sorted(groups.items()):
-            path_in_repo = f"logs/{day.isoformat()}.jsonl"
+            path_in_repo = f"{self.PATH_PREFIX}{day.isoformat()}.jsonl"
             existing = self._fetch_existing(path_in_repo)
             body = "".join(json.dumps(r) + "\n" for r in (existing + day_records))
             self._api.upload_file(
@@ -336,22 +349,35 @@ def read_writer_state(api: HfApi, *, repo_id: str) -> dict | None:
     return json.loads(Path(local).read_text(encoding="utf-8"))
 
 
-def install_sigterm_handler(writer) -> bool:  # type: ignore[no-untyped-def]
+def install_sigterm_handler(*writers) -> bool:  # type: ignore[no-untyped-def]
     """Wire ``writer.stop`` into a SIGTERM handler so a Space restart
-    final-flushes the buffer before the process dies (#47).
+    final-flushes each buffered writer before the process dies (#47).
 
-    Returns ``True`` if a handler was installed, ``False`` otherwise. Local
-    backends (``LogWriter``) have no ``stop`` method and degrade to no-op
-    so dev workflows are unaffected. ``atexit`` already covers the clean
-    Python-exit path via ``make_log_writer``; this covers SIGTERM, which
-    is what HF Spaces sends on container shutdown.
+    Variadic so a process running both the interaction-log writer and the
+    contact-log writer (#50) can drain both off one signal. Returns
+    ``True`` if a handler was installed (i.e. at least one writer
+    exposes ``stop``), ``False`` otherwise. Local backends have no
+    ``stop`` and silently drop out of the drain list, so dev workflows
+    with the local interaction backend + a real HF contact writer (or
+    vice versa) still install a handler covering whichever writer
+    needs it. ``atexit`` already covers the clean Python-exit path via
+    each ``make_*_writer``; this covers SIGTERM, which is what HF
+    Spaces sends on container shutdown.
     """
-    if not hasattr(writer, "stop"):
+    targets = [w for w in writers if hasattr(w, "stop")]
+    if not targets:
         return False
 
     def _handle_sigterm(_signum, _frame):
         try:
-            writer.stop()
+            for w in targets:
+                # One writer's stop failure must not block the others.
+                # ``stop`` itself logs internally via ``flush``'s broad
+                # ``except``; this is belt-and-braces.
+                try:
+                    w.stop()
+                except Exception:
+                    _log.exception("install_sigterm_handler: stop() raised")
         finally:
             sys.exit(0)
 
