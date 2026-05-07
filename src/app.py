@@ -304,7 +304,7 @@ with gr.Blocks(
           <div class="tips-heading">Tips for the best answers</div>
           <ul class="tips-list">
             <li><b>Be specific.</b> <i>"Tell me about Alejandro's RAG project"</i> works better than <i>"Tell me about his work."</i></li>
-            <li><b>Start a new conversation when changing topics.</b> Past turns stay in context and can bias later answers — use <b>New conversation</b> above the chat to reset cleanly.</li>
+            <li><b>Start a new conversation when changing topics.</b> Past turns stay in context and can bias later answers — use <b>New conversation</b> below the chat to reset cleanly.</li>
             <li><b>One question at a time.</b> Multi-part questions sometimes get partial answers.</li>
           </ul>
         </div>
