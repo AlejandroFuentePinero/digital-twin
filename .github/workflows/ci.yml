@@ -1,0 +1,38 @@
+# Single-job CI: run the test suite on every push to main and every PR
+# targeting main. Catches SDK / dep-resolution breaks before they reach a
+# redeploy. No secrets needed (mock-at-boundary discipline keeps tests
+# off the LLM API path; the one HF round-trip test gated on
+# HF_INTEGRATION_TEST=1 stays skipped here).
+#
+# What this does NOT cover:
+#   - Eval (in-process, hits real LLMs — operator cadence per MAINTENANCE.md)
+#   - Canary (same)
+#   - Doc-vs-code drift (no automated gate today; relies on manual review)
+#
+# See docs/audits/audit-2026-05-07.md::M4 for the rationale.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run test suite
+        run: uv run pytest -q
