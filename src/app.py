@@ -273,7 +273,12 @@ with gr.Blocks(
     theme=_THEME,
     css=_CUSTOM_CSS,
 ) as demo:
-    session_id = gr.State(str(uuid.uuid4()))
+    # session_id starts unset; populated per browser session by the
+    # demo.load handler below. A literal default like
+    # ``str(uuid.uuid4())`` would evaluate once at app boot and be
+    # deep-copied to every visitor — distinct visitors then collide on
+    # ``(session_id, turn_index)`` and analytics merge them.
+    session_id = gr.State()
     history = gr.State([])
     state = gr.State(SessionState())
 
@@ -415,6 +420,15 @@ with gr.Blocks(
             contact_note,
         ],
     ).then(lambda h: h, inputs=[history], outputs=[chatbot])
+
+    # Mint a fresh session_id per browser session. ``demo.load`` fires
+    # once when each visitor's app first loads, so each visitor's State
+    # is initialised with its own UUID. Without this, every visitor's
+    # session_id would stay ``None`` until they click "New conversation"
+    # (which generates one via ``new_session``), and the interaction
+    # log records before that click would all share the same default —
+    # collapsing distinct visitors on ``(session_id, turn_index)``.
+    demo.load(lambda: str(uuid.uuid4()), inputs=None, outputs=[session_id])
 
 
 if __name__ == "__main__":

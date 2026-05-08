@@ -57,3 +57,43 @@ def test_new_session_returns_distinct_session_ids():
     a = app.new_session()[1]
     b = app.new_session()[1]
     assert a != b
+
+
+def test_session_id_initial_state_is_unset_and_minted_per_session_via_demo_load():
+    """The initial ``session_id`` ``gr.State`` must NOT carry a literal UUID
+    default — Gradio deep-copies the default into every session, so a literal
+    ``str(uuid.uuid4())`` evaluates once at app boot and ends up shared across
+    all visitors until any of them clicks "New conversation". A callable
+    default does not help either: ``state_holder.SessionState.__getitem__``
+    deep-copies ``block.value`` verbatim and never invokes a callable, so the
+    handler would receive the lambda object itself.
+
+    The correct pattern is a ``demo.load`` event that mints a UUID per browser
+    session and pipes it into the ``session_id`` State.
+    """
+    import gradio as gr
+
+    states = [b for b in app.demo.blocks.values() if isinstance(b, gr.State)]
+    session_id_states = [s for s in states if s.value is None]
+    # Other gr.State slots (history, SessionState) have non-None defaults.
+    assert len(session_id_states) >= 1, (
+        "session_id gr.State must have a None default — see docstring"
+    )
+
+    # demo.load fires per browser session; it should target the session_id
+    # State and call a function that returns a UUID-shaped string. Targets
+    # are stored as ``(component_id, event_name)`` tuples on each
+    # ``BlockFunction``.
+    load_fns = [
+        d for d in app.demo.fns.values()
+        if any(event == "load" for _, event in d.targets)
+    ]
+    assert load_fns, "demo.load must be registered for per-session session_id minting"
+
+    # Each call to the handler must return a fresh UUID-shaped string —
+    # repeated invocations confirm both the shape and the per-session
+    # freshness Gradio relies on.
+    fn = load_fns[0].fn
+    a, b = fn(), fn()
+    assert isinstance(a, str) and len(a) >= 32, "load handler must return a UUID string"
+    assert a != b, "load handler must return a fresh UUID on each invocation"

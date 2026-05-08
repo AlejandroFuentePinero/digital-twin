@@ -83,10 +83,12 @@ class HFLogReader:
     by ``HFLogWriter`` (see ``hf_log_writer.py``). The reader lists the
     repo, downloads the per-day files in the requested window, parses
     each line into an ``InteractionRecord``, and dedupes on
-    ``(session_id, turn_index, run_id, replicate_index)`` — the slice's
-    single dedup choke point per issue #46. Canary fields default
-    ``None`` for live records, so a live record's key is
-    ``(session_id, turn_index, None, None)``.
+    ``(session_id, turn_index, run_id, replicate_index, timestamp)`` —
+    the slice's single dedup choke point per issue #46. Including
+    timestamp in the key narrows the collapse to true buffer-replay
+    duplicates (identical record re-uploaded after a crash) and
+    surfaces every other record verbatim, so distinct interactions
+    are never silently merged.
     """
 
     def __init__(self, repo_id: str, *, hf_api=None, token: str | None = None) -> None:
@@ -204,14 +206,25 @@ def _dedupe_by_identity_key(
 ) -> list[InteractionRecord]:
     """Collapse records with the same identity tuple to one.
 
-    Key: ``(session_id, turn_index, run_id, replicate_index)``. Live
-    records have ``run_id == None`` and ``replicate_index == None``,
+    Key: ``(session_id, turn_index, run_id, replicate_index, timestamp)``.
+    The timestamp is part of the key so the dedup only collapses true
+    buffer-replay duplicates — the writer's at-least-once delivery
+    pattern (HF upload succeeds, process killed before
+    ``LogBuffer.flush()`` clears local state, restart re-uploads the
+    same in-memory record with its original timestamp). Distinct
+    records that happen to share ``(session_id, turn_index)`` — e.g.
+    two visitors who hit the Space before clicking "New conversation"
+    and shared a default ``gr.State`` value — have different
+    timestamps and are kept separately, so Sentinel surfaces every
+    real interaction.
+
+    Live records have ``run_id == None`` and ``replicate_index == None``;
     canary records have both populated. The first occurrence wins so
     the dedup is order-stable; downstream sort puts most-recent first.
     """
     seen: dict[tuple, InteractionRecord] = {}
     for r in records:
-        key = (r.session_id, r.turn_index, r.run_id, r.replicate_index)
+        key = (r.session_id, r.turn_index, r.run_id, r.replicate_index, r.timestamp)
         if key not in seen:
             seen[key] = r
     return list(seen.values())

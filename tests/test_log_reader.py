@@ -152,7 +152,8 @@ def test_hf_log_reader_downloads_and_parses_per_day_files(tmp_path):
 def test_hf_log_reader_dedupes_by_session_turn_run_and_replicate(tmp_path):
     """Reader-side dedup is the slice's single dedup choke point — a
     retried-after-ambiguous-failure flush can produce the same record
-    twice. The key is ``(session_id, turn_index, run_id, replicate_index)``;
+    twice. The key is
+    ``(session_id, turn_index, run_id, replicate_index, timestamp)``;
     canary fields default ``None`` for live records."""
     duplicate_live = _record(timestamp="2026-05-07T10:00:00+00:00", turn_index=0)
     files = {
@@ -167,6 +168,26 @@ def test_hf_log_reader_dedupes_by_session_turn_run_and_replicate(tmp_path):
     out = HFLogReader(repo_id="ignored/test", hf_api=api).read()
 
     assert sorted(r.turn_index for r in out) == [0, 1], "exact duplicates collapse"
+
+
+def test_hf_log_reader_keeps_distinct_records_sharing_session_and_turn(tmp_path):
+    """Two records with the same ``(session_id, turn_index)`` but different
+    timestamps are distinct interactions, not flush-replay duplicates —
+    e.g. multiple visitors who shared a default ``gr.State`` UUID before
+    clicking 'New conversation'. Including timestamp in the dedup key
+    keeps both."""
+    files = {
+        "logs/2026-05-07.jsonl": [
+            _record(timestamp="2026-05-07T03:21:10+00:00", turn_index=1),
+            _record(timestamp="2026-05-07T05:11:27+00:00", turn_index=1),
+            _record(timestamp="2026-05-07T06:30:12+00:00", turn_index=1),
+        ]
+    }
+    api = _hf_api_for_reader(files)
+
+    out = HFLogReader(repo_id="ignored/test", hf_api=api).read()
+
+    assert len(out) == 3, "distinct timestamps = distinct interactions, kept verbatim"
 
 
 def test_hf_log_reader_treats_canary_replicates_as_distinct(tmp_path):
