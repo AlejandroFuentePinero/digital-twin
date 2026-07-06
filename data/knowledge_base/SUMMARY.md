@@ -8,7 +8,8 @@ Aggregate, cross-file facts for holistic queries: counts, totals, timelines, and
 
 - **Full name:** Alejandro de la Fuente (Pinero)
 - **Location:** Melbourne, VIC, Australia | Australian Permanent Resident
-- **Current roles:** AI Engineer at Officeworks (May 2026 – present, hybrid) + independent AI engineer. Postdoctoral Fellow at James Cook University (Sep 2024 – May 2026) ended as the Officeworks role began.
+- **Current role:** AI Engineer at Officeworks (May 2026 – present, hybrid) + independent AI engineer. 
+- **Previous role:** Postdoctoral Fellow at James Cook University (Sep 2024 – May 2026) ended as the Officeworks role began.
 - **Available for:** AI Engineer, Data Scientist, ML Engineer, Research Scientist roles
 - **Contact:** alejandrofuentepinero@gmail.com | 0499 501 813
 - **Career span:** 2014–present (~12 years professional experience total)
@@ -39,13 +40,13 @@ Aggregate, cross-file facts for holistic queries: counts, totals, timelines, and
 2. MSc in Biology and Conservation of Biodiversity — Universidad de Salamanca, 2016
 3. BSc in Biology — Universidad de Salamanca, 2014
 
-**AI / LLM Engineering certifications: 6** — AI Engineer Core Track, Agentic AI (DeepLearning.AI), AI Agents in LangGraph, Claude Code (Anthropic), Agent Skills with Anthropic, ChatGPT Prompt Engineering
+**AI / LLM Engineering certifications: 8** — AI Engineer Core Track, Agentic AI (DeepLearning.AI), AI Agents in LangGraph, Knowledge Graphs for RAG (DeepLearning.AI/Neo4j), Agentic Knowledge Graph Construction (DeepLearning.AI/Neo4j), Claude Code (Anthropic), Agent Skills with Anthropic, ChatGPT Prompt Engineering
 
 **ML / Data Science certifications: 3** — Machine Learning Specialisation (Andrew Ng), Python for DS & ML Bootcamp, Python Bootcamp
 
 **Other certifications: 4** — AWS Certified Cloud Practitioner (CLF-C02, 2026), SQL Bootcamp (PostgreSQL), Advanced SQL, Git & GitHub Bootcamp
 
-**Total certifications: 13**
+**Total certifications: 15**
 
 ---
 
@@ -84,7 +85,7 @@ Aggregate, cross-file facts for holistic queries: counts, totals, timelines, and
 | Data Science skill labs | 4 | MLB SQL, Python ML, Python OOP, Python EDA |
 | **Total distinct projects** | **17** | |
 
-**AI stack breadth:** OpenAI, Anthropic, HuggingFace, LangChain/LangGraph, ChromaDB, QLoRA, Modal, Gradio, Streamlit, Weights & Biases, instructor, Pydantic, asyncio, pytest, GitHub Actions
+**AI stack breadth:** OpenAI, Anthropic, HuggingFace, LangChain/LangGraph, ChromaDB, Neo4j/Cypher (knowledge graphs, Graph RAG), QLoRA, Modal, Gradio, Streamlit, Weights & Biases, instructor, Pydantic, asyncio, pytest, GitHub Actions
 
 ---
 

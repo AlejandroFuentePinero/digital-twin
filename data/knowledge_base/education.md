@@ -66,6 +66,30 @@ Graph-structured agent workflows with explicit control flow and tracing.
 - Retries; human-in-the-loop checkpoints; debugging via tracing.
 - Building complete agent pipelines in Python with LangGraph.
 
+### Knowledge Graphs for RAG — DeepLearning.AI (Neo4j)
+[Certificate](https://learn.deeplearning.ai/accomplishments/bf03d51a-53c2-48cf-bc97-6538b30065fe?usp=sharing)
+
+Retrieval-augmented generation backed by knowledge graphs — querying structured and unstructured data to give LLMs enriched, relationship-aware context.
+
+**Skills and tools:**
+- Knowledge graph fundamentals: nodes (entities) and edges (relationships).
+- **Cypher** query language for managing and retrieving data in **Neo4j**.
+- Vector indexing of unstructured text; vector similarity search over graph-stored content.
+- Constructing knowledge graphs from documents; RAG prompt optimisation.
+- Question-answering systems over knowledge graphs (SEC financial-document case study).
+
+### Agentic Knowledge Graph Construction — DeepLearning.AI (Neo4j)
+[Certificate](https://learn.deeplearning.ai/accomplishments/9068bca9-c83e-4629-8e3e-09efffeddc3a?usp=sharing)
+
+Multi-agent systems that construct knowledge graphs from structured and unstructured data — specialised agents for schema inference and node/relationship extraction.
+
+**Skills and tools:**
+- Node/edge extraction methodologies from unstructured text.
+- Multi-agent orchestration with **Google's Agent Development Kit (ADK)**.
+- Specialised agent workflows: user-intent identification, schema proposal, extraction.
+- Graph construction and integration procedures in **Neo4j**.
+- Practical application: product-issue root-cause analysis over a knowledge graph.
+
 ### Claude Code: A Highly Agentic Coding Assistant — Anthropic / DeepLearning.AI
 [Certificate](https://learn.deeplearning.ai/accomplishments/561c6d75-c8aa-4f52-82ed-88e13692f56e?usp=sharing)
 

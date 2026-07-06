@@ -15,7 +15,8 @@ Statistical modelling and uncertainty-aware inference — particularly Bayesian 
 - **APIs & models:** OpenAI, Anthropic (Claude), Google Gemini, HuggingFace
 - **Frameworks:** LangChain, LangGraph, instructor
 - **Vector stores:** ChromaDB
-- **RAG:** full pipeline design — chunking, embedding, retrieval, reranking, evaluation (MRR, nDCG, LLM-as-judge)
+- **Graph / knowledge graphs:** Neo4j; Cypher query language; knowledge-graph construction from documents (agentic, multi-agent extraction with Google ADK); node/edge schema inference
+- **RAG:** full pipeline design — chunking, embedding, retrieval, reranking, evaluation (MRR, nDCG, LLM-as-judge); **Graph RAG** — knowledge-graph-backed retrieval combining Cypher queries with vector similarity search for relationship-aware context
 - **Multi-LLM orchestration:** classify-then-route pipelines with cross-family generator/judge separation (OpenAI generator + Anthropic guardrail), structured rejection-feedback retry loops, deterministic short-circuit floors on canonical refusal phrases
 - **Fine-tuning (frontier):** supervised fine-tuning of closed models via OpenAI and Anthropic APIs
 - **Fine-tuning (open-source):** QLoRA — 4-bit NF4/LoRA on Llama 3.2 3B; training tracked in Weights & Biases
