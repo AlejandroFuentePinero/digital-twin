@@ -14,7 +14,7 @@ upload. The GitHub repo stays untouched.
 
 Run from repo root:
 
-    uv run python scripts/deploy_to_space.py
+    uv run python scripts/deploy_to_space.py ["commit message"]
 
 Reads ``HF_TOKEN`` from ``.env`` (write scope on the Space).
 """
@@ -82,7 +82,7 @@ def main() -> int:
         repo_id=SPACE_ID,
         repo_type="space",
         ignore_patterns=IGNORE_PATTERNS,
-        commit_message="Deploy: Phase 7 slice 1 (#51) — Space packaging + privacy note",
+        commit_message=" ".join(sys.argv[1:]) or "Deploy: sync working tree",
     )
     print(f"Done. Watch the build at https://huggingface.co/spaces/{SPACE_ID}")
     return 0
