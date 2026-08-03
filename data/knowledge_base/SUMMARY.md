@@ -82,10 +82,11 @@ Aggregate, cross-file facts for holistic queries: counts, totals, timelines, and
 | LLM Engineering Lab (flagship) | 11 sub-projects | Price predictor: MAE $29.95, R² 86.3% on 820k products |
 | AI-JIE extraction pipeline (flagship) | 1 | 4.11/5 human eval, 33 prompt iterations, 3,892 job postings |
 | Job Intelligence Engine (flagship, live app) | 1 | Live at job-intelligence-engine.streamlit.app |
+| 7PH Graph knowledge graph (flagship, live app, open source) | 1 | Free community tool, MIT, live at 7phgraph.com; 107 events, 1,086 pilots, 4,591 decks, 4,995 cards |
 | Data Science skill labs | 4 | MLB SQL, Python ML, Python OOP, Python EDA |
-| **Total distinct projects** | **17** | |
+| **Total distinct projects** | **18** | |
 
-**AI stack breadth:** OpenAI, Anthropic, HuggingFace, LangChain/LangGraph, ChromaDB, Neo4j/Cypher (knowledge graphs, Graph RAG), QLoRA, Modal, Gradio, Streamlit, Weights & Biases, instructor, Pydantic, asyncio, pytest, GitHub Actions
+**AI stack breadth:** OpenAI, Anthropic, HuggingFace, LangChain/LangGraph, ChromaDB, Neo4j/Cypher and embedded Cypher stores (knowledge graphs, Graph RAG), QLoRA, Modal, Gradio, Streamlit, Weights & Biases, instructor, Pydantic, asyncio, pytest, Playwright, GitHub Actions
 
 ---
 

@@ -23,7 +23,7 @@ Selects from five branches: `GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGIS
 ChromaDB top-6 against an LLM-enriched chunk store: each chunk embeds `headline + summary + verbatim source` as one vector, so query phrasing has multiple match surfaces. Four-stage retrieval: query rewriting → dual retrieval pass (original + rewritten) → chunk merge → LLM rerank to final-k.
 
 ### 4. Generator
-`gpt-4.1` produces the answer. The `GENERIC`, `GAP`, and `TECHNICAL` branches each enter a bounded tool loop (`MAX_TOOL_CALLS = 3`) with `fetch_project_readme` for one of 28 distilled project / paper docs. The tool's argument is a `Literal[*REGISTRY.keys()]` pinned to the known project keys at startup; misconfiguration fails at import, not on first user turn. `LOGISTICAL` and `BEHAVIOURAL` are tool-free.
+`gpt-4.1` produces the answer. The `GENERIC`, `GAP`, and `TECHNICAL` branches each enter a bounded tool loop (`MAX_TOOL_CALLS = 3`) with `fetch_project_readme` for one of 29 distilled project / paper docs. The tool's argument is a `Literal[*REGISTRY.keys()]` pinned to the known project keys at startup; misconfiguration fails at import, not on first user turn. `LOGISTICAL` and `BEHAVIOURAL` are tool-free.
 
 ### 5. Guardrail
 `Claude Sonnet 4.6` — a model from a different family — judges the answer against the same composed prompt the generator saw. Up to 3 retries with structured rejection feedback wrapped into the next attempt's system prompt; falls back to a polite canned-refusal floor if all attempts fail.

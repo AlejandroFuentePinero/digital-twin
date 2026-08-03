@@ -15,7 +15,7 @@ Statistical modelling and uncertainty-aware inference — particularly Bayesian 
 - **APIs & models:** OpenAI, Anthropic (Claude), Google Gemini, HuggingFace
 - **Frameworks:** LangChain, LangGraph, instructor
 - **Vector stores:** ChromaDB
-- **Graph / knowledge graphs:** Neo4j; Cypher query language; knowledge-graph construction from documents (agentic, multi-agent extraction with Google ADK); node/edge schema inference
+- **Graph / knowledge graphs:** Neo4j; Cypher query language; embedded Cypher stores (Ladybug); property-graph data modelling; knowledge-graph construction from documents (agentic, multi-agent extraction with Google ADK); node/edge schema inference. Shipped in production: **7PH Graph** (live at 7phgraph.com), a free, open-source (MIT) community tool graphing 107 events / 1,086 pilots / 4,591 decks / 4,995 cards with append-only gated ingestion, per-value provenance naming the rule behind every imputed number, and statistical guards that refuse a chart the evidence cannot support
 - **RAG:** full pipeline design — chunking, embedding, retrieval, reranking, evaluation (MRR, nDCG, LLM-as-judge); **Graph RAG** — knowledge-graph-backed retrieval combining Cypher queries with vector similarity search for relationship-aware context
 - **Multi-LLM orchestration:** classify-then-route pipelines with cross-family generator/judge separation (OpenAI generator + Anthropic guardrail), structured rejection-feedback retry loops, deterministic short-circuit floors on canonical refusal phrases
 - **Fine-tuning (frontier):** supervised fine-tuning of closed models via OpenAI and Anthropic APIs

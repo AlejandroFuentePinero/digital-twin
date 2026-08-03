@@ -125,6 +125,13 @@
     "kb_cross_reference": "projects_ai_flagship.md",
     "link": "https://github.com/AlejandroFuentePinero/digital-twin"
   },
+  "7ph_graph": {
+    "path": "7ph_graph.md",
+    "title": "7PH Graph — Knowledge Graph of a Competitive Metagame",
+    "summary": "Shipped knowledge-graph project and the applied counterpart to the two Neo4j certifications, released as a community, free and open-source (MIT) tool for the Australian 7 Point Highlander MTG playgroup. A property graph of 107 events, 1,086 pilots, 4,591 decks and 4,995 cards in an embedded Cypher store behind a Gradio explorer, live and free at 7phgraph.com with no account, ads or monetisation. Append-only gated ingestion, per-value provenance naming the rule that decided each imputed number, statistical guards that refuse a chart the evidence cannot support, 24 ADRs, browser-measured accessibility tests. Use this key for questions about knowledge graphs, Cypher, graph modelling, open-source or community work, or provenance and uncertainty handling in data pipelines.",
+    "kb_cross_reference": "projects_ai_flagship.md",
+    "link": "https://github.com/AlejandroFuentePinero/7ph-graph"
+  },
   "gcb_2025_physiological_stress": {
     "path": "gcb_2025_physiological_stress.md",
     "title": "GCB 2025 — Climate-Induced Physiological Stress (Ringtail Possums)",

@@ -241,7 +241,7 @@ digital-twin/
 ├── data/
 │   ├── profile.md              # Always-on Frame (~2k tokens)
 │   ├── knowledge_base/         # Substance — RAG'd on demand
-│   ├── readmes/                # Tool-only project docs (28 entries)
+│   ├── readmes/                # Tool-only project docs (29 entries)
 │   ├── canaries/               # Drift-detection corpus + baseline
 │   └── logs/                   # JSONL interaction + contact logs
 ├── docs/

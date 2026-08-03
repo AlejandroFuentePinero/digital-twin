@@ -12,7 +12,7 @@ This is the index for the RAG knowledge base representing Alejandro de la Fuente
 | `skills.md` | What can Alejandro do? Full technical stack, AI/LLM tools, ML methods, languages, what he brings from research |
 | `experience.md` | Where has Alejandro worked? Full work history with role descriptions and scope |
 | `education.md` | What are Alejandro's qualifications? Degrees, certifications, courses, self-directed learning |
-| `projects_ai_flagship.md` | What AI projects has Alejandro built? LLM Engineering Lab (11 projects, MAE $29.95 / R² 86.3%), AI-JIE pipeline, Job Intelligence Engine — full depth with architecture, decisions, and stack |
+| `projects_ai_flagship.md` | What AI projects has Alejandro built? LLM Engineering Lab (11 projects, MAE $29.95 / R² 86.3%), AI-JIE pipeline, Digital Twin, Job Intelligence Engine, 7PH Graph (knowledge graph) — full depth with architecture, decisions, and stack |
 | `projects_skill_labs.md` | Skill lab projects: MLB Analytics (SQL), Python ML, Python OOP, Python EDA |
 | `research_overview.md` | What is Alejandro's research? PhD and postdoc research narratives, 7 key contributions, methods, scale, and conservation impact |
 | `personal.md` | Who is Alejandro as a person? Character, volunteering history, hobbies (MTG, wildlife), working style, and what he's looking for in a role |
@@ -45,6 +45,6 @@ This is the index for the RAG knowledge base representing Alejandro de la Fuente
 **Location:** Melbourne, VIC, Australia | Australian PR
 **Available for:** AI Engineer, Data Scientist, ML Engineer, Research Scientist roles
 **Strongest differentiator:** Research-grade rigour applied to LLM systems — evaluation discipline, uncertainty quantification, and Bayesian thinking from 6+ years of high-stakes modelling
-**Key AI projects:** LLM Engineering Lab (820k-product price predictor with QLoRA + autonomous agents), AI-JIE (structured extraction pipeline, 4.11/5 human eval), Job Intelligence Engine (live Streamlit app)
+**Key AI projects:** LLM Engineering Lab (820k-product price predictor with QLoRA + autonomous agents), AI-JIE (structured extraction pipeline, 4.11/5 human eval), Job Intelligence Engine (live Streamlit app), 7PH Graph (live knowledge graph at 7phgraph.com)
 **Top academic publications:** Nature Climate Change (2026), Global Change Biology (×2), Diversity & Distributions (×2), Ecography, Oecologia, PLOS One
 **Contact:** alejandrofuentepinero@gmail.com | 0499 501 813

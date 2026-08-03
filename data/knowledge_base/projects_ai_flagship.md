@@ -145,7 +145,7 @@ A multi-LLM conversational agent that answers professional questions about Aleja
 **What it delivers:**
 - **Branch-routed answers:** every turn classified into one of five branches — `GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGISTICAL` — each with its own profile sections, rules, and tool surface.
 - **Calibrated gap responses:** for skills not yet demonstrated, the system surfaces the specific gap, the broader transferable skill with named evidence, and the active-learning context (e.g. Ed Donner production track currently in progress).
-- **Tool-grounded technical depth:** the `GENERIC`, `GAP`, and `TECHNICAL` branches can each fetch any of 28 distilled project / paper README files via `fetch_project_readme` (bounded loop, max 3 calls per turn). `LOGISTICAL` and `BEHAVIOURAL` are tool-free.
+- **Tool-grounded technical depth:** the `GENERIC`, `GAP`, and `TECHNICAL` branches can each fetch any of 29 distilled project / paper README files via `fetch_project_readme` (bounded loop, max 3 calls per turn). `LOGISTICAL` and `BEHAVIOURAL` are tool-free.
 - **Deflection floor on out-of-scope and harmful prompts:** canonical "I don't have that information" gap phrase short-circuits the guardrail; injection attempts and harmful asks are deflected to email contact.
 
 **Pipeline architecture (5 stages):**
@@ -193,3 +193,32 @@ A deterministic job-market intelligence system that turns raw job postings into 
 5. **Counterfactual upskilling** — hold the job universe constant, simulate adding each missing skill family one at a time, recompute positioning, and rank skills by observed lift including "stretch → best-now promotion" effects.
 
 **Stack:** Python · pandas · NumPy · scikit-learn · SBERT · XGBoost/LightGBM · SHAP · Streamlit · NetworkX
+
+---
+
+## 7PH Graph (Knowledge Graph)
+**Live app:** https://www.7phgraph.com
+**GitHub:** https://github.com/AlejandroFuentePinero/7ph-graph
+**Tier:** Flagship | Deployed app | Community, free and open source (MIT)
+
+A knowledge graph of the Australian 7 Point Highlander Magic: The Gathering metagame, linking 107 events, 1,086 pilots, 4,591 decks and 4,995 distinct cards down to card attributes, across 2023 to 2026. An embedded Cypher store behind a Gradio explorer, deployed to a Hugging Face Space behind a custom domain. This is the shipped, production counterpart to the two DeepLearning.AI / Neo4j knowledge-graph certifications: graph modelling, Cypher, and graph-backed retrieval applied to a real, incomplete, self-contradictory dataset rather than a course fixture.
+
+**A community project, given away.** 7PH is a grassroots format with no commercial stats coverage, so the tool was built for the playgroup and released to it: free to use with no account, no ads and no monetisation; source public on GitHub under the MIT licence; free and non-commercial per Moxfield's API terms; unofficial and unaffiliated with 7phstats, Moxfield or Wizards of the Coast. Corrections and data issues come back through the community by email or Discord, and curated pilot-identity splits and rejections feed straight into the next build. This is the clearest example of Alejandro building a real system for a community he is part of rather than for a client or a portfolio: the users are people he plays against, which is also why the refusal discipline below is not decorative (a leaderboard that overstates its confidence is read by the people it ranks).
+
+**Problem:** Tabular stats sites answer aggregate questions well ("what is the most played card?") and relational ones badly ("which decks does this card actually travel with, and did that change?"). A property graph makes the relational question the cheap one. The harder problem sits underneath: the source data is incomplete and occasionally self-contradictory, so a system that quietly guesses will look confident and be wrong.
+
+**What it delivers:**
+- **Subject neighbourhoods as interactive graphs:** a pilot's decks, events and placements; a card's usage across archetypes; the cards a pair is played alongside. Nodes open to details; decks link out to Moxfield.
+- **Head-to-head comparison** over shared events, which refuses when there are none.
+- **Hidden gems:** cards rare inside an archetype yet recurring in its best decks, computed across the whole format and recalculated as decks arrive.
+- **Metagame over time:** archetype share against mean finish with error bars, per-card adoption curves, and a player leaderboard carrying an honest interval on every rank.
+
+**Key engineering decisions:**
+- **Per-value provenance instead of an "estimated" flag.** Every value the build decides rather than reads carries a companion column naming the rule that decided it (`placementImputed`, `normImputed`, `fieldImputed`): null where the source's own number stands, a rule name where a pass produced it, `none` where a rule was looked for and none fit. This surfaced a real bias: 28 decks held a known placement with no norm and so fell out of every ranked average, and 27 of those 28 were top-8 finishes, so the loss ran in one direction.
+- **Refusals over guesses.** A result too large to read is neither drawn nor silently truncated; the app reports the node-kind distribution of the match and asks the user to narrow it, because a truncated graph looks like an answer and is not one.
+- **A chart that was drawing noise got deleted, not tuned.** A rolling-window "form" leaderboard was permutation-tested before shipping (observed movement 0.0915 against a shuffled 0.0885, 90% range 0.0823 to 0.0947), found to be plotting sampling noise, and replaced with a running score. A bootstrap on the standings showed only 4.9 of the top 8 survive a resample and rank 7's interval runs from 1 to 40, so the tab was renamed from "Best player race" to "Player leaderboard".
+- **Append-only gated ingestion.** Each fetch is an immutable snapshot; the build validates every snapshot against the accumulated union of all snapshots before it, not just the previous one, so a rewrite buried in an interior snapshot is caught. A new artifact is promoted only if it validates, with the previous one retained for rollback.
+- **Store migration graded against a recorded oracle.** When the original store (Kùzu) was archived by its vendor, the migration to Ladybug was validated against `baseline/subgraphs.json`, capturing what every query entry point answers plus table counts and catalogues, exiting non-zero on any difference, rather than against a reading of the diff.
+- **The visual layer is tested by a browser.** A Playwright suite measures what the graph document actually paints; a separate acceptance script drives every tab and state at phone and desktop widths and walks every rendered text node against the background it is painted on for a WCAG AA contrast pass.
+
+**Stack:** Python 3.11+ · Ladybug (embedded Cypher graph store) · Gradio · Plotly · pyvis · Pydantic · pytest · Playwright · `uv` · Hugging Face Spaces. 24 architecture decision records, a domain glossary, and a test suite slightly larger than the source it covers.
