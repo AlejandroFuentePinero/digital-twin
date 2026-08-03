@@ -17,7 +17,11 @@ Before pushing to the Space remote:
 - [x] `data/profile.md` reads as Alejandro would write it — production traffic sees this verbatim.
 - [x] `README.md` frontmatter at the top of the file (between `---` fences) lists `sdk_version` matching a real Gradio release.
 
-> **Last deploy:** 2026-05-07 (audit-driven redeploy after Phase 7 close). Trigger: H1 fix in `data/readmes/digital_twin.md` (tool-branch scope was misstated as TECHNICAL-only; corrected to GENERIC/GAP/TECHNICAL per `branches.REGISTRY`). KB unchanged → no re-ingest. Space stage `RUNNING` on `cpu-basic`, HTTP 200 on the public URL, corrected README verified live on the Space's filesystem. Browser smoke-test (steps 1–11 below) deferred to operator. Uncheck the gates above before the next deploy and re-run.
+> **Last deploy:** 2026-08-03 (content change). Trigger: 7PH Graph added to the KB + a 29th `data/readmes/` entry. KB changed → re-ingest ran (106 chunks) before upload. Canary `+N` point `run-20260803-012541-e0d751`: 6 major flags vs the frozen baseline, down from 9 (Jul) and 12 (May); triaged as 2 improvements (CUDA question now matches its `gap_acknowledged` expectation), 1 benign `must_not_appear` substring collision, 1 pre-existing, 2 mild keyword-coverage drops. Space stage `RUNNING` on `cpu-basic` after ~135 s, HTTP 200, registry 29 keys + `7ph_graph.md` + the new KB section confirmed on the Space's filesystem, browser smoke-test passed on the knowledge-graph/open-source probe. Uncheck the gates above before the next deploy and re-run.
+>
+> **Sharp edge found during this deploy:** verifying via `gradio_client` does **not** work. Calling `/respond` over the API leaves the `gr.State` inputs (`session_id`, `SessionState`) unset, so `Pipeline.run` raises `TypeError: 'NoneType' object is not subscriptable` and every answer comes back as the canned refusal floor. This looks exactly like a broken deploy and is not one. Verify in a real browser session, where `demo.load` mints the session state.
+>
+> **Note on the two-step upload:** the second targeted `data/preprocessed_db/` upload reported "No files have been modified since last commit" — `upload_folder` at `folder_path=.` carried the DB on its own. Keep the second step as a no-op safety net rather than assuming it is always needed.
 
 ---
 

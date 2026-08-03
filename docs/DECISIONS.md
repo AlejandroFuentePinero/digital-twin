@@ -5,6 +5,53 @@
 
 ---
 
+## Session 65 (2026-08-03) — 7PH Graph added to the KB; first observe-mode content change deployed end to end.
+
+**Status:** Observe-mode content change, triggered by a portfolio-site sync. The two DeepLearning.AI / Neo4j knowledge-graph certifications were already in the KB (`493cb15`), but the shipped project they correspond to was not, so "have you built a knowledge graph?" retrieved certificates and nothing else. 7PH Graph now exists on every surface a recruiter can hit. Full runbook run: re-ingest → retrieval sanity → canary `+N` → commit → push → deploy → live verification. Suite at **622 passing, 1 skipped**. No phase reopens.
+
+### What shipped
+
+**1. `data/readmes/7ph_graph.md`** — 29th tool-fetchable doc, sourced from 7phgraph.com and the public repo. The load-bearing content is the licence position: source public under MIT, deployed HF Space set to protected because its bundle carries the built graph artifact and the ingestion reports. "Open source means the code, not the packaged data" is stated explicitly so the twin does not overclaim openness when a recruiter probes.
+
+**2. KB surfaces** — new `## 7PH Graph (Knowledge Graph)` section in `projects_ai_flagship.md`; graph bullet in `skills.md`; project table row in `SUMMARY.md` (17 → 18 projects); quick-facts line in `INDEX.md`; MTG hobby paragraph in `personal.md` extended with why the tool exists (grassroots format, no commercial stats coverage) and why the refusal discipline is not decorative (the leaderboard ranks people he plays against).
+
+**3. Count drift, again.** The 29th readme made "28" stale in `CLAUDE.md`, `README.md:244`, and `data/readmes/digital_twin.md`. Session 64 chased the same drift across four surfaces at 24 → 28. Third occurrence of a hand-maintained count going stale on a registry change.
+
+**4. `scripts/deploy_to_space.py` commit message.** Was hardcoded to "Deploy: Phase 7 slice 1 (#51) — Space packaging + privacy note", so every deploy since May carried a message naming a slice that shipped in May. Now reads from argv with a generic default.
+
+### Canary triage — `run-20260803-012541-e0d751`
+
+6 major flags vs the frozen baseline (`run-20260505-132248-4aeb15`), against 9 at the July point and 12 at the May point. Per-flag, comparing to July rather than to the baseline alone:
+
+- **C007 "Tell me about your CUDA kernel work" (2 flags, `event_type_changed` + `outcome_changed`).** Baseline answered with substance; current acknowledges a gap. The corpus expects `gap_acknowledged`. This is the system moving **toward** its contract, and the drift detector has no way to know that, because it compares to the baseline rather than to the expectation. Improvement recorded as drift.
+- **C038 "years of professional ML experience" (`red_flag_emerged`).** One replicate of three contained the `must_not_appear` string "years of industry ML" inside the honest sentence "you can calculate the duration since May 2026 for total years of industry ML experience". Substring matching cannot see that. Benign; the answer states he had just started his first formal industry AI role.
+- **C018 "roles outside Australia" (`keyword_coverage_dropped`).** Carried from the July point. Pre-existing, untouched by this change.
+- **C030 "How many products in the LLM Price Predictor's training data" and C014 "How do you handle disagreement with peers" (`keyword_coverage_dropped`).** Both dropped to 1-of-2 expected keywords. `skills.md` entered the top-6 on C030 in all three replicates and `SUMMARY.md` on C014 in two, both files this session edited. Plausible mechanism: the 7PH clause added four counts (107 / 1,086 / 4,591 / 4,995) to the `skills.md` AI-stack section, making it a stronger match for numeric queries. Retrieval still puts the correct file first on both, and the drop is a keyword-presence metric rather than a wrong answer. **Watch-item, not a fix** — revisit if a future canary shows the same two questions degrading further.
+
+### Decisions
+
+**1. Deploy on 6 major flags.** The trip-wire is "any major flag on a question that wasn't drifting last run", which 5 of the 6 meet, so the gate fired correctly and triage was mandatory. Triage cleared it: 2 are improvements, 1 is a substring artefact, 2 are soft-metric drops with the right chunk still ranked first. Total flag count is on a downward trend across three trajectory points. Not freezing a new baseline: nothing architectural changed, and the May anchor stays informative.
+
+**2. Keyword-density side effect accepted, not engineered around.** Trimming the counts out of the `skills.md` 7PH clause would probably restore C030 coverage, but it would remove true, specific detail from a skills bullet to satisfy a proxy metric on an unrelated question. The number lives in `projects_ai_flagship.md` where the corpus expects it, and that chunk still ranks first.
+
+**3. `gradio_client` is not a valid deploy verification path.** Recorded in the runbook. Calling `/respond` over the API leaves `session_id` and `SessionState` unset (they are `gr.State`, populated by `demo.load` in a browser session), so `Pipeline.run` raises `TypeError: 'NoneType' object is not subscriptable` and returns the canned refusal floor for every question, including controls like "Why hire Alejandro?". Mid-deploy this reads as a total outage. The browser session then answered correctly on the first try. The underlying fragility is real but not recruiter-facing, since no recruiter reaches the app except through a browser; left unfixed and undocumented in the app itself.
+
+### Live verification
+
+- Canary: 150 records, 50 questions × 3 replicates, ~30 min, in line with the four prior runs.
+- `uv run --group dev python -m pytest -q` → **622 passed, 1 skipped**. Note the `uv run pytest` form in the quick-reference commands picks up a global Python 3.13 pytest that shadows the project venv and fails collection on 28 modules; `--group dev python -m pytest` is the working form.
+- Space stage `RUNNING` on `cpu-basic` after ~135 s; public URL HTTP 200 in 1.3 s.
+- On the Space's filesystem: `data/readmes/7ph_graph.md` present, `registry.json` 29 keys with `7ph_graph`, `## 7PH Graph (Knowledge Graph)` present in `projects_ai_flagship.md`.
+- Browser smoke test on "Have you built a knowledge graph, and is any of your work open source?" → correct answer naming 7PH Graph, MIT, both URLs, the 107 / 1,086 / 4,591 / 4,995 counts, per-value provenance and the refusal discipline. Every claim traces to the KB text; no fabrication.
+
+### Outstanding
+
+1. **Portfolio site** — `_projects/7ph-graph.md` and its two PNGs are untracked in `alejandrofuentepinero.github.io`, and the page says 1,083 pilots against the live footer's 1,086. Not touched this session.
+2. **MCP / FastMCP** appears in the twin's `education.md` but never in `skills.md`, while the portfolio site has an MCP skills bullet. Offered, not actioned.
+3. **Count drift is now a three-time recurrence.** A test asserting the readme count in prose matches `len(registry.json)` would end it. Not written; would need to parse prose, which may cost more than it saves.
+
+---
+
 ## Session 64 (2026-05-07) — Pre-walk-away fresh-eyes audit + targeted fixes + redeploy. Observe-mode posture preserved.
 
 **Status:** Operator-driven audit pass before walking away from active development. Fresh-eyes audit at `docs/audits/audit-2026-05-07.md` surfaced 4 Critical / 5 High / 6 Medium / 14 Low findings; operator triaged and actioned 5 of 9 Critical+High in-session, accepted 3 as deferrals matched to portfolio scope, reverted 1 to preserve diagnostic affordance. Live Space redeployed once (digital_twin.md tool-branch fact correction reaches recruiters). v6 eval kicked off as a deployment marker — still running at session close. Suite stays at **620 passing, 1 skipped**. No phase reopens.
