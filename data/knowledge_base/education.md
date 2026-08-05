@@ -66,6 +66,19 @@ Graph-structured agent workflows with explicit control flow and tracing.
 - Retries; human-in-the-loop checkpoints; debugging via tracing.
 - Building complete agent pipelines in Python with LangGraph.
 
+### Building and Evaluating Advanced RAG — DeepLearning.AI (LlamaIndex / TruEra)
+[Certificate](https://learn.deeplearning.ai/accomplishments/25051b11-a3d7-4d21-a8bd-0171cf57fc28?usp=sharing)
+
+Advanced retrieval techniques beyond naive top-k chunk retrieval, paired with a systematic evaluation framework for measuring whether a RAG pipeline actually improved. Taught by Jerry Liu (LlamaIndex) and Anupam Datta (TruEra).
+
+**Skills and tools:**
+- **Sentence-window retrieval:** embed and retrieve at single-sentence granularity, then expand the matched sentence into its surrounding window before generation (precise matching, wider synthesis context).
+- **Auto-merging retrieval:** hierarchical parent/child chunk trees where retrieved leaf nodes automatically merge into their parent when enough children hit, avoiding fragmented context.
+- **The RAG triad of metrics:** context relevance (did retrieval fetch the right chunks?), groundedness (is the answer supported by those chunks?), answer relevance (does it answer the question asked?).
+- LLM-as-judge evaluation and per-record feedback tracing with **TruLens**.
+- Structured experiment tracking: iterating chunk size, window size, and merge thresholds as tracked experiments and comparing runs on the triad rather than by eyeball.
+- Advanced RAG pipeline construction in **LlamaIndex**.
+
 ### Knowledge Graphs for RAG — DeepLearning.AI (Neo4j)
 [Certificate](https://learn.deeplearning.ai/accomplishments/bf03d51a-53c2-48cf-bc97-6538b30065fe?usp=sharing)
 

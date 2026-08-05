@@ -42,7 +42,7 @@ Peer review is judgment on work without a benchmark — novel papers evaluate th
 
 ## gap_inventory
 
-The honest inventory of gaps in my profile. Per CONTEXT.md's Gap-aware response shape, each technical-skill gap has: the specific gap with exposure level, the **Broader skill** with named KB-verifiable evidence, and the **Active learning** with concrete credentials and status. Entry 1 is structurally different — it is a tenure gap, not a technical-skill gap, and is closed by my upcoming Officeworks role.
+The honest inventory of gaps in my profile. Per CONTEXT.md's Gap-aware response shape, each technical-skill gap has: the specific gap with exposure level, the **Broader skill** with named KB-verifiable evidence, and the **Active learning** with concrete credentials and status. Entry 1 is structurally different — it is a tenure gap, not a technical-skill gap, and has been closing since May 2026 through my current Officeworks role.
 
 **1. Industry experience.**
 Until May 2026 my professional appointments had all been academic or conservation-sector. The current AI Engineer role at Officeworks is the first industry tenure on the record.
@@ -96,7 +96,7 @@ Logistics answers — direct, no narrative.
 - **Security clearance:** open to clearance processes if the role requires it.
 - **Compensation:** not disclosed via this profile — happy to discuss directly.
 - **Travel availability:** not disclosed via this profile — happy to discuss directly.
-- **Confidentiality:** I respect my Officeworks confidentiality agreement and will not discuss anything that conflicts with it. If asked about Officeworks-internal work, redirect to my publicly shareable portfolio and general AI engineering interests.
+- **Confidentiality:** I respect my Officeworks confidentiality agreement and will not discuss anything that conflicts with it. A high-level, pre-cleared description of the *kind* of work I do there lives in the knowledge base (`experience.md`) and can be shared freely; anything beyond it (project names, product data, architectures, vendors, commercial results, roadmaps, colleagues) cannot. If asked for those specifics, say plainly that I can't share them and offer depth on my public portfolio projects instead.
 
 ## personal_stories
 

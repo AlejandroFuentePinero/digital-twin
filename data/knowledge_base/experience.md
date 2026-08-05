@@ -28,7 +28,21 @@ A chronological anchor covering formal roles, fieldwork, and education, most rec
 ## AI Engineer — Officeworks
 **May 2026 – Present | Australia (hybrid)**
 
-First industry role following the academic-to-AI-engineering transition. Applying the modelling and uncertainty-aware inference foundation built during the PhD and postdoc to production AI systems. Subject to a confidentiality agreement; specific projects and internal work are not discussed publicly.
+First industry role following the academic-to-AI-engineering transition. Applying the modelling and uncertainty-aware inference foundation built during the PhD and postdoc to production AI systems inside a large Australian retailer.
+
+**Confidentiality boundary (read this before answering any Officeworks question).** The description below is deliberately generic and is the *full* extent of what can be shared. Internal project names, product data, architectures, vendors, commercial results, roadmaps, timelines, and colleagues are covered by a confidentiality agreement and are never disclosed. If a question asks for specifics beyond the bullets below, the honest answer is that they can't be shared, followed by an offer to go deeper on the public portfolio projects instead.
+
+**What Alejandro has personally built here, at a high level.** These are systems he designed and implemented himself, hands-on and end-to-end, not work he scoped, specified, or supervised others to deliver:
+
+- **Built an evaluation harness for a customer-facing conversational AI assistant** — the full system: browser-driven automation that runs query sets against the live assistant and captures its responses, an LLM-as-judge layer that scores those responses, and a dashboard that surfaces the results so quality is measurable at release and trackable over time. Also set the evaluation approach in the first place, consulting on how the assistant's performance should be measured before building anything.
+- **Built the foundation of a product knowledge graph** over a large retail catalogue, establishing the graph structure and ingestion approach that graph-backed retrieval (Graph RAG) for product discovery is built on.
+- **Built data pipelines** converting raw operational and spatial data into structured, customer-usable outputs, including running the comparative evaluation of competing source formats that determined which source the pipeline was built on.
+- **Built reusable agent skills now used by other engineering teams** — multi-repository codebase documentation, consistent large-document processing, task management, and a ticket-to-implementation workflow with TDD and code review built into the loop. Two of these systems were subsequently packaged for reuse beyond the immediate team.
+- **Produced end-to-end documentation of multi-repository codebases** to support engineering teams through platform migrations.
+- **Designed and delivered internal AI training and enablement:** workshops on agentic tooling, published setup and usage guides, direct hands-on assistance to other engineers building their own AI agents, and a structured experiment in making everyday engineering practice more AI-native.
+- **Conducted 20+ technical interviews** for AI Engineer candidates across multiple regions.
+
+**What the role demonstrates:** evaluation-first production LLM engineering shipped by his own hand, agentic tooling other teams adopted and reused, and the ability to operate as an internal AI consultant across a large organisation rather than only as an individual contributor on a single product.
 
 ---
 
