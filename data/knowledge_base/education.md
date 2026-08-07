@@ -79,6 +79,21 @@ Advanced retrieval techniques beyond naive top-k chunk retrieval, paired with a 
 - Structured experiment tracking: iterating chunk size, window size, and merge thresholds as tracked experiments and comparing runs on the triad rather than by eyeball.
 - Advanced RAG pipeline construction in **LlamaIndex**.
 
+### Evaluating AI Agents — DeepLearning.AI (Arize AI)
+[Certificate](https://learn.deeplearning.ai/accomplishments/01e739d1-2472-4a74-b710-93422e9d6c0d?usp=sharing)
+
+Systematic evaluation of agentic systems: instrumenting an agent so every step is visible, then scoring each component separately instead of judging the agent by its final answer alone. Taught by John Gilhuly and Aman Khan (Arize AI).
+
+**Skills and tools:**
+- **Agent decomposition:** separating an agent into router, skills, and memory so each part can be measured independently rather than as one opaque black box.
+- **Tracing and observability:** instrumenting an agent with **Arize Phoenix** / OpenTelemetry-style spans; inspecting the full step-by-step trace of a run to see which call actually failed.
+- **Router evaluation:** did the agent pick the right tool, with the right arguments, at the right time.
+- **Skill evaluation:** scoring the output of each individual tool or sub-task on its own terms.
+- **Trajectory evaluation:** convergence scoring — comparing the number of steps a run took against the optimal path for that task.
+- **Evaluator types and when each applies:** code-based deterministic checks, LLM-as-judge, and human annotation, with LLM-as-judge improved through explanations and calibration against human labels.
+- Structuring evals as **tracked experiments** over a fixed test dataset, so prompt, model, and agent-logic changes are compared on the same examples rather than by impression.
+- **Production monitoring:** carrying the same evaluators from development into live traffic for ongoing agent performance tracking.
+
 ### Knowledge Graphs for RAG — DeepLearning.AI (Neo4j)
 [Certificate](https://learn.deeplearning.ai/accomplishments/bf03d51a-53c2-48cf-bc97-6538b30065fe?usp=sharing)
 

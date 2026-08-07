@@ -21,9 +21,10 @@ Statistical modelling and uncertainty-aware inference — particularly Bayesian 
 - **Fine-tuning (frontier):** supervised fine-tuning of closed models via OpenAI and Anthropic APIs
 - **Fine-tuning (open-source):** QLoRA — 4-bit NF4/LoRA on Llama 3.2 3B; training tracked in Weights & Biases
 - **Agents:** tool calling, planning/acting loops, multi-agent orchestration, human-in-the-loop checkpoints
+- **Agent evaluation:** component-level scoring rather than final-answer-only judgement — router / tool-selection correctness, per-skill output quality, trajectory convergence against the optimal path; code-based, LLM-as-judge, and human-annotation evaluators chosen per component, run as tracked experiments over a fixed test set and carried through to production monitoring
 - **Structured outputs:** Pydantic, schema-as-contract, JSON tool schemas
 - **Deployment:** Modal (serverless), Gradio, Streamlit, HuggingFace Spaces (deploy via Hub API; private HF Datasets as durable production log store with buffered + SIGTERM-safe writers)
-- **Observability:** Weights & Biases (W&B); custom Gradio operator dashboards over enriched JSONL logs (14 metrics across outcome / routing / latency, failure feed with pipeline replay, KB coverage, drift detection)
+- **Observability:** Weights & Biases (W&B); Arize Phoenix span tracing for agent runs; custom Gradio operator dashboards over enriched JSONL logs (14 metrics across outcome / routing / latency, failure feed with pipeline replay, KB coverage, drift detection)
 - **Drift detection / canary testing:** probe-corpus replay against frozen baselines; outcome-based drift kinds (branch / event_type / outcome / keyword_coverage / red_flag / latency)
 - **Multimodal:** text, image, and audio processing in LLM pipelines (Whisper, TTS, vision)
 

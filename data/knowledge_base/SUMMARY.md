@@ -40,13 +40,13 @@ Aggregate, cross-file facts for holistic queries: counts, totals, timelines, and
 2. MSc in Biology and Conservation of Biodiversity — Universidad de Salamanca, 2016
 3. BSc in Biology — Universidad de Salamanca, 2014
 
-**AI / LLM Engineering certifications: 9** — AI Engineer Core Track, Agentic AI (DeepLearning.AI), AI Agents in LangGraph, Building and Evaluating Advanced RAG (DeepLearning.AI/LlamaIndex/TruEra), Knowledge Graphs for RAG (DeepLearning.AI/Neo4j), Agentic Knowledge Graph Construction (DeepLearning.AI/Neo4j), Claude Code (Anthropic), Agent Skills with Anthropic, ChatGPT Prompt Engineering
+**AI / LLM Engineering certifications: 10** — AI Engineer Core Track, Agentic AI (DeepLearning.AI), AI Agents in LangGraph, Building and Evaluating Advanced RAG (DeepLearning.AI/LlamaIndex/TruEra), Evaluating AI Agents (DeepLearning.AI/Arize AI), Knowledge Graphs for RAG (DeepLearning.AI/Neo4j), Agentic Knowledge Graph Construction (DeepLearning.AI/Neo4j), Claude Code (Anthropic), Agent Skills with Anthropic, ChatGPT Prompt Engineering
 
 **ML / Data Science certifications: 3** — Machine Learning Specialisation (Andrew Ng), Python for DS & ML Bootcamp, Python Bootcamp
 
 **Other certifications: 4** — AWS Certified Cloud Practitioner (CLF-C02, 2026), SQL Bootcamp (PostgreSQL), Advanced SQL, Git & GitHub Bootcamp
 
-**Total certifications: 16**
+**Total certifications: 17**
 
 ---
 
@@ -86,7 +86,7 @@ Aggregate, cross-file facts for holistic queries: counts, totals, timelines, and
 | Data Science skill labs | 4 | MLB SQL, Python ML, Python OOP, Python EDA |
 | **Total distinct projects** | **18** | |
 
-**AI stack breadth:** OpenAI, Anthropic, HuggingFace, LangChain/LangGraph, LlamaIndex, TruLens, ChromaDB, Neo4j/Cypher and embedded Cypher stores (knowledge graphs, Graph RAG), QLoRA, Modal, Gradio, Streamlit, Weights & Biases, instructor, Pydantic, asyncio, pytest, Playwright, GitHub Actions
+**AI stack breadth:** OpenAI, Anthropic, HuggingFace, LangChain/LangGraph, LlamaIndex, TruLens, Arize Phoenix, ChromaDB, Neo4j/Cypher and embedded Cypher stores (knowledge graphs, Graph RAG), QLoRA, Modal, Gradio, Streamlit, Weights & Biases, instructor, Pydantic, asyncio, pytest, Playwright, GitHub Actions
 
 ---
 
