@@ -80,7 +80,7 @@ The two-step shape (everything-except-DB, then DB) is necessary because `upload_
 
 ## Verify the build
 
-After `git push space …` returns:
+After `scripts/deploy_to_space.py` returns:
 
 1. Open <https://huggingface.co/spaces/Alejandrofupi/digital-twin> in a browser. The build log streams live in the **App** tab → **logs**.
 2. Watch for:
