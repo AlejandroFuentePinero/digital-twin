@@ -546,7 +546,7 @@ The data is on disk and recoverable. The risk is the half-finished-feature patte
 
 ### P17 — Producer rule conflates branch identity with outcome label (LOGISTICAL / GAP)
 
-**Status:** **Observed** (Session 55, 2026-05-06 baseline re-freeze).
+**Status:** **Observed** (Session 55, 2026-05-06 baseline re-freeze; first production instance Session 66, 2026-08-19).
 
 `event_classifier.classify_event_type(branch, final_answer)` (`src/event_classifier.py:25–28`) makes branch identity canonical for two branches:
 
@@ -559,6 +559,15 @@ This was the deliberate slice-1 design ("branches imply outcomes"). It compresse
 
 - **LOGISTICAL substance**: "Where are you based?" → "Alejandro de la Fuente is based in Melbourne, Victoria, Australia." Substantive logistical answer; producer tags `event_type=deflected`. Canary's `derive_outcome` maps `deflected → out_of_scope_redirect`. Corpus expected `answered_with_substance` (correct semantically; the answer IS substance, not a redirect). Mismatch.
 - **GAP-branch constructive answer**: "How much production AWS experience?" → "Foundational, AWS Cloud Practitioner cert (CLF-C02, 2026), no production yet." Constructive gap-aware answer (calibration-ladder shaped per `profile.md`); producer tags `event_type=gap`. Canary's `derive_outcome` maps `gap → gap_acknowledged`. Corpus expected `answered_with_substance` (the answer DOES have substance — it names credentials and concrete services).
+
+**Production evidence (Session 66, 2026-08-19, `logs/2026-08-19.jsonl`):** first instance observed in live traffic rather than canary records. Two turns against the same KB content, one from the post-deploy smoke test and one from an unrelated visitor session ~15 h later:
+
+| Question | Branch | `event_type` | `knew_answer` | Answer |
+|---|---|---|---|---|
+| "Has Alejandro built anything related to Magic: The Gathering?" | GAP (conf. 0.90) | `gap` | `True` | Full, correct, three projects with working links |
+| "tell me about alejandro mtg projects" | GENERIC | `answered` | `True` | Full, correct, same content |
+
+Same content, same quality, opposite labels. The discriminator is question phrasing routing one turn to GAP, not whether the twin knew the answer. This is the `gap_rate` consequence stated concretely: a **successful** answer counted as a gap. `gap_rate` carries a >5pp WoW trip-wire (`flag_detector::detect_gap_rate_jump`), so a traffic mix that shifts toward "have you built X?" phrasing will move the metric without any change in answer quality. No trip-wire fired on this observation; recorded to establish that the conflation reaches production traffic, not only the canary corpus.
 
 **Session 55 freeze evidence:** 24 of 42 record-level canary misses (out of 150 records) trace directly to this conflation — 12 LOGISTICAL substance + 12 GAP-branch constructive. Together with the related TECHNICAL-paraphrased-gap case (3 records) and the refusal-class deflection cases (9 records), 36 of 42 outcome misses are the producer rule's overgeneralization, not system errors. `red_flag_rate=0%` on the same run confirms no fabrications.
 
