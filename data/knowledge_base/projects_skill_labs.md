@@ -62,3 +62,14 @@ Applied EDA on two real-world datasets demonstrating data wrangling, feature ext
 **GitHub:** https://github.com/AlejandroFuentePinero/mtg-mana-calculator
 
 A browser tool for Magic: The Gathering players to calculate optimal land counts and colour sources using Frank Karsten's heuristics. Because even card games deserve a rigorous model.
+
+---
+
+## MTG Deck Optimisation Engine
+**GitHub:** https://github.com/AlejandroFuentePinero/deck-optimisation-engine
+
+A personal research tool built in August 2026 for his own Magic: The Gathering tournament preparation. It mines published MTGO decklists for a single Modern archetype and answers a fixed set of questions about what that archetype's sub-groups (its "camps") are registering: what they play, what they have moved off, which cards are climbing, and where the pilot's own 75 cards deviate from the camp. A sequential scraper caches every published Modern event to disk, a DuckDB store is rebuilt from that cache on each run, and output is a CLI plus one self-contained HTML report. Open source under the MIT licence, 163 tests over committed payload fixtures. It is a working tool for one player and one deck, explicitly not a product.
+
+**The interesting artefact is the postmortem, not the tool.** Alejandro audited the engine against its own database and published a verdict that vindicates the engineering and condemns the premise: published decklists are conditioned on winning (challenges publish only the top 32, leagues only 5-0 runs, losing lists never appear at all), so every performance instrument in the engine runs at 6-9% statistical power against effects an order of magnitude smaller than its own detection floor. The adoption measurements survive that audit; the performance ones were downgraded in place to disconfirmation instruments, able to rule out a large effect but never to confirm a small one. Each reading names the population it was taken over, and the engine refuses to print a share across two populations. Same refusal discipline as 7PH Graph, applied to a tool whose only user was himself, which is the case where nobody would have caught it.
+
+**Stack:** Python 3.12 · DuckDB · uv · pytest

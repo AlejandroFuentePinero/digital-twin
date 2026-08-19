@@ -13,7 +13,7 @@ This is the index for the RAG knowledge base representing Alejandro de la Fuente
 | `experience.md` | Where has Alejandro worked? Full work history with role descriptions and scope |
 | `education.md` | What are Alejandro's qualifications? Degrees, certifications, courses, self-directed learning |
 | `projects_ai_flagship.md` | What AI projects has Alejandro built? LLM Engineering Lab (11 projects, MAE $29.95 / R² 86.3%), AI-JIE pipeline, Digital Twin, Job Intelligence Engine, 7PH Graph (knowledge graph) — full depth with architecture, decisions, and stack |
-| `projects_skill_labs.md` | Skill lab projects: MLB Analytics (SQL), Python ML, Python OOP, Python EDA |
+| `projects_skill_labs.md` | Skill lab and personal projects: MLB Analytics (SQL), Python ML, Python OOP, Python EDA, MTG Mana Calculator, MTG Deck Optimisation Engine |
 | `research_overview.md` | What is Alejandro's research? PhD and postdoc research narratives, 7 key contributions, methods, scale, and conservation impact |
 | `personal.md` | Who is Alejandro as a person? Character, volunteering history, hobbies (MTG, wildlife), working style, and what he's looking for in a role |
 | `positioning.md` | Why hire Alejandro? Explicit bridge between research rigour and AI engineering — the 5 transfer mechanisms, concrete parallels table, what he does and doesn't bring |
