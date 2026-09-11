@@ -77,7 +77,7 @@ A personal research tool built in August 2026 for his own Magic: The Gathering t
 ---
 
 ## MTGO Insights
-**GitHub:** https://github.com/AlejandroFuentePinero/mtgo-insights (private repository; see below for why)
+**Source:** private repository (see below for why)
 **Deployed:** protected Hugging Face Space, reachable only with a contributor login
 
 Built in August 2026 for his Modern testing team's preparation for the Brisbane tournament (28 to 30 August 2026). Where the Deck Optimisation Engine could only read what winners registered, this reads what both seats of a match actually did: MTGO game logs that teammates send in, parsed into matches, games, casts and stated interactions, and served as a Gradio dashboard. Home is the tracked field played against itself as a matchup matrix. Behind it, one tab per tracked archetype (the fifteen with the most matches, recomputed on every build) shows the deck's match and game record, its matchups split on the play / on the draw and preboard / postboard, and a card table. Within weeks the corpus passed 2,000 matches and 5,000 games. Used through the team's testing season; it changed some of his own deck decisions.
@@ -94,7 +94,7 @@ Built in August 2026 for his Modern testing team's preparation for the Brisbane 
 ---
 
 ## Arena Insights
-**GitHub:** https://github.com/AlejandroFuentePinero/arena-insights (private repository, same reason as its sister)
+**Source:** private repository, same reason as its sister
 
 Started in September 2026 as the sister of MTGO Insights for the same team's Standard best-of-three testing on MTG Arena. It is a deliberate copy that diverges rather than a shared package (ADR-0003): the query builder, rate helpers and deploy flow are thin next to the parser, schema, classifier rules and card table that had to change, and a shared package would have meant speculative extension points in an app that already worked. Ports between the two are recorded, so a fix that never crosses is a chosen divergence rather than a silent one.
 
