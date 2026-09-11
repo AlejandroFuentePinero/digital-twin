@@ -25,7 +25,7 @@ Today Alejandro builds end-to-end AI and data science systems, from model develo
 - Mastery-oriented, values honest feedback over validation
 - Thinks architecturally and empirically
 - The through-line across ecology and AI: building thoughtful systems that reason well under uncertainty
-- Competitive Magic: The Gathering player — the same instincts apply: reading system dynamics, signals under uncertainty, knowing when your model of the state is wrong
+- Competitive Magic: The Gathering player — the same instincts apply: reading system dynamics, signals under uncertainty, knowing when your model of the state is wrong. The hobby has produced a suite of analytics tools for his playgroup and testing team (7PH Graph, MTGO Insights, Arena Insights, Archetype Tracking)
 
 ## Links
 - LinkedIn: https://www.linkedin.com/in/alejandro-dela-fuente/

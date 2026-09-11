@@ -86,6 +86,8 @@ Aggregate, cross-file facts for holistic queries: counts, totals, timelines, and
 | Data Science skill labs | 4 | MLB SQL, Python ML, Python OOP, Python EDA |
 | **Total distinct projects** | **18** | |
 
+Not counted above: MTG hobby tooling built for his playgroup and testing team (MTG Mana Calculator, Deck Optimisation Engine, MTGO Insights, Arena Insights, Archetype Tracking). 7PH Graph is counted as a flagship.
+
 **AI stack breadth:** OpenAI, Anthropic, HuggingFace, LangChain/LangGraph, LlamaIndex, TruLens, Arize Phoenix, ChromaDB, Neo4j/Cypher and embedded Cypher stores (knowledge graphs, Graph RAG), QLoRA, Modal, Gradio, Streamlit, Weights & Biases, instructor, Pydantic, asyncio, pytest, Playwright, GitHub Actions
 
 ---

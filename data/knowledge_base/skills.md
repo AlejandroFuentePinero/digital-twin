@@ -6,7 +6,7 @@ Statistical modelling and uncertainty-aware inference — particularly Bayesian 
 ## What Alejandro delivers
 - **End-to-end AI systems:** RAG pipelines with retrieval evaluation (MRR, nDCG, LLM-as-judge), agentic workflows with tool calling and stateful backends, fine-tuned models (frontier SFT and QLoRA for open-source LLMs)
 - **Full-cycle ML and modelling:** problem framing, feature engineering, model selection, rigorous validation, and reproducible delivery — with depth in Bayesian hierarchical inference and spatiotemporal forecasting
-- **Data pipelines and analytics:** clean, testable, version-controlled pipelines from raw data to decision-ready outputs
+- **Data pipelines and analytics:** clean, testable, version-controlled pipelines from raw data to decision-ready outputs. Shipped examples: **MTGO Insights** and **Arena Insights**, team dashboards built from raw game logs (event-grained log parsing, rule-based archetype classification with a review queue and hand overrides kept as ground truth outside the rebuilt store, only the figures the data can support); **Archetype Tracking**, a fortnightly metagame report over scraped decklists with append-only frozen readings
 - **Evaluation and communication:** leakage checks, calibration, error slicing, robustness testing — results communicated with explicit assumptions, trade-offs, and clear recommendations
 
 ---
@@ -23,19 +23,20 @@ Statistical modelling and uncertainty-aware inference — particularly Bayesian 
 - **Agents:** tool calling, planning/acting loops, multi-agent orchestration, human-in-the-loop checkpoints
 - **Agent evaluation:** component-level scoring rather than final-answer-only judgement — router / tool-selection correctness, per-skill output quality, trajectory convergence against the optimal path; code-based, LLM-as-judge, and human-annotation evaluators chosen per component, run as tracked experiments over a fixed test set and carried through to production monitoring
 - **Structured outputs:** Pydantic, schema-as-contract, JSON tool schemas
-- **Deployment:** Modal (serverless), Gradio, Streamlit, HuggingFace Spaces (deploy via Hub API; private HF Datasets as durable production log store with buffered + SIGTERM-safe writers)
+- **Deployment:** Modal (serverless), Gradio, Streamlit, HuggingFace Spaces (deploy via Hub API; private HF Datasets as durable production log store with buffered + SIGTERM-safe writers; protected Spaces gated by per-contributor Gradio logins over a read-only prebuilt artifact, as in MTGO Insights)
 - **Observability:** Weights & Biases (W&B); Arize Phoenix span tracing for agent runs; custom Gradio operator dashboards over enriched JSONL logs (14 metrics across outcome / routing / latency, failure feed with pipeline replay, KB coverage, drift detection)
 - **Drift detection / canary testing:** probe-corpus replay against frozen baselines; outcome-based drift kinds (branch / event_type / outcome / keyword_coverage / red_flag / latency)
 - **Multimodal:** text, image, and audio processing in LLM pipelines (Whisper, TTS, vision)
 
 ## ML / Data Stack
 - **Python:** pandas, NumPy, scikit-learn, XGBoost, LightGBM, TensorFlow/Keras
-- **SQL:** PostgreSQL (advanced: window functions, CTEs, recursive queries, analytical patterns)
+- **SQL:** PostgreSQL (advanced: window functions, CTEs, recursive queries, analytical patterns); DuckDB and SQLite as analytical stores rebuilt whole from committed raw data (Archetype Tracking, MTGO Insights)
 - **R:** tidyverse, ggplot2, Shiny; Bayesian modelling in JAGS/WinBUGS
 - **Embeddings & NLP:** SBERT, sentence-transformers, TF-IDF, semantic search
 - **Recommenders:** similarity metrics, collaborative filtering, constraint-aware framing
 - **Geospatial:** raster/vector workflows, spatial joins, landscape metrics
 - **Visualization:** matplotlib, seaborn, plotly, ggplot2
+- **Data collection and log parsing:** sequential, rate-respecting scrapers with retry and backoff over undocumented public pages (MTGO, Melee); parsers for text game logs (MTGO) and Unity / JSON state-diff logs (MTG Arena), keyed to a versioned card-database snapshot
 
 ## Statistical Methods
 - Bayesian & hierarchical modelling; partial pooling; uncertainty quantification and propagation
@@ -45,12 +46,14 @@ Statistical modelling and uncertainty-aware inference — particularly Bayesian 
 - Unsupervised learning: PCA, K-Means, anomaly detection
 - A/B testing; causal inference; counterfactual framing
 - Evaluation: cross-validation, temporal/blocked splits, calibration, SHAP interpretability
+- Observational-data discipline: naming the selection process behind a dataset (published decklists are conditioned on winning), statistical-power audits before trusting an instrument, conditional metrics read against a baseline over the same sample, and refusing figures the data cannot support (Deck Optimisation Engine postmortem, MTGO Insights, Archetype Tracking)
 
 ## Software Engineering & Cloud
 - Git/GitHub: branching, PRs, code review, merge discipline
 - Modular architecture, clean interfaces, reusable components, pipeline-style structure
 - Quality controls: input validation, assertions, unit tests (pytest), type hints
 - Reproducibility: environment management, deterministic runs, versioned artefacts
+- Documentation as part of the system: a domain glossary and architecture decision records per project (24 ADRs in 7PH Graph, 23 in MTGO Insights), so decisions are recorded rather than rediscovered
 - **AWS Certified Cloud Practitioner (2026):** EC2, Lambda, S3, RDS, DynamoDB, VPC, IAM, CloudWatch
 
 ## Languages
