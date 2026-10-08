@@ -118,7 +118,7 @@ Not counted above: MTG hobby tooling built for his playgroup and testing team (M
 
 **Threatened species nominations: 15** (EPBC Act and/or IUCN via BirdLife International — all Wet Tropics highland species; all linked to the "escalator to extinction" pattern documented in Alejandro's research)
 
-**Media: 6 items** including ABC News interview, 70 national stories on possum research, New York Times photo contribution
+**Media: 7 items** including WWF Living Planet Report 2026 coverage (news.com.au), ABC News interview, 70 national stories on possum research, New York Times photo contribution
 
 ---
 

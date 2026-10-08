@@ -54,6 +54,7 @@ All are restricted to the highlands of the Australian Wet Tropics; rapid decline
 
 ## Media Coverage
 
+- **'Window is narrow': Australian native animal populations plunge 70 per cent in WWF report**, news.com.au (NewsWire), 8 October 2026. Interview given to WWF after Alejandro's ringtail possum research was included in WWF's Living Planet Report 2026. Quoted on lemuroid and green ringtail possums declining by up to 70% across the Wet Tropics since the 1990s, the two species declining through different climate-driven processes (green ringtails overheat and dehydrate when heat stress lasts more than about five hours without water; lemuroids can't forage safely on hot nights), and on late-dry-season water provision: "We can buy these species time, but we can't buy them a new climate."
 - **Possums threatened by climate change** — JCU media (70 national stories total)
 - **Global warming drives Wet Tropics possums from mountain homes** — ABC News article + interview
 - **Aussie birds disappearing due to warming** — Narromine News
