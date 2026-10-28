@@ -652,7 +652,37 @@ Four call sites shared the model: the classifier, query rewriting (`retrieval.py
 
 **Action when a trip-wire fires:** open an outage ticket in the shape of #54. Prefer a same-family swap first if the provider offers one, and keep any cross-family migration as its own ticket with an eval run and a baseline refreeze. The quarterly check in `MAINTENANCE.md` reads the deprecations pages; do not wait for it if trip-wire 1 fires.
 
-**Companion observability:** none today. A startup probe (one cheap call per model at app launch, failing loudly in the Space build log) would move trip-wire 1 from a user-visible failure to a build failure. Not built in #54: the system is in observe-mode and #55 exercises the same path within three months, so decide then whether the probe earns its place.
+**Companion observability:** none today. A startup probe (one cheap call per model at app launch, failing loudly in the Space build log) would move trip-wire 1 from a user-visible failure to a build failure. Not built in #54: the system is in observe-mode and #55 exercises the same path within three months, so decide then whether the probe earns its place. O10 adds a condition: the probe has to make one call with `tools=`, because a plain call passes through the failure O10 describes.
+
+---
+
+### O10: Unpinned Space dependencies drift on every rebuild and the drift only shows on the tool path
+
+**Status:** Observed (production incident, 2026-10-28 to 2026-10-29). Fixed in [#59](https://github.com/AlejandroFuentePinero/digital-twin/issues/59).
+
+The Space installs from `requirements.txt`, and until #59 that file carried floors only (`litellm>=1.83.0`), while local work runs on `uv.lock`. Hugging Face rebuilds the dependency layer whenever its cache expires or its base image moves, so a redeploy that changes no dependency can still change every installed version. The #54 redeploy did exactly that and installed LiteLLM 1.106.x. That version lazily imports its MCP catalog the first time `completion` is called with `tools=`, and the import chain expects a newer `mcp` package than the one the Space build installs itself through `gradio[oauth,mcp]==5.49.1` (mcp 1.10.1):
+
+```
+ImportError: cannot import name 'CacheableResult' from 'mcp.types'
+  litellm/main.py completion -> litellm.responses.mcp.chat_completions_handler
+  -> litellm.proxy._experimental.mcp_server.catalog
+```
+
+Plain completions never touch that path. So the classifier, the guardrail and the tool-free branches (BEHAVIOURAL, LOGISTICAL) kept working, and every GENERIC, GAP and TECHNICAL turn failed three times inside the retry loop and returned the canned refusal. The failure was inside the loop, so the records did land in the dataset, each attempt carrying `pipeline call raised: RetryError[... ImportError]`, with the inner message lost to `str(RetryError)`. Nothing read them. The operator found the outage in the browser the next day. The in-process smoke run and the canary of the same deploy ran on the lock-file versions and could not see it.
+
+**Fix shipped (#59):** every top-level line in `requirements.txt` pinned to its `uv.lock` version. Verified on Python 3.13 (the Space's interpreter) with the Space's own extras added: GENERIC and TECHNICAL questions answer first attempt. Bumping a dependency now means `uv lock` and copying the version across; the file header says so.
+
+**Residual risk:** the Space build still adds `gradio[oauth,mcp]`, `uvicorn`, `websockets` and `spaces` on top of the pinned file, and `pip` resolves their transitives at build time. A conflict between those and the pinned set would surface as a build failure, which the runbook's verify step catches. The pins also freeze the set that #55 has to move in January; that migration bumps `litellm` and `openai` together and re-verifies this path.
+
+**Trip-wires (any one triggers action):**
+
+1. Any `ImportError` or `ModuleNotFoundError` inside a `pipeline call raised:` attempt in the dataset log. Code and data cannot produce that; only the installed package set can.
+2. A build log where the `pip install` layer is not `CACHED` on a deploy that did not change `requirements.txt`. The versions moved under the app; smoke-test the tool path before trusting it.
+3. One branch family refusing while another answers, in the dataset or in the browser. A split by branch points at the tool path, not at a model or a key.
+
+**Action when a trip-wire fires:** read the newest dataset day-file first; the exact exception class is in the attempts. Reproduce in a fresh venv built from `requirements.txt` plus the Space's extras on the Space's Python, not in the project venv. Fix by pinning or bumping, never by catching the import.
+
+**Companion observability:** the O9 startup probe, if built, must make one `tools=` call per tool-enabled model, not only a plain call. A plain call passed throughout this outage.
 
 ---
 

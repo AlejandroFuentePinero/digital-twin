@@ -5,6 +5,47 @@
 
 ---
 
+## Session 68 (2026-10-29): the #54 redeploy broke every tool-enabled branch through dependency drift; requirements pinned and redeployed.
+
+**Status:** Production incident fixed the same morning it was reported. Issue [#59](https://github.com/AlejandroFuentePinero/digital-twin/issues/59) implemented end to end, browser smoke test included. Suite at **622 passing, 1 skipped**, unchanged: no source file moved. Observe-mode preserved.
+
+### What happened
+
+The operator opened the Space the morning after the Session 67 deploy and every question came back as the canned refusal. The dataset log already held the signature from his smoke test of the previous evening (13:35 to 13:43 UTC): "Tell me about a time you failed" (BEHAVIOURAL) `answered`; six GENERIC questions `refused`, three attempts each of `pipeline call raised: RetryError[... ImportError]`. The split by branch pointed at the only thing GENERIC, GAP and TECHNICAL do that BEHAVIOURAL and LOGISTICAL do not: call `completion` with `tools=`.
+
+The Space build installs from `requirements.txt`, which carried floors only. The #54 deploy rebuilt the dependency layer (the Hub's cache had expired or its base image had moved; the surviving build log is the third of that day and shows the layer as `CACHED` from the first two) and installed LiteLLM 1.106.x. That version lazily imports its MCP catalog on the first `tools=` call and expects a newer `mcp` than the 1.10.1 the Space build installs itself through `gradio[oauth,mcp]==5.49.1`. Reproduced locally in a fresh Python 3.13 venv built from the unpinned file plus the Space's extras:
+
+```
+ImportError: cannot import name 'CacheableResult' from 'mcp.types'
+  litellm/main.py completion -> litellm.responses.mcp.chat_completions_handler
+  -> litellm.proxy._experimental.mcp_server.catalog
+```
+
+The same venv built from the lock-file versions answers the same GENERIC question first attempt. Registered as `LIMITATIONS::O10`.
+
+### What shipped
+
+- `requirements.txt` pinned to the `uv.lock` version of all twelve top-level dependencies, header rewritten to say why and how to bump (`af42a9e`, "Fix #59"). GitHub closed #59 on the commit keyword before verification, as with #54; the acceptance boxes were ticked afterwards with the verification recorded.
+- Deploy of `af42a9e` plus the docs below (Space commit `3d9e7a0c`). Build log shows the `pip install` layer rebuilt with `litellm-1.83.0`, `openai-2.32.0`, `chromadb-1.5.8`, `mcp-1.10.1`. Stage `RUNNING`.
+- API smoke test through `gradio_client` after `/new_session`: GENERIC 13.3 s, BEHAVIOURAL 45.9 s, TECHNICAL 29.7 s, all real answers. Operator browser smoke test on the two remaining branches plus a control (GAP, LOGISTICAL, GENERIC): all three answered.
+- `LIMITATIONS.md` O10 (cause, fix, residual risk, three trip-wires, action, companion observability) and a sentence on O9's probe. `MAINTENANCE.md` follow-up "Pin `requirements.txt`" struck through as done. Runbook: pre-flight gate for the pins, "Last deploy" paragraph, and a correction to the Session 63 sharp edge: `gradio_client` verification works when the client calls `/new_session` first.
+- #57 (startup probe) gains the condition that the probe must make one `tools=` call; a plain call passed throughout this outage.
+
+### Decisions
+
+1. **Pin, do not catch.** Catching the `ImportError` in `tools.py` would hide the next drift. The pins make the Space run the set the suite and the canary already run on.
+2. **No canary.** Nothing in the pipeline changed; the installed versions on the Space became identical to the ones the 2026-10-28 canary ran on. A canary here would measure the local venv again.
+3. **Deploy before docs.** Same reasoning as Session 67: the rollback target was a broken Space. Docs went up in the same working-tree upload and were committed afterwards with the verification.
+4. **Reproduce in the Space's environment, not the project venv.** The project venv runs the lock file and could not show the fault. Written into O10's action.
+5. **Operator runs the deploy script.** The agent's permission layer refused the production deploy; the operator ran it from the session prompt with the `!` prefix. The runbook says so for next time.
+
+### Outstanding
+
+1. The in-process smoke run and the canary both run on the local lock file, so neither can catch a Space-only dependency fault. The only check that can is a question through the deployed Space, which O10's trip-wires and the runbook's smoke test now cover; nothing automated does.
+2. Carried from Session 67: #55 (January migration, bumps `litellm` and `openai` together and re-verifies the tool path), #56, #58, and the Session 66 leftovers.
+
+---
+
 ## Session 67 (2026-10-28 to 2026-10-29): gpt-4.1-nano retired by OpenAI, five-day production outage found and fixed; October 2026 KB refresh deployed.
 
 **Status:** Production incident fixed and the pending content batch deployed. Issue [#54](https://github.com/AlejandroFuentePinero/digital-twin/issues/54) implemented end to end; [#55](https://github.com/AlejandroFuentePinero/digital-twin/issues/55) (January 2027 shutdown of `gpt-4.1` and `gpt-4.1-mini`) and [#56](https://github.com/AlejandroFuentePinero/digital-twin/issues/56) (one routing regression) opened. Suite at **622 passing, 1 skipped**. Observe-mode preserved; no phase reopens.

@@ -134,7 +134,7 @@ These are observation-driven — they convert to active work only if observe-mod
 - **Tighten `branch_changed` to unanimous-vote** (3/3 required across replicates) to stop single-record flips swinging majorities.
 - **Per-question canary stability scoring** — downweight chronically-unstable questions in the drift count.
 - **v6 eval against the deployed pipeline** — only if real-recruiter traffic surfaces an answer-quality regression worth measuring.
-- **Pin `requirements.txt` to exact `uv.lock` versions** — only if a future redeploy surfaces version-drift symptoms; current cached install is the smoke-tested set.
+- ~~**Pin `requirements.txt` to exact `uv.lock` versions**~~ Done in #59 (2026-10-29) after the 2026-10-28 redeploy rebuilt the dependency layer and the new LiteLLM broke every tool-enabled branch (`LIMITATIONS::O10`). Bumping a dependency now means `uv lock`, then copy the version into `requirements.txt`.
 
 ---
 
