@@ -7,7 +7,7 @@
 
 ## Session 69 (2026-10-29): startup model probe (#57) and a clean vector store with stale-file deletion on deploy (#58).
 
-**Status:** both tickets implemented test-first the same day #59 closed; deploy pending the operator running the deploy script. Suite at **629 passing, 1 skipped** (7 new). Observe-mode preserved: no per-turn pipeline code changed, no canary run.
+**Status:** both tickets implemented test-first and deployed the same day #59 closed (Space commit `84cff4ca`); #57 and #58 closed with every acceptance box ticked. Suite at **629 passing, 1 skipped** (7 new). Observe-mode preserved: no per-turn pipeline code changed, no canary run.
 
 ### What shipped
 
@@ -28,7 +28,7 @@
 
 ### Outstanding
 
-1. Deploy and verify: seven `[startup_probe] ok` lines in the Space build log, Space tree at 5 store files, one question per branch.
+1. Deploy verified: seven `[startup_probe] ok` lines in the Space run log, store tree at 5 files, all five branches answered through the API (9.7 s to 15.0 s). The operator's browser check is the remaining step.
 2. The probe covers the Space only. `ingest.py`, `canary_runner.py` and the eval still fail on their own first call to a retired model; acceptable while all three are operator-driven and print the error.
 3. Carried: #53 (canary noise, decide before #55), #55 (January migration, December 2026), #56 (on-call routing, watching), and the Session 66 leftovers.
 
