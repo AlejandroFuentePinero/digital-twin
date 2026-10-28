@@ -634,7 +634,7 @@ Each branch's composed system prompt loads only that branch's `profile_sections`
 
 ### O9: Provider model retirement takes the pipeline down with nothing inside the system noticing
 
-**Status:** Observed (production incident, 2026-10-23 to 2026-10-28). Fixed in [#54](https://github.com/AlejandroFuentePinero/digital-twin/issues/54); residual risk open until [#55](https://github.com/AlejandroFuentePinero/digital-twin/issues/55).
+**Status:** Observed (production incident, 2026-10-23 to 2026-10-28). Fixed in [#54](https://github.com/AlejandroFuentePinero/digital-twin/issues/54); startup probe built in [#57](https://github.com/AlejandroFuentePinero/digital-twin/issues/57) (2026-10-29); the January shutdown stays open until [#55](https://github.com/AlejandroFuentePinero/digital-twin/issues/55).
 
 OpenAI retired `gpt-4.1-nano` on 2026-10-23. The classifier called it on every turn from `pipeline.py`, outside the per-attempt retry block, so the 404 `model_not_found` left `Pipeline.run`, was caught by the defence-in-depth handler in `app.py`, and every visitor saw an error message for five days. Nothing in the system noticed. The Sentinel writer-health panel reads log writes, and a turn that fails before the log record is built writes nothing. The monthly canary is operator-driven and had not run since August. The outage was found by accident on 2026-10-28 while re-ingesting a content batch: `ingest.py` enriches chunks with the same model and failed with the same 404.
 
@@ -642,17 +642,17 @@ Four call sites shared the model: the classifier, query rewriting (`retrieval.py
 
 **Fix shipped (#54):** `gpt-4.1-mini` at all four sites. Same family and same prompts, so the frozen canary baseline stays comparable; the trajectory point is triaged in `DECISIONS.md` Session 67. OpenAI's suggested replacement (`gpt-5.6-luna`) was not taken because moving the classifier to a new family while fixing an outage would change routing and the baseline at the same time.
 
-**Residual risk:** `gpt-4.1` and `gpt-4.1-mini` are scheduled for shutdown on 2027-01-14 (#55). The guardrail model (`claude-sonnet-4-6`) and the embedding model (`text-embedding-3-large`) have their own deprecation schedules on the providers' pages. No code path reads any of those pages, and no startup check probes the models the app is about to call.
+**Residual risk:** `gpt-4.1` and `gpt-4.1-mini` are scheduled for shutdown on 2027-01-14 (#55). The guardrail model (`claude-sonnet-4-6`) and the embedding model (`text-embedding-3-large`) have their own deprecation schedules on the providers' pages. No code path reads any of those pages. Since #57 the app probes every configured model at startup (see Companion observability), so a retirement now fails the Space build instead of serving refusals for days; the deprecation pages still have to be read by hand to see one coming.
 
 **Trip-wires (any one triggers action):**
 
-1. A 404 `model_not_found` or a "model has been deprecated" error from any stage, seen in Space logs, a canary run, an ingest or an eval run. Treat it as an outage, not a transient.
+1. A 404 `model_not_found` or a "model has been deprecated" error from any stage, seen in Space logs, a canary run, an ingest or an eval run. Treat it as an outage, not a transient. A `StartupProbeError` in the Space build log is this trip-wire firing before any visitor saw it; the message names the stage and the model.
 2. A model named in `src/` appears on a provider deprecations page with a shutdown date inside the next 90 days.
 3. Sentinel shows zero live records for 7+ days while the portfolio site is up. A failure before the log write has exactly this shape.
 
 **Action when a trip-wire fires:** open an outage ticket in the shape of #54. Prefer a same-family swap first if the provider offers one, and keep any cross-family migration as its own ticket with an eval run and a baseline refreeze. The quarterly check in `MAINTENANCE.md` reads the deprecations pages; do not wait for it if trip-wire 1 fires.
 
-**Companion observability:** none today. A startup probe (one cheap call per model at app launch, failing loudly in the Space build log) would move trip-wire 1 from a user-visible failure to a build failure. Not built in #54: the system is in observe-mode and #55 exercises the same path within three months, so decide then whether the probe earns its place. O10 adds a condition: the probe has to make one call with `tools=`, because a plain call passes through the failure O10 describes.
+**Companion observability:** `src/startup_probe.py` (#57, 2026-10-29). `app.py` runs it before `demo.launch()`: one minimal call per configured model (classifier, query rewrite, rerank, generator plain and with `tools=`, guardrail, embeddings), read from the stage modules' constants so a model swap is probed under its new name. A `NotFoundError`, or any exception that is not a provider answer (the O10 `ImportError`), raises `StartupProbeError` with every failing stage listed, and the container exits, so the Space shows a build error instead of a chat that refuses. Timeouts, rate limits and 5xx are printed and skipped: the probe is for retirements, not provider weather. Not built: a JSON artefact for the Sentinel health panel; the build log is the only reader today. Covers the retirement case for the Space only; `ingest.py`, the canary runner and the eval do not probe, and still fail on their own first call. The operator can run the same check locally with `uv run python src/startup_probe.py`.
 
 ---
 

@@ -140,7 +140,10 @@ def build_fetch_project_readme_tool(
     return ToolSpec(name="fetch_project_readme", schema=schema, handler=handler)
 
 
-def make_litellm_tool_callable(model: str = "openai/gpt-4.1"):
+TOOL_MODEL = "openai/gpt-4.1"
+
+
+def make_litellm_tool_callable(model: str = TOOL_MODEL):
     """Build a `model_callable` for ToolLoop that wraps `litellm.completion`.
 
     Adapts LiteLLM's response shape to the loop's `ModelResponse` contract.

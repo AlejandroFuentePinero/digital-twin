@@ -58,6 +58,7 @@ MODULE_CATEGORY: dict[str, str] = {
     "tools": "Tools",
     "tool_loop": "Tools",
     "app": "App / UI",
+    "startup_probe": "App / UI",
     "module_health": "Tooling",
     "system_map": "Tooling",
     "sample_chunks": "Tooling",

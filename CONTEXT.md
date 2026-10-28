@@ -66,6 +66,10 @@ A cheap LLM call (`gpt-4.1-mini`) that takes the last 2 turns plus the current q
 **Tool registry**:
 A JSON file (`data/readmes/registry.json`) mapping project keys to README paths and metadata. The `fetch_project_readme` tool's valid project enum is built from this registry at startup. Single source of truth — adding a project means editing one JSON entry and dropping one Markdown file. A test asserts registry entries and disk contents stay in sync.
 
+**Startup probe**:
+One minimal call per configured model (classifier, query rewrite, rerank, generator plain and with `tools=`, guardrail, embeddings) made by `app.py` before the chat serves. A model the provider no longer serves, or a code fault on the tool-call path, raises `StartupProbeError` and the Space build fails; transient provider errors are logged and skipped. Built in #57 after the `gpt-4.1-nano` retirement (#54) and the LiteLLM tool-path `ImportError` (#59) each ran unnoticed for days.
+_Avoid_: Health check, smoke test (those are the operator's procedures; the probe is the app's own gate)
+
 **Contact-provided flag**:
 A per-session boolean held in `app.py` session state. Set to `True` the first time `log_user_details` runs successfully (visitor submitted the form). When `True`, both invitation paths — periodic (turn 3) and deflection-attached — skip the contact ask. **Deflection itself still fires when needed; only the contact line is dropped.** Resets to `False` per new `session_id`. Prevents re-asking a visitor who has already left their details.
 

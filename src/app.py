@@ -44,6 +44,7 @@ from session_state import (
     SessionState,
     detect_explicit_contact_request,
 )
+from startup_probe import run_startup_probe
 from tools import ToolRegistry, make_litellm_tool_callable
 
 MAX_HISTORY_TURNS = 10  # last N user+assistant pairs passed to the pipeline
@@ -432,4 +433,8 @@ with gr.Blocks(
 
 
 if __name__ == "__main__":
+    # One minimal call per configured model before serving (#57). A retired
+    # model or a code fault on the tool path raises here, so the Space build
+    # goes red instead of every visitor seeing a refusal (LIMITATIONS::O9, O10).
+    run_startup_probe()
     demo.launch()

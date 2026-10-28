@@ -65,3 +65,12 @@ flowchart TD
   CANARY[/"canary_runner.py CLI<br/>50 questions × 3 replicates<br/>--freeze-baseline → baseline.json"/]:::io
   CANARY -.->|"each replicate calls<br/>pipeline.run() through<br/>_CanaryLogWriter wrapper"| GEN
   CANARY -.->|"is_canary=True,<br/>shared run_id, replicate_index"| LOG
+
+  %% Startup probe (#57): runs once in app.py before demo.launch(), outside the
+  %% per-turn pipeline. One minimal call per configured model through the same
+  %% LiteLLM / OpenAI SDK paths the stages use; the generator probe passes tools=
+  %% so LiteLLM's tool-call code path runs (LIMITATIONS::O10). A NotFoundError or
+  %% any non-provider exception raises StartupProbeError and the Space build goes
+  %% red; transient provider errors (timeout, 429, 5xx) are printed and skipped.
+  PROBE["startup_probe.py (app start, #57)<br/>one call per configured model:<br/>classifier, rewrite, rerank, generator (plain + tools=),<br/>guardrail, embeddings<br/>NotFoundError / code fault → StartupProbeError, build fails<br/>timeout / 429 / 5xx → logged, startup continues"]:::sideEffect
+  PROBE -.->|"must pass before<br/>the chat serves"| USER

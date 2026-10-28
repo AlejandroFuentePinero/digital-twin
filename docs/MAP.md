@@ -78,6 +78,15 @@ flowchart TD
   CANARY[/"canary_runner.py CLI<br/>50 questions × 3 replicates<br/>--freeze-baseline → baseline.json"/]:::io
   CANARY -.->|"each replicate calls<br/>pipeline.run() through<br/>_CanaryLogWriter wrapper"| GEN
   CANARY -.->|"is_canary=True,<br/>shared run_id, replicate_index"| LOG
+
+  %% Startup probe (#57): runs once in app.py before demo.launch(), outside the
+  %% per-turn pipeline. One minimal call per configured model through the same
+  %% LiteLLM / OpenAI SDK paths the stages use; the generator probe passes tools=
+  %% so LiteLLM's tool-call code path runs (LIMITATIONS::O10). A NotFoundError or
+  %% any non-provider exception raises StartupProbeError and the Space build goes
+  %% red; transient provider errors (timeout, 429, 5xx) are printed and skipped.
+  PROBE["startup_probe.py (app start, #57)<br/>one call per configured model:<br/>classifier, rewrite, rerank, generator (plain + tools=),<br/>guardrail, embeddings<br/>NotFoundError / code fault → StartupProbeError, build fails<br/>timeout / 429 / 5xx → logged, startup continues"]:::sideEffect
+  PROBE -.->|"must pass before<br/>the chat serves"| USER
 ```
 
 ## Module graph
@@ -145,6 +154,7 @@ graph LR
   subgraph sg_appui["App / UI"]
     direction TB
     app["app.py"]:::appui
+    startup_probe["startup_probe.py"]:::appui
   end
 
   subgraph sg_tooling["Tooling"]
@@ -187,6 +197,7 @@ graph LR
   app --> profile
   app --> rules
   app --> session_state
+  app --> startup_probe
   app --> tools
   canary_baseline --> interaction_log
   canary_corpus --> canary_outcome
@@ -242,6 +253,11 @@ graph LR
   sentinel --> kb_corpus
   sentinel --> log_reader
   sentinel --> metric_status
+  startup_probe --> classifier
+  startup_probe --> generator
+  startup_probe --> guardrail
+  startup_probe --> retrieval
+  startup_probe --> tools
   summarize_failures --> failure_feed
   summarize_failures --> interaction_log
   tools --> tool_loop
@@ -260,6 +276,8 @@ graph LR
   retrieval --> ext_OpenAI_API
   sample_chunks --> ext_ChromaDB
   sentinel --> ext_Gradio__UI_
+  startup_probe --> ext_OpenAI_API
+  startup_probe --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   summarize_failures --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   tools --> ext_OpenAI___Anthropic_API__via_LiteLLM_
 
@@ -311,6 +329,7 @@ graph LR
 | `schema_migrations.py` | Read-time schema migration for the canonical interaction log (issue #48). |
 | `sentinel.py` | Local Gradio dashboard over the canonical interaction log (Phase 4). |
 | `session_state.py` | Per-session state for #16's contact-flow. |
+| `startup_probe.py` | Startup model probe (#57): fail the Space build loudly when a configured model is gone. |
 | `summarize_failures.py` | Failure-summarisation batch (issue #33). |
 | `system_map.py` | System map generator — walks src/ and emits docs/MAP.md. |
 | `tool_loop.py` | Generic bounded tool loop for the TECHNICAL branch (#18 / ADR-0003). |
