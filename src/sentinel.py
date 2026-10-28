@@ -1499,7 +1499,7 @@ METRIC_GLOSSARY: dict[str, str] = {
     "Tool calls by branch":                                "Distribution of tool-firing turns across branches — fractions sum to 100%. Numerator per branch: turns with at least one tool call AND branch=X. Denominator: total turns with a tool call. Replaced ``Tool calls / TECHNICAL turn`` (Session 56) after ``fetch_project_readme`` was opened to TECHNICAL/GAP/GENERIC. Descriptive shape metric — not threshold-alerted.",
     "Tool-call success rate":                              "Fraction of tool invocations that returned successfully — should be ~100% for local file reads.",
     # Latency
-    "classifier":                                          "p50 | p95 | share of total p95 for the classifier stage — typical 1s, p95 ≈ 1.7s; gpt-4.1-nano cached.",
+    "classifier":                                          "p50 | p95 | share of total p95 for the classifier stage — typical 1s, p95 ≈ 1.4s on gpt-4.1-mini (since 2026-10-28; gpt-4.1-nano ran 0.65s / 1.1s before its retirement).",
     "retrieval":                                           "p50 | p95 | share of total p95 for the ChromaDB retrieval stage — sub-100ms typical; spikes signal embedding cache miss.",
     "generation":                                          "p50 | p95 | share of total p95 for the OpenAI generation stage — typical 3.5s; spikes correlate with retry rounds.",
     "guardrail":                                           "p50 | p95 | share of total p95 for the Anthropic guardrail stage — typical 5s; slower than the gpt-4.1 generator.",

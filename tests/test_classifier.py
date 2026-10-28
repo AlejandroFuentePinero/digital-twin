@@ -11,8 +11,8 @@ def _completion_returning(json_text: str):
     )
 
 
-def test_classifier_calls_nano_and_returns_parsed_pydantic_result():
-    """Classifier calls gpt-4.1-nano with the question and parses the JSON response into ClassifierResult."""
+def test_classifier_calls_mini_and_returns_parsed_pydantic_result():
+    """Classifier calls gpt-4.1-mini with the question and parses the JSON response into ClassifierResult."""
     fake = _completion_returning('{"labels": ["GAP"], "confidence": 0.85}')
     with patch("classifier.completion", return_value=fake) as mock:
         result = Classifier().classify("Do you have AWS experience?", [])
@@ -20,8 +20,8 @@ def test_classifier_calls_nano_and_returns_parsed_pydantic_result():
     assert isinstance(result, ClassifierResult)
     assert result.labels == ["GAP"]
     assert result.confidence == 0.85
-    # Boundary: gpt-4.1-nano is the model used
-    assert mock.call_args.kwargs["model"] == "openai/gpt-4.1-nano"
+    # Boundary: gpt-4.1-mini is the model used
+    assert mock.call_args.kwargs["model"] == "openai/gpt-4.1-mini"
     # The visitor's question reaches the LLM
     messages = mock.call_args.kwargs["messages"]
     user_content = " ".join(m["content"] for m in messages if m["role"] == "user")

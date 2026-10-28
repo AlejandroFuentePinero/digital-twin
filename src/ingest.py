@@ -30,7 +30,7 @@ KB_PATH = Path(__file__).parent.parent / "data" / "knowledge_base"
 DB_PATH = str(Path(__file__).parent.parent / "data" / "preprocessed_db")
 COLLECTION = "digital_twin"
 EMBED_MODEL = "text-embedding-3-large"
-ENRICH_MODEL = "gpt-4.1-nano"
+ENRICH_MODEL = "gpt-4.1-mini"
 WORKERS = 10
 
 UNSPLIT = {"SUMMARY", "INDEX"}

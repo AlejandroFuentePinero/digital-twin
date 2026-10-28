@@ -42,7 +42,7 @@ DEFAULT_ARCHIVE_DIR = (
 # Cheap classifier-tier model — this is a one-shot batch over a small (≤ ~50)
 # question list with structured output, not a high-stakes generation. Mirrors
 # classifier.py's choice for the same reasoning.
-MODEL = "openai/gpt-4.1-nano"
+MODEL = "openai/gpt-4.1-mini"
 
 
 SYSTEM_PROMPT = """\

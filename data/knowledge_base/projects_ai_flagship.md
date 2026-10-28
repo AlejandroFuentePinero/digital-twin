@@ -149,7 +149,7 @@ A multi-LLM conversational agent that answers professional questions about Aleja
 - **Deflection floor on out-of-scope and harmful prompts:** canonical "I don't have that information" gap phrase short-circuits the guardrail; injection attempts and harmful asks are deflected to email contact.
 
 **Pipeline architecture (5 stages):**
-1. **Classifier** — `gpt-4.1-nano` returns `{labels, confidence}` from the last 2 turns plus the current question. Defaults to `GENERIC` on low confidence; multi-label up to 2.
+1. **Classifier** — `gpt-4.1-mini` returns `{labels, confidence}` from the last 2 turns plus the current question. Defaults to `GENERIC` on low confidence; multi-label up to 2.
 2. **Branch composer** — composes the system prompt from branch-declared profile sections + branch-specific rules. The same composer call drives generator AND guardrail prompts, structurally preventing writer–judge drift.
 3. **Retrieval** — ChromaDB top-6 against an LLM-enriched chunk store (headline + summary + verbatim source embedded together for multiple match surfaces). Four-stage: query rewriting → dual retrieval pass → chunk merge → LLM rerank.
 4. **Generator** — `gpt-4.1` produces the answer; `TECHNICAL` enters a bounded tool loop with `fetch_project_readme`.
@@ -167,7 +167,7 @@ A multi-LLM conversational agent that answers professional questions about Aleja
 - **Sentinel dashboard:** 14 metrics across Outcome / Routing / Engagement / Tool use / Latency blocks, per-branch trends, failure feed with replay, KB coverage tracking, weekly LLM-batched gap clusters and deflection summaries, canary drift trajectory.
 - **Production:** deployed on HuggingFace Spaces (`cpu-basic`); per-turn latency p50 ≈ 12.7 s / p95 ≈ 17.3 s. Both interaction logs and contact-form submissions persist durably to a private HuggingFace Dataset (buffered writer, size-or-time flush, SIGTERM-safe drain, crash-recovery flush). 620+ behaviour tests; 11-step deployed-Space smoke test passed across all five branches.
 
-**Stack:** Python 3.12 · `uv` · LiteLLM · ChromaDB · Gradio · Pydantic · tenacity · OpenAI (`gpt-4.1`, `gpt-4.1-nano`) · Anthropic (`claude-sonnet-4-6`) · `text-embedding-3-large` · HuggingFace Datasets / Spaces
+**Stack:** Python 3.12 · `uv` · LiteLLM · ChromaDB · Gradio · Pydantic · tenacity · OpenAI (`gpt-4.1`, `gpt-4.1-mini`) · Anthropic (`claude-sonnet-4-6`) · `text-embedding-3-large` · HuggingFace Datasets / Spaces
 
 ---
 

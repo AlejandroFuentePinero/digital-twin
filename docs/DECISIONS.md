@@ -5,6 +5,68 @@
 
 ---
 
+## Session 67 (2026-10-28 to 2026-10-29): gpt-4.1-nano retired by OpenAI, five-day production outage found and fixed; October 2026 KB refresh deployed.
+
+**Status:** Production incident fixed and the pending content batch deployed. Issue [#54](https://github.com/AlejandroFuentePinero/digital-twin/issues/54) implemented end to end; [#55](https://github.com/AlejandroFuentePinero/digital-twin/issues/55) (January 2027 shutdown of `gpt-4.1` and `gpt-4.1-mini`) and [#56](https://github.com/AlejandroFuentePinero/digital-twin/issues/56) (one routing regression) opened. Suite at **622 passing, 1 skipped**. Observe-mode preserved; no phase reopens.
+
+### What happened
+
+OpenAI shut down `gpt-4.1-nano` on 2026-10-23. The classifier called it on every turn from `pipeline.py`, outside the per-attempt retry block, so the 404 `model_not_found` left `Pipeline.run`, hit the defence-in-depth handler in `app.py`, and every visitor saw an error message from 23 to 28 October. Nothing in the system noticed: a turn that dies before the log record exists writes nothing for the Sentinel to read, and the canary is operator-driven and had not run since August. The outage was found by accident on 2026-10-28 when the re-ingest for the content batch (`e070037`) failed on chunk enrichment with the same 404. Registered as `LIMITATIONS::O9`.
+
+### What shipped
+
+**1. Model swap.** `gpt-4.1-mini` at the four `gpt-4.1-nano` call sites: `classifier.py`, `retrieval.py` (`REWRITE_MODEL`), `ingest.py` (`ENRICH_MODEL`), `cluster_gaps.py`. Same family, same prompts. OpenAI's recommended replacement (`gpt-5.6-luna`) was not taken: moving the classifier to a new family while fixing an outage would change routing and the canary baseline at the same time. That move belongs to #55, which has to touch the generator anyway.
+
+**2. The content batch.** `e070037` (Officeworks refresh to October 2026, Pro Tour qualification, Finance Analytics, Production Track dropped) had been committed and pushed on 2026-10-28 but could not be ingested. Ingested now (110 chunks) and deployed with the fix.
+
+**3. Self-description.** Every place the project names its own classifier model: `projects_ai_flagship.md` (pipeline list and stack line), `data/readmes/digital_twin.md` (per-call cost raised to ~$0.0004), `CLAUDE.md`, `README.md` (three mentions), `CONTEXT.md`, `docs/pipeline_diagram.mmd` with `MAP.md` regenerated, the Sentinel classifier tooltip, `docs/SENTINEL.md`, `docs/deployment-runbook.md` secrets list, and canary corpus C005's expected keyword. Historical mentions in `DECISIONS.md`, `TODO.md`, the ADR, old LIMITATIONS entries, eval results and the two project readmes that describe nano as a fine-tuning or judge model in other projects were left as they were.
+
+**4. Registers.** `LIMITATIONS::O9` (provider model retirement) with three trip-wires; `MAINTENANCE.md` quarterly check of the provider deprecation pages; `LIMITATIONS::O5` trip-wire 3 marked as fired (see triage).
+
+**5. Deploy.** Two uploads as per the runbook. The first working-tree upload was rejected by the Hub with an LFS pointer error on the live HNSW segment; the DB-only upload went through first time and the working-tree retry a minute later went through too. Space `RUNNING` on `cpu-basic`, HTTP 200, `src/classifier.py` downloaded from the Space names `gpt-4.1-mini`.
+
+### Canary triage: `run-20261028-124142-1285f4`
+
+**18 flags (16 major, 2 minor)** vs the frozen May baseline. Trajectory: 12 (May) → 9 (Jul) → 6 (Aug 3) → 14 (Aug 19) → 18. Triage found **zero content regressions and one routing regression**.
+
+- **9 major from three questions moving toward the corpus contract.** Phishing (3 flags) and ML-years (3 flags) are the same two questions as Session 66, for the same reasons. New this run: **C035 "When did you start at Officeworks?"** moved LOGISTICAL / `deflected` / `out_of_scope_redirect` → GENERIC / `answered` / `answered_with_substance`, 3/3, with the identical answer "May 2026" on both runs. The corpus expects `answered_with_substance`, so the new label is the right one; the baseline label was the `P17` conflation (LOGISTICAL branch means `deflected` whatever the answer says).
+- **1 real regression.** **C040 "Do you have on-call experience in production?"** routed GAP 3/3 at 0.9 on every prior run; `gpt-4.1-mini` routes it BEHAVIOURAL 3/3 at 0.85. The outcome label stayed `gap`, so only `branch_changed` fired, but the answer got worse: GAP loads `gap_inventory` and the calibration ladder and produced "I don't have on-call experience in production yet, my industry tenure started at Officeworks in May 2026 ..."; BEHAVIOURAL loads neither and produces the bare "I don't have that information in my knowledge base." Ticketed as #56; `O5` trip-wire 3 recorded as fired.
+- **2 branch changes with the same outcome.** C019 "favourite colour" GENERIC → BEHAVIOURAL with identical deflection text (no defensible branch, already in the `MAINTENANCE.md` follow-ups). C049 "gambling industry" GENERIC (confidence 0.4 to 0.6 on the baseline) → BEHAVIOURAL (0.85 to 0.95), same deflect-and-redirect shape, one replicate answering with substance from the documented role preferences. Defensible either way.
+- **5 `keyword_coverage_dropped` (3 major, 2 minor).** All phrasing: C018 (answers the same thing without the literal "open to conversations"), C014 (lost the words "peer review" and "structured", kept the method), C030 (820,000 stated without "820k", as in Session 66), C037 (states no production AWS and names the Cloud Practitioner, misses the exact strings), C011 (same Oecologia story, one replicate without the word in the measured span). Same brittleness as Session 66 decision 3; still not fixed.
+- **1 `latency_p95_regression`.** Rust question 4.9 s → 9.9 s, single question. Run-level total p50 10.6 s (lowest of the trajectory), p95 18.1 s (Aug 19: 11.3 s / 19.3 s).
+- **Classifier latency on the new model:** p50 950 ms / p95 1375 ms, against nano at 652 / 1102 (Aug 19) and 908 / 1887 (May baseline). About 300 ms slower at the median than nano's last runs, inside the range the baseline itself covered. Recorded in the Sentinel tooltip and `SENTINEL.md`.
+
+### Decisions
+
+**1. Fix inside the 4.1 family.** Reasoning above. Cost: `gpt-4.1-mini` is about four times nano's token price on three short calls per turn plus ingest enrichment; the generator and guardrail still dominate spend.
+
+**2. Deploy before the canary finished.** The Space was returning an error on every turn. Waiting an hour for a trajectory point would have extended the outage for information the canary could not act on: the only rollback target was a dead Space.
+
+**3. No new baseline.** Same reasoning as Session 66. The January migration (#55) changes the generator and the classifier together and is the natural refreeze point.
+
+**4. The on-call regression is ticketed, not patched.** One question of 50 and a classifier behaviour change. `O5` says not to engineer over variance at N=1; #56 carries the options (watch, one general GAP example in the classifier prompt with a friction-lock test, or `gap_inventory` in the BEHAVIOURAL branch).
+
+**5. No startup model probe.** `O9`'s companion observability would turn a retired model into a build-log failure instead of a user-visible one. Not built in observe-mode; #55 exercises the same path within three months, decide then.
+
+**6. Browser smoke test stays with the operator.** By standing rule Claude does not drive a browser to verify on his behalf. The five-branch run below went through the same `Pipeline.run` the Space uses, against the same store and models, with a scratch log writer.
+
+### Live verification
+
+- `uv run python -m pytest -q` → **622 passed, 1 skipped**.
+- Ingest 110 chunks. Retrieval probes: Officeworks question → the Officeworks role section of `experience.md` first; MTG question → `personal.md :: Interests and hobbies` first; "which course currently" → no course chunk (the Production Track section is gone); Digital Twin classifier question → `projects_ai_flagship.md :: Digital Twin` first.
+- Five-branch in-process smoke, one fresh session, turns 0 to 4: GENERIC 0.95 `answered` 14.7 s; GAP 0.95 `gap` 12.4 s (names the Cloud Practitioner, states no production AWS, no course in progress); TECHNICAL 0.95 `answered` 13.8 s with chunk_size / overlap / headline-summary detail (tool did not fire: the retrieved chunks already carried it, per the tool rule); BEHAVIOURAL 0.95 `answered` 12.9 s with Story 4 in STAR shape; LOGISTICAL 0.95 `deflected` 8.9 s with the email redirect. Every turn accepted on attempt 1. Classifier 0.9 to 1.5 s.
+- Space `RUNNING`, HTTP 200, two deploy commits on the Space (`297951c8` DB, `b84966f0` code). Browser smoke test (runbook steps 1 to 11) pending the operator.
+
+### Outstanding
+
+1. **Browser smoke test** by the operator.
+2. **#55**: `gpt-4.1` and `gpt-4.1-mini` shut down 2027-01-14. Do in December 2026.
+3. **#56**: on-call routing regression.
+4. **21 orphan HNSW segment directories** in `data/preprocessed_db/` (one per past ingest; only `4ecbf5a9-…` is live per `chroma.sqlite3`). About 26 MB uploaded to the Space on every deploy for nothing. Today's LFS error hit the live segment, so the orphans are not its cause. Not deleted this session; a clean rebuild of the folder before the next deploy would shrink the upload.
+5. Carried from Session 66: `MAINTENANCE.md` and the runbook still print `uv run pytest`; the hobby-project counting convention is undocumented; corpus questions with no defensible branch now cost flags on C019 as well.
+
+---
+
 ## Session 66 (2026-08-19) — MTG Deck Optimisation Engine added to the KB; batched deploy of three accumulated content changes.
 
 **Status:** Observe-mode content change. A new personal MTG project (`deck-optimisation-engine`, public, MIT) was added as a small KB entry, then deployed together with the two KB changes that had been sitting undeployed since Aug 5 and Aug 7 (Advanced RAG course `3ec1d24`, Evaluating AI Agents course `51253b4`). Full runbook run: re-ingest → retrieval sanity → canary `+N` → commit → push → deploy → live verification. Suite at **622 passing, 1 skipped**. No phase reopens.

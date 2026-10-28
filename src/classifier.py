@@ -1,6 +1,6 @@
 """Branch classifier (ADR-0003).
 
-Routes each turn to a Branch by calling gpt-4.1-nano with the last 2 turns of
+Routes each turn to a Branch by calling gpt-4.1-mini with the last 2 turns of
 conversation history plus the current question. Returns multi-label structured
 output (`{labels, confidence}`); the pipeline picks `labels[0]` as the primary
 branch and may merge `labels[:2]` for multi-branch context composition.
@@ -14,10 +14,13 @@ from tenacity import retry
 
 from _retry_policy import DEFAULT_RETRY, DEFAULT_STOP, DEFAULT_WAIT
 
-MODEL = "openai/gpt-4.1-nano"
+MODEL = "openai/gpt-4.1-mini"
 CLASSIFIER_HISTORY_WINDOW = 2
 CLASSIFIER_CONFIDENCE_THRESHOLD = 0.5
-# Nano + small prompt + structured output — generous tail of ~30s, 60s timeout.
+# Mini + small prompt + structured output — generous tail of ~30s, 60s timeout.
+# gpt-4.1-nano was retired by OpenAI on 2026-10-23; gpt-4.1-mini is the same-family
+# replacement so routing stays comparable with the frozen canary baseline (#54).
+# Both gpt-4.1 and gpt-4.1-mini are scheduled for shutdown on 2027-01-14.
 REQUEST_TIMEOUT_S = 60
 
 SYSTEM_PROMPT = """\

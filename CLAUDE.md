@@ -38,7 +38,7 @@ A conversational agent representing Alejandro de la Fuente professionally — an
 User query
     │
     ▼
-Classifier (gpt-4.1-nano)
+Classifier (gpt-4.1-mini)
     │  picks Branch: GAP | BEHAVIOURAL | TECHNICAL | GENERIC | LOGISTICAL
     ▼
 Branch composer

@@ -22,7 +22,7 @@ DB_PATH = str(Path(__file__).parent.parent / "data" / "preprocessed_db")
 COLLECTION = "digital_twin"
 EMBED_MODEL = "text-embedding-3-large"
 MODEL = "openai/gpt-4.1"
-REWRITE_MODEL = "openai/gpt-4.1-nano"
+REWRITE_MODEL = "openai/gpt-4.1-mini"
 RETRIEVAL_K = 20
 FINAL_K = 10
 

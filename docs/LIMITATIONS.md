@@ -114,7 +114,7 @@ The soft conciseness rule (`concise_disclosure`, shipped #25) introduces a drill
 
 1. ~~A confidence drop that flips routing in a way that misroutes the answer~~ — **fired Session 26; classifier prompt sharpened as small fix.**
 2. The Session 26 fix doesn't hold — same probe shape mis-routes again post-prompt-update in R3 or live observation.
-3. A new probe shape mis-routes in a different direction (e.g., GAP-shape probe routing to TECHNICAL persistently).
+3. A new probe shape mis-routes in a different direction (e.g., GAP-shape probe routing to TECHNICAL persistently). **Fired 2026-10-28:** after the `gpt-4.1-mini` swap ([#54](https://github.com/AlejandroFuentePinero/digital-twin/issues/54)), canary C040 ("Do you have on-call experience in production?") routes BEHAVIOURAL 3/3 where nano routed GAP 3/3 on every prior run, and the answer degrades from the calibrated gap shape to the bare gap phrase. One question of 50; tracked in [#56](https://github.com/AlejandroFuentePinero/digital-twin/issues/56), not patched in-session.
 
 **Action when 2 or 3 fires:** consider broader classifier-prompt restructuring OR a deterministic override layer in pipeline (last-resort — would reintroduce keyword brittleness routing was supposed to avoid). Tracking is via Sentinel's per-branch routing aggregation (`branch_distribution` in the Health Overview, plus the Failure Feed branch filter).
 
@@ -629,6 +629,30 @@ Each branch's composed system prompt loads only that branch's `profile_sections`
 - **Heavier still:** modify `pipeline.py` to detect cross-branch conversation history and selectively inject relevant `profile_sections` from prior-turn branches into the current guardrail prompt. Overkill for portfolio scope.
 
 **Companion observability:** Sentinel's Failure Feed surfaces refused-then-answered-on-retry sessions (filter by event_type=refused + look for same question_id within 5 minutes). The shape isn't currently tracked as its own metric; if it becomes a recurring pattern, add a `cross_branch_consistency_misfire_rate` derived metric.
+
+---
+
+### O9: Provider model retirement takes the pipeline down with nothing inside the system noticing
+
+**Status:** Observed (production incident, 2026-10-23 to 2026-10-28). Fixed in [#54](https://github.com/AlejandroFuentePinero/digital-twin/issues/54); residual risk open until [#55](https://github.com/AlejandroFuentePinero/digital-twin/issues/55).
+
+OpenAI retired `gpt-4.1-nano` on 2026-10-23. The classifier called it on every turn from `pipeline.py`, outside the per-attempt retry block, so the 404 `model_not_found` left `Pipeline.run`, was caught by the defence-in-depth handler in `app.py`, and every visitor saw an error message for five days. Nothing in the system noticed. The Sentinel writer-health panel reads log writes, and a turn that fails before the log record is built writes nothing. The monthly canary is operator-driven and had not run since August. The outage was found by accident on 2026-10-28 while re-ingesting a content batch: `ingest.py` enriches chunks with the same model and failed with the same 404.
+
+Four call sites shared the model: the classifier, query rewriting (`retrieval.py`), chunk enrichment (`ingest.py`) and the gap clusterer (`cluster_gaps.py`). The `tenacity` retry policy treats a 404 like any other API error, which only delays the failure.
+
+**Fix shipped (#54):** `gpt-4.1-mini` at all four sites. Same family and same prompts, so the frozen canary baseline stays comparable; the trajectory point is triaged in `DECISIONS.md` Session 67. OpenAI's suggested replacement (`gpt-5.6-luna`) was not taken because moving the classifier to a new family while fixing an outage would change routing and the baseline at the same time.
+
+**Residual risk:** `gpt-4.1` and `gpt-4.1-mini` are scheduled for shutdown on 2027-01-14 (#55). The guardrail model (`claude-sonnet-4-6`) and the embedding model (`text-embedding-3-large`) have their own deprecation schedules on the providers' pages. No code path reads any of those pages, and no startup check probes the models the app is about to call.
+
+**Trip-wires (any one triggers action):**
+
+1. A 404 `model_not_found` or a "model has been deprecated" error from any stage, seen in Space logs, a canary run, an ingest or an eval run. Treat it as an outage, not a transient.
+2. A model named in `src/` appears on a provider deprecations page with a shutdown date inside the next 90 days.
+3. Sentinel shows zero live records for 7+ days while the portfolio site is up. A failure before the log write has exactly this shape.
+
+**Action when a trip-wire fires:** open an outage ticket in the shape of #54. Prefer a same-family swap first if the provider offers one, and keep any cross-family migration as its own ticket with an eval run and a baseline refreeze. The quarterly check in `MAINTENANCE.md` reads the deprecations pages; do not wait for it if trip-wire 1 fires.
+
+**Companion observability:** none today. A startup probe (one cheap call per model at app launch, failing loudly in the Space build log) would move trip-wire 1 from a user-visible failure to a build failure. Not built in #54: the system is in observe-mode and #55 exercises the same path within three months, so decide then whether the probe earns its place.
 
 ---
 

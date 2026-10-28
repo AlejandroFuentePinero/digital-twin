@@ -39,7 +39,7 @@
     "id": "C005",
     "question": "How does this Digital Twin classify questions?",
     "expected_outcome": "answered_with_substance",
-    "expected_keywords": ["classifier", "branches", "gpt-4.1-nano"],
+    "expected_keywords": ["classifier", "branches", "gpt-4.1-mini"],
     "must_not_appear": [],
     "expected_chunk_sources": ["projects_ai_flagship.md"],
     "category": "branch_routing_technical_named"

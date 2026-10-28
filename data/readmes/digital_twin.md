@@ -14,7 +14,7 @@ The deliberate framing: a single-prompt chatbot gives every recruiter the same s
 A classify-then-route pipeline (see [ADR-0003](https://github.com/AlejandroFuentePinero/digital-twin/blob/main/docs/adr/0003-classify-then-route-orchestration.md)). One question, five concrete stages, each with its own model and prompt.
 
 ### 1. Classifier
-`gpt-4.1-nano` returns `{labels, confidence}`. Sees the last 2 conversation turns plus the current question. Defaults to `GENERIC` on low confidence; multi-label allowed up to 2 labels. ~$0.0001 per call, ~200–400 ms added per turn.
+`gpt-4.1-mini` returns `{labels, confidence}`. Sees the last 2 conversation turns plus the current question. Defaults to `GENERIC` on low confidence; multi-label allowed up to 2 labels. ~$0.0004 per call.
 
 ### 2. Branch composer
 Selects from five branches: `GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGISTICAL`. Each branch declares which `profile.md` sections to load (identity, gap_inventory, personal_stories, etc.) and which rules apply (calibration ladder, deflection, tool access). Sections and rules dereference shared constants, so the **same composer call drives both the generator and the guardrail** — eliminating the most common cause of guardrail-loops in retry pipelines, where writer and judge run on subtly different specs.

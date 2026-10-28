@@ -32,6 +32,7 @@ This file is the entry point when re-engaging. Read this before opening any othe
   ```
 - [ ] **Audit content for stale tense / dates** — walk `data/profile.md` + `data/knowledge_base/*.md` for "currently" / "present" / "now" references that no longer match reality (role changes, completed courses, new projects).
 - [ ] **Audit canary corpus for KB drift** — if KB rewrites changed >20% of section content since the last audit, walk `data/canaries/corpus.json` line-by-line; replace questions whose grounding was removed; add questions for new flagship content. (`LIMITATIONS::P13`.)
+- [ ] **Check the provider deprecation pages for every model named in `src/`** (OpenAI: <https://platform.openai.com/docs/deprecations>; Anthropic's model deprecations page for the guardrail). A shutdown date inside the next 90 days opens a migration ticket. (`LIMITATIONS::O9`: the 2026-10-23 `gpt-4.1-nano` retirement took production down for five days with nothing in the system noticing.)
 - [ ] **Review watch-items against accumulated traffic** — see `docs/LIMITATIONS.md`. Specifically `P8` (initial-drill tool firing) and `O8` (guardrail cross-branch evaluation gap). If trip-wire conditions met, convert to fix-candidate; otherwise leave dormant for another quarter.
 
 ### Annually

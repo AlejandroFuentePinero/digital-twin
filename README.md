@@ -58,7 +58,7 @@ flowchart TD
 
 **Key ideas:**
 
-- **Classify-then-route.** A small, cheap model (`gpt-4.1-nano`) labels each question. Different question types load different rules and profile sections — a behavioural question needs personal-stories context; a technical question needs transferable-skill framing and the ability to fetch project docs.
+- **Classify-then-route.** A small, cheap model (`gpt-4.1-mini`) labels each question. Different question types load different rules and profile sections — a behavioural question needs personal-stories context; a technical question needs transferable-skill framing and the ability to fetch project docs.
 - **Frame vs Substance.** A small always-on profile (~2 k tokens) supplies identity and rules ("Frame"); a larger knowledge base is retrieved on demand ("Substance"). Frame stays consistent; Substance scales without bloating context.
 - **Model-as-judge guardrail.** A second model from a different family reviews each answer against the same context the generator saw. Three rejection-feedback retries before fallback.
 - **Tool use, scoped.** Three of five branches (GENERIC, GAP, TECHNICAL) can fetch project READMEs via a registered `fetch_project_readme` tool. LOGISTICAL and BEHAVIOURAL don't have access — the model can't invent the tool where it isn't wired.
@@ -225,7 +225,7 @@ digital-twin/
 ├── src/
 │   ├── app.py                  # Gradio chat (entry point)
 │   ├── pipeline.py             # Per-turn orchestrator
-│   ├── classifier.py           # Question routing (gpt-4.1-nano)
+│   ├── classifier.py           # Question routing (gpt-4.1-mini)
 │   ├── generator.py            # Answer generation (gpt-4.1)
 │   ├── guardrail.py            # Quality check (Claude Sonnet 4.6)
 │   ├── retrieval.py            # Vector search (ChromaDB)
@@ -288,7 +288,7 @@ The system was redesigned in 2026-04. Three short ADRs capture the load-bearing 
 
 ## Tech stack
 
-- **Models:** `gpt-4.1-nano` (classifier), `gpt-4.1` (generator), `claude-sonnet-4-6` (guardrail), `text-embedding-3-large` (retrieval).
+- **Models:** `gpt-4.1-mini` (classifier), `gpt-4.1` (generator), `claude-sonnet-4-6` (guardrail), `text-embedding-3-large` (retrieval).
 - **LLM gateway:** [LiteLLM](https://github.com/BerriAI/litellm) — single client across providers.
 - **Vector store:** [ChromaDB](https://www.trychroma.com/) — local persistent collection.
 - **UI:** [Gradio](https://gradio.app/) 5.x with `gr.Blocks`, `gr.Chatbot`, custom CSS theme.

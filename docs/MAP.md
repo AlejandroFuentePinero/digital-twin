@@ -33,7 +33,7 @@ flowchart TD
   classDef future fill:#cbd5e1,stroke:#64748b,color:#1f2937,stroke-width:2px,stroke-dasharray:5 4
 
   USER([User question + history]):::io
-  USER --> CLASSIFY["Classifier — gpt-4.1-nano<br/>last 2 turns + question<br/>multi-label + confidence"]:::llm
+  USER --> CLASSIFY["Classifier — gpt-4.1-mini<br/>last 2 turns + question<br/>multi-label + confidence"]:::llm
   CLASSIFY --> CONF{"confidence &ge; 0.5?"}:::decision
   CONF -->|no| GENFALL["override labels = GENERIC"]:::pure
   CONF -->|yes| FILTER["filter labels[:2] to<br/>known REGISTRY branches"]:::pure

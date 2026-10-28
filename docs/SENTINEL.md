@@ -208,7 +208,7 @@ Per-stage latency split surfaces *which stage* is slow. Total alone hides this �
 
 **Display (Session 40):** each per-stage row renders as `p50 | p95 | share` with the column labels rendered once in the section caption above the rows (`each cell: p50 | p95 | share of total p95`). `share = stage_p95 / total_p95` — the stage's contribution to the headline tail value. Stage shares can sum to >100% because `total_p95` is the 95th percentile of per-record totals, not the sum of per-stage 95th percentiles; read shares as "of the headline tail, this stage contributes ~X%" rather than as a strict accounting partition.
 
-- **`classifier`** — typical p50 1s / p95 ≈ 1.7s; share ≈ 7%. Stable; gpt-4.1-nano cached.
+- **`classifier`** — typical p50 1s / p95 ≈ 1.4s on gpt-4.1-mini (canary `run-20261028-124142-1285f4`); share ≈ 7%. Before its 2026-10-23 retirement, gpt-4.1-nano ran p50 0.65s / p95 1.1s (August 2026 canary runs).
 - **`retrieval`** — sub-100ms; share ≈ 1%. ChromaDB local read. Spikes signal embedding cache miss or query-rewriter hiccup.
 - **`generation`** — typical p50 3.5s / p95 ≈ 10s; share ≈ 30%. Spikes correlate with retry rounds.
 - **`guardrail`** — typical p50 5s / p95 ≈ 12s; share ≈ 42%. Sonnet's slower than the gpt-4.1 generator — the dominant tail driver in the current pipeline.
@@ -472,7 +472,7 @@ When a metric fires, here's where to look and where the fix likely lives.
 1. **Check per-stage latencies** — which stage is the new bottleneck?
 2. If `generation`: check OpenAI status page (provider-side); check `tenacity` retry counts in logs.
 3. If `guardrail`: same. Sonnet API can degrade.
-4. If `classifier`: gpt-4.1-nano providing slow responses; consider model switch.
+4. If `classifier`: gpt-4.1-mini providing slow responses; consider model switch. A 404 `model_not_found` from any stage means the provider retired the model (see `LIMITATIONS::O9`).
 5. If all stages up uniformly: network — check local connectivity, then provider status.
 
 ### `technical_tool_call_rate` drop

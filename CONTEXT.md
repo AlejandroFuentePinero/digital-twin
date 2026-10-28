@@ -61,7 +61,7 @@ A local Gradio app (`src/sentinel.py`) for human review of system behaviour. Rea
 One of five orchestration paths the agent selects per turn: `GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGISTICAL`. Each branch loads its own subset of `profile.md` sections, sets its own `FINAL_K` for retrieval, exposes its own tools (`fetch_project_readme` is wired into `GENERIC`, `GAP`, and `TECHNICAL` per `branches.REGISTRY`; `LOGISTICAL` and `BEHAVIOURAL` are tool-free), and applies its own rule set in the system prompt. Selected by the **Classifier**.
 
 **Classifier**:
-A cheap LLM call (`gpt-4.1-nano`) that takes the last 2 turns plus the current question and returns `{labels, confidence}`. Single label → that branch; up to 2 labels → composition takes the union of needed sections; low confidence → defaults to GENERIC. Re-runs every turn — topic switches mid-session are handled naturally.
+A cheap LLM call (`gpt-4.1-mini`) that takes the last 2 turns plus the current question and returns `{labels, confidence}`. Single label → that branch; up to 2 labels → composition takes the union of needed sections; low confidence → defaults to GENERIC. Re-runs every turn — topic switches mid-session are handled naturally.
 
 **Tool registry**:
 A JSON file (`data/readmes/registry.json`) mapping project keys to README paths and metadata. The `fetch_project_readme` tool's valid project enum is built from this registry at startup. Single source of truth — adding a project means editing one JSON entry and dropping one Markdown file. A test asserts registry entries and disk contents stay in sync.
