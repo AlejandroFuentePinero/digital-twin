@@ -117,11 +117,11 @@ uv run python src/sentinel.py                  # Sentinel against prod (HF env r
 uv run python src/canary_runner.py --replicates 3                     # +N trajectory run
 uv run python src/canary_runner.py --replicates 3 --freeze-baseline   # promote latest run to baseline (operator decision)
 uv run python eval/run_eval.py --tag <tag>     # full eval
+uv run python src/startup_probe.py             # one call per configured model; the same check runs at Space start (#57)
 
 # === Deploy ===
-uv run python scripts/deploy_to_space.py       # uploads working tree to the Space
-# If preprocessed_db gets filtered by .gitignore, follow with the targeted upload
-# from docs/deployment-runbook.md.
+uv run python scripts/deploy_to_space.py       # uploads working tree incl. data/preprocessed_db/; deletes store
+                                               # files the Space has that the tree lacks (#58)
 ```
 
 ---

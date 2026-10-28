@@ -5,6 +5,35 @@
 
 ---
 
+## Session 69 (2026-10-29): startup model probe (#57) and a clean vector store with stale-file deletion on deploy (#58).
+
+**Status:** both tickets implemented test-first the same day #59 closed; deploy pending the operator running the deploy script. Suite at **629 passing, 1 skipped** (7 new). Observe-mode preserved: no per-turn pipeline code changed, no canary run.
+
+### What shipped
+
+- `src/startup_probe.py` with `tests/test_startup_probe.py`. `app.py` runs it under the main guard before `demo.launch()`: seven minimal calls, one per configured model and stage (classifier, query rewrite, rerank, generator plain, generator with `tools=`, guardrail, embeddings), read from the stage modules' constants. A `NotFoundError` or any exception that is not a provider answer raises `StartupProbeError` listing every failing stage and model; the container exits and the Space build goes red. Timeouts, rate limits and 5xx are printed and skipped. Verified live against the current providers: seven `ok` lines.
+- `tools.TOOL_MODEL` names the tool loop's model so the probe reads it rather than a copy of the string.
+- `scripts/deploy_to_space.py` passes `delete_patterns=["data/preprocessed_db/*"]`, so store files the Space has but the working tree lacks are removed in the deploy commit, and refuses to run when the local store is missing (the deletion would otherwise wipe the Space's store).
+- Local vector store rebuilt from empty: one segment directory and 110 chunks, down from 23 directories. The Space tree (93 store files across 23 directories) catches up on the next deploy.
+- Docs: `pipeline_diagram.mmd` and `MAP.md` carry the probe; `LIMITATIONS::O9` status, trip-wire 1 and companion observability updated; runbook pre-flight gained the single-segment check and the probe run, the deploy section now describes the one-step upload with deletion, and the build verification lists `StartupProbeError`; `MAINTENANCE.md` quick reference; `CONTEXT.md` glossary entry "Startup probe".
+
+### Decisions
+
+1. **The probe runs under `__main__`, not at import.** `tests/test_app_session_state.py` imports `app`; a probe at import time would make real provider calls from the test suite, which `TESTING.md` forbids. The Space runs `python src/app.py`, so the guard holds there.
+2. **Two classes of failure block startup: a 404 and any non-provider exception.** The two outages this week were exactly those (a retired model in #54, an `ImportError` on LiteLLM's tool path in #59), and both are deterministic: they recur on every turn. Everything else a provider can return (timeout, 429, 5xx, auth) is handled per turn by the retry policy already, so blocking cold start on it would add flakiness for no coverage.
+3. **The tool-enabled probe uses a no-op tool schema, not the real registry.** The #59 fault is in LiteLLM's code path and fires on any non-empty `tools=`; the schema content is irrelevant, and this keeps the probe free of `ToolRegistry` and the readme files.
+4. **No JSON artefact for the Sentinel health panel.** The ticket allowed skipping it for a first cut. The build log is the only reader today; add the artefact when a second one appears.
+5. **Re-ingest without a canary.** Rebuilding from empty regenerated the enrichment headlines (the enrichment model is not deterministic), so the retrieval text shifted slightly. No pipeline code changed and the ticket listed no canary; the risk is stated here rather than measured.
+6. **`delete_patterns` over a one-off manual delete on the Space.** One line, and it keeps the Space tree matching the working tree on every future ingest instead of once.
+
+### Outstanding
+
+1. Deploy and verify: seven `[startup_probe] ok` lines in the Space build log, Space tree at 5 store files, one question per branch.
+2. The probe covers the Space only. `ingest.py`, `canary_runner.py` and the eval still fail on their own first call to a retired model; acceptable while all three are operator-driven and print the error.
+3. Carried: #53 (canary noise, decide before #55), #55 (January migration, December 2026), #56 (on-call routing, watching), and the Session 66 leftovers.
+
+---
+
 ## Session 68 (2026-10-29): the #54 redeploy broke every tool-enabled branch through dependency drift; requirements pinned and redeployed.
 
 **Status:** Production incident fixed the same morning it was reported. Issue [#59](https://github.com/AlejandroFuentePinero/digital-twin/issues/59) implemented end to end, browser smoke test included. Suite at **622 passing, 1 skipped**, unchanged: no source file moved. Observe-mode preserved.

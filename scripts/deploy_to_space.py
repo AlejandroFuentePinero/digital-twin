@@ -30,6 +30,7 @@ from huggingface_hub import HfApi
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SPACE_ID = "Alejandrofupi/digital-twin"
+DB_DIR = "data/preprocessed_db"
 
 # Files / directories NOT to upload. Mirrors .gitignore plus the Space's
 # operational shape: no .env (secrets live in Space config), no virtualenv,
@@ -75,6 +76,12 @@ def main() -> int:
         print("ERROR: HF_TOKEN not set in .env", file=sys.stderr)
         return 1
 
+    if not (REPO_ROOT / DB_DIR / "chroma.sqlite3").exists():
+        # delete_patterns below would wipe the Space's store if the local one
+        # is missing; refuse rather than deploy an app with no vector store.
+        print(f"ERROR: {DB_DIR}/chroma.sqlite3 missing; run `uv run python src/ingest.py`", file=sys.stderr)
+        return 1
+
     api = HfApi(token=token)
     print(f"Uploading working tree at {REPO_ROOT} -> {SPACE_ID} (Space)...")
     api.upload_folder(
@@ -82,6 +89,11 @@ def main() -> int:
         repo_id=SPACE_ID,
         repo_type="space",
         ignore_patterns=IGNORE_PATTERNS,
+        # Drop store files the Space has that the working tree no longer does.
+        # ingest.py recreates the collection under a new segment UUID, so without
+        # this every deploy leaves the previous HNSW directory behind (#58).
+        # Files present locally are uploaded, not deleted.
+        delete_patterns=[f"{DB_DIR}/*"],
         commit_message=" ".join(sys.argv[1:]) or "Deploy: sync working tree",
     )
     print(f"Done. Watch the build at https://huggingface.co/spaces/{SPACE_ID}")

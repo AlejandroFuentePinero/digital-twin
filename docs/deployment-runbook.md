@@ -16,6 +16,8 @@ Before pushing to the Space remote:
 - [x] `.env` carries `OPENAI_API_KEY` + `ANTHROPIC_API_KEY` + `HF_TOKEN` (write scope on `Alejandrofupi/digital-twin-logs`).
 - [x] `data/profile.md` reads as Alejandro would write it — production traffic sees this verbatim.
 - [x] `README.md` frontmatter at the top of the file (between `---` fences) lists `sdk_version` matching a real Gradio release.
+- [ ] `data/preprocessed_db/` holds exactly one segment directory next to `chroma.sqlite3` (`ls data/preprocessed_db`). More than one means orphaned HNSW directories from past ingests ([#58](https://github.com/AlejandroFuentePinero/digital-twin/issues/58)): delete the folder and re-ingest. The deploy script deletes store files the Space has that the working tree lacks, so what you see locally is what the Space gets.
+- [ ] `uv run python src/startup_probe.py` prints `ok` for every configured model. The same probe runs at Space start and fails the build on a missing model or a broken tool path ([#57](https://github.com/AlejandroFuentePinero/digital-twin/issues/57)); running it here catches the problem before the upload.
 - [x] `requirements.txt` pins match `uv.lock` for every top-level dependency (`LIMITATIONS::O10`). The Space rebuilds its dependency layer whenever the Hub's cache expires, so a floor-only pin can change every installed version on a deploy that touched none of them. After the build, confirm the `pip install` layer either reads `CACHED` or installed the pinned `litellm`.
 
 > **Last deploy:** 2026-10-29 (second outage fix in two days, no canary; [#59](https://github.com/AlejandroFuentePinero/digital-twin/issues/59)). Trigger: the operator found every GENERIC, GAP and TECHNICAL question returning the canned refusal the morning after the #54 deploy. Cause: that deploy rebuilt the Space's dependency layer against floor-only pins and installed LiteLLM 1.106.x, whose tool-call path raises `ImportError: cannot import name 'CacheableResult' from 'mcp.types'` against the `mcp 1.10.1` the Space build installs through `gradio[oauth,mcp]`. Fix: `requirements.txt` pinned to the `uv.lock` versions (`af42a9e`). No pipeline code changed, so no canary: the Space now runs the exact package set the canary of 2026-10-28 ran on. Local suite 622 passed, 1 skipped. Build log for Space commit `3d9e7a0c` shows the `pip install` layer rebuilt and `litellm-1.83.0`, `openai-2.32.0`, `chromadb-1.5.8`, `mcp-1.10.1` installed. Space stage `RUNNING` on `cpu-basic`. API smoke test through `gradio_client` (see the correction below on `/new_session`): GENERIC 13.3 s, BEHAVIOURAL 45.9 s, TECHNICAL 29.7 s, all three real answers. Operator browser smoke test the same morning (GAP, LOGISTICAL, GENERIC): all three answered. Note for the next operator: this deploy had to be started by the operator with `! uv run python scripts/deploy_to_space.py` from the session prompt; the agent's permission layer refuses to run the deploy script itself. See `DECISIONS.md` Session 68 and `LIMITATIONS::O10`. Uncheck the gates above before the next deploy and re-run.
@@ -30,7 +32,7 @@ Before pushing to the Space remote:
 >
 > **Sharp edge found during this deploy:** verifying via `gradio_client` does **not** work if you call `/respond` straight away. The `gr.State` inputs (`session_id`, `SessionState`) are unset, so `Pipeline.run` raises `TypeError: 'NoneType' object is not subscriptable` and every answer comes back as the canned refusal floor. This looks exactly like a broken deploy and is not one. **Correction (2026-10-29):** it works when the same `Client` first calls `predict(api_name="/new_session")`, which mints the state for that client session; `/respond_5` then runs the real pipeline and `/lambda_8` returns the chat history with the answer. That was how #59 was reproduced from the terminal. The browser smoke test stays the operator's.
 >
-> **Note on the two-step upload:** the second targeted `data/preprocessed_db/` upload reported "No files have been modified since last commit" — `upload_folder` at `folder_path=.` carried the DB on its own. Keep the second step as a no-op safety net rather than assuming it is always needed.
+> **Note on the two-step upload (historical):** the deploy was once documented as two uploads, working tree then store. The store travelled with the working tree every time, and since #58 (2026-10-29) the script is one upload with `delete_patterns` on the store folder; the second step is gone.
 
 ---
 
@@ -64,26 +66,17 @@ uv run python src/ingest.py
 
 # 2. Upload the working tree to the Space. Reads HF_TOKEN from .env.
 #    IGNORE_PATTERNS in the script mirrors .gitignore + skips internal-only docs.
-#    NOTE: huggingface_hub.upload_folder respects the repo .gitignore by default,
-#    which would exclude data/preprocessed_db/ — so the script does a second
-#    targeted upload pointing folder_path directly at the DB folder.
+#    data/preprocessed_db/ is uploaded with the rest (the Space's git log confirms
+#    it on every deploy so far) and the script passes
+#    delete_patterns=["data/preprocessed_db/*"] so store files the Space has but
+#    the working tree lacks are removed in the same commit (#58). The script
+#    refuses to run if data/preprocessed_db/chroma.sqlite3 is missing locally.
 uv run python scripts/deploy_to_space.py
-uv run python -c "
-from dotenv import load_dotenv; load_dotenv('.env', override=True)
-import os
-from huggingface_hub import HfApi
-HfApi(token=os.environ['HF_TOKEN']).upload_folder(
-    folder_path='data/preprocessed_db',
-    path_in_repo='data/preprocessed_db',
-    repo_id='Alejandrofupi/digital-twin',
-    repo_type='space',
-    commit_message='Deploy: include vector store',
-)"
 ```
 
-The two-step shape (everything-except-DB, then DB) is necessary because `upload_folder` with `folder_path=.` honours the repo-root `.gitignore` and silently drops `data/preprocessed_db/`. Pointing `folder_path` at the DB directory itself bypasses the filter — there's no `.gitignore` inside the DB folder, so all files upload.
+If a deploy ever lands without the store (the `chromadb` failure mode under "Verify the build"), upload it directly: `HfApi().upload_folder(folder_path='data/preprocessed_db', path_in_repo='data/preprocessed_db', repo_id='Alejandrofupi/digital-twin', repo_type='space')`. There is no `.gitignore` inside the DB folder, so pointing `folder_path` at it uploads every file.
 
-**Alternative (not recommended for first deploy):** drop the second upload and run `python src/ingest.py` as part of the Space's startup. Adds ~30 s + a few cents of embedding cost to every cold start; only worthwhile if the KB churns more than weekly.
+**Alternative (not recommended):** stop uploading the store and run `python src/ingest.py` as part of the Space's startup. Adds ~30 s + a few cents of embedding cost to every cold start; only worthwhile if the KB churns more than weekly.
 
 ---
 
@@ -98,8 +91,10 @@ After `scripts/deploy_to_space.py` returns:
    - **No** Python tracebacks. The most likely failure modes are:
      - `RuntimeError: ToolRegistry: missing readme file …` — registry vs disk drift; check `data/readmes/registry.json`.
      - `RuntimeError: DIGITAL_TWIN_LOG_BACKEND=hf requires HF_DATASET_REPO env var` — secret missing; fix in Settings.
-     - `chromadb` errors on the first query — the deploy commit didn't include `data/preprocessed_db/`; redeploy with the force-add step.
+     - `chromadb` errors on the first query: the deploy commit didn't include `data/preprocessed_db/`; upload the store directly (see the Deploy section).
+     - `StartupProbeError: model probe failed; the app would fail on every turn:` followed by one line per failing stage: a configured model has been retired (`LIMITATIONS::O9`) or the LiteLLM tool-call path is broken on the Space (`LIMITATIONS::O10`). The build is meant to fail here; fix the model constant or the pin, do not bypass the probe. Expected on a healthy build: seven `[startup_probe] ok ...` lines before the Gradio launch line.
 3. Once the green **Running** badge shows, copy the Space URL — it's the input to the smoke test below.
+4. Confirm the Space's `data/preprocessed_db/` tree matches the local folder: one segment directory plus `chroma.sqlite3`, 5 files in all ([#58](https://github.com/AlejandroFuentePinero/digital-twin/issues/58)). `uv run python -c "from huggingface_hub import HfApi; print(sorted(f for f in HfApi().list_repo_files('Alejandrofupi/digital-twin', repo_type='space') if f.startswith('data/preprocessed_db/')))"`.
 
 ---
 
