@@ -1,16 +1,18 @@
 # HuggingFace Spaces installs from this file on build (#51, Phase 7 / slice 1).
-# Mirrors the top-level deps in pyproject.toml; Spaces resolves transitives.
-# Keep in sync with pyproject.toml when bumping versions — there is no
-# automated reconciliation between the two.
-anthropic>=0.49.0
-chromadb>=0.6.0
-gradio>=5.22.0
-huggingface-hub>=0.27.0
-litellm>=1.83.0
-matplotlib>=3.10.9
-numpy>=2.3.3
-openai>=1.68.2
-pydantic>=2.0
-python-dotenv>=1.0.1
-tenacity>=9.1.2
-tqdm>=4.67.0
+# Every line is pinned to the version in uv.lock so the Space runs the exact
+# set the test suite and the canary run on. Floors-only pins let the 2026-10-28
+# rebuild pull a LiteLLM whose tool-call path imported an MCP module the Space
+# did not have, and every tool-enabled branch refused (#59).
+# When bumping a dependency: `uv lock`, then copy the new version here.
+anthropic==0.69.0
+chromadb==1.5.8
+gradio==5.49.1
+huggingface-hub==0.35.3
+litellm==1.83.0
+matplotlib==3.10.9
+numpy==2.3.3
+openai==2.32.0
+pydantic==2.11.10
+python-dotenv==1.1.1
+tenacity==9.1.2
+tqdm==4.67.1
