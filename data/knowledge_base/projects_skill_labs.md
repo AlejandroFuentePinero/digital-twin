@@ -123,3 +123,19 @@ The tracking half of the Deck Optimisation Engine, split out in September 2026 i
 DuckDB store rebuilt from the disk cache on every run; a glossary-first `CONTEXT.md`; ADR 0001 records what four days of backfill established about the MTGO stream; 78 tests over committed payload fixtures.
 
 **Stack:** Python 3.12 · DuckDB · matplotlib · uv · pytest
+
+---
+
+## Finance Analytics
+**Source:** private repository (it runs on Alejandro's own financial data). No public deployment, no URL.
+
+A personal wealth analytics tool covering savings, shares and superannuation, built between July and October 2026 and in monthly live use since September 2026. It exists to answer one question: how far away is financial independence, and what should change to get there sooner. Alejandro runs it once a month on freshly exported bank, broker and super statements and acts on its output (savings rate, share allocation, personal super contributions). It is the one project he built outside a domain he knows from the inside, so the domain judgement is written down rather than assumed: 19 architecture decision records sit beside a glossary-first `CONTEXT.md`.
+
+**Design decisions worth knowing:**
+- **The independence date is a distribution, not a number.** Returns are resampled with a block bootstrap and the date is read at percentiles; the circularity of bootstrapping from the same history the plan is judged against is recorded as its own decision rather than hidden.
+- **No portfolio optimiser, by decision.** Target weights are four roles held for reasons, reviewed once a year by a named analytical skill, never an optimum re-fitted to recent returns.
+- **A raw archive with a rebuildable curated store.** Every source export is kept exactly as dropped, and everything the interface shows is derived from it and can be rebuilt, so a wrong rule is corrected at the source and re-run.
+- **Assumptions printed with their cost.** The spend estimate nobody can measure is decomposed into its lines, and what being wrong about it costs is printed beside it as a rate (years of independence date per thousand dollars a year), not as an interval the data cannot support.
+- **Australian tax modelled where it changes the decision:** marginal rate and the recurring ceiling read off the current employer, a running tax estimate projected off the super ledger, preserved capital drawn rather than assumed.
+
+**Stack:** Python 3.12 · pandas · NumPy · Plotly · Gradio · httpx · pytest (50 test files) · uv

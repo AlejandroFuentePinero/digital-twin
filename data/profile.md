@@ -51,17 +51,17 @@ Until May 2026 my professional appointments had all been academic or conservatio
 **2. DevOps and production operation at scale.**
 Specific gap: no production tenure with paying-customer traffic. Exposure level: **trained / familiar** (course-grounded, no on-call rotation, no Kubernetes or Terraform in production, no CI/CD beyond personal-project scope).
 *Broader skill — production engineering and deployment:* typed logging schemas, per-stage latency instrumentation, bounded retry loops, partner-test discipline, Modal serverless deploys, throughput-aware data pipelines (820k Amazon products into ChromaDB, decades of monitoring data parallelised in R and JAGS).
-*Active learning:* Ed Donner *AI Engineer Production Track: Deploy LLMs & Agents at Scale* (in progress) — applying patterns to my deployed projects.
+*Active learning:* no course in progress. The gap is closing through the Officeworks role, where I have shipped evaluation harnesses, data pipelines and agentic tooling into a large retailer's engineering practice since May 2026.
 
 **3. Cloud computing depth.**
 Specific gap: no production AWS deployments. Exposure level: **trained / familiar** (cert held, no production project).
 *Broader skill — cloud computing and deployment:* Modal (serverless GPU inference), HuggingFace Hub (datasets and model artefacts at scale), Groq async batch APIs, frontier-model production-leaning configurations.
-*Active learning:* AWS Cloud Practitioner certificate (achieved); Ed Donner *AI Engineer Production Track* (in progress) closing production-cloud depth.
+*Active learning:* AWS Cloud Practitioner certificate (achieved, 2026). No further cloud course in progress.
 
 **4. Front-end / full-stack web engineering.**
 Specific gap: no production frontends in React, Next, or other modern JS frameworks. Exposure level: **trained / familiar** (course-grounded, app-shipping habit via Python tools).
 *Broader skill — frontend development:* Gradio (Sentinel for this Digital Twin, LLM Engineering Lab live dashboard), Streamlit (Job Intelligence Engine), Shiny (R). The "users will see this and need to act on it" instinct is there.
-*Active learning:* Ed Donner *AI Engineer Production Track* (in progress) covers frontend integration alongside the Python-app shipping work.
+*Active learning:* none in progress. The gap stands as stated; the Python-app shipping habit is the evidence I have.
 
 **5. Deep learning proficiency at depth.**
 Specific gap: I have not implemented and trained deep neural networks across many real projects. Exposure level: **hands-on** (one strong applied project plus completed specialisations).
@@ -69,19 +69,13 @@ Specific gap: I have not implemented and trained deep neural networks across man
 
 ## active_learning
 
-Always-on summary of in-progress course content. Read as "actively learning, NOT acquired skills". Detail lives in the *Active Learning (In Progress)* KB chunk; this section is the deterministic summary that loads on every GAP turn.
+Always-on statement of what is and is not being actively studied. Loads on every GAP and TECHNICAL turn.
 
-**In-progress:** Ed Donner *AI Engineer Production Track: Deploy LLMs & Agents at Scale* — 4-week production-AI bootcamp covering RAG, agents, and MCP deployed to live, monitored production across AWS (deepest), Azure, GCP, and Vercel.
+**No course in progress (as of October 2026).** There is no curriculum whose keywords can be claimed at any level. In particular, nothing about an AWS production stack (Lambda, Bedrock, API Gateway, Aurora Serverless, SQS, SageMaker), Next.js or Vercel, Terraform, LangFuse, or multi-cloud deployment is evidenced anywhere in the knowledge base.
 
-**Curriculum keywords being learned (NOT acquired skills):**
-- **AWS production stack:** Lambda, Bedrock, API Gateway, S3, CloudFront, Route 53, Aurora Serverless, SQS, SageMaker, App Runner, AWS Agent Core.
-- **Frontend / full-stack:** Next.js, Vercel, JWT-authenticated frontends, Clerk.
-- **Multi-cloud:** Azure, GCP.
-- **Infrastructure as Code and CI/CD:** Terraform, GitHub Actions pipelines.
-- **Observability:** LangFuse.
-- **Production AI patterns:** RAG, agents, MCP at production scale.
+**What is closing the gaps instead:** the Officeworks role since May 2026 (evaluation harnesses, data pipelines and agentic tooling shipped inside a large retailer, described at capability level only, see the confidentiality bullet under logistics) and the AWS Cloud Practitioner certification (achieved, 2026).
 
-When a recruiter probes any of the keywords above, the honest framing is: *"I don't have hands-on production experience with [tool] yet — I'm actively building expertise through Ed Donner's AI Engineer Production Track, which covers [tool] in [the relevant week or context]."* Never claim "trained", "familiar with", "shipped", or "hands-on" for these keywords on the basis of this section alone.
+When a recruiter probes a tool that is not evidenced in the knowledge base, the honest framing is: *"I don't have hands-on experience with [tool]; the closest I have is [named evidence]."* Never claim "trained", "familiar with", "shipped", or "hands-on" without knowledge-base evidence.
 
 ## logistics
 

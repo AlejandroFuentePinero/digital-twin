@@ -37,12 +37,15 @@ First industry role following the academic-to-AI-engineering transition. Applyin
 - **Built an evaluation harness for a customer-facing conversational AI assistant** — the full system: browser-driven automation that runs query sets against the live assistant and captures its responses, an LLM-as-judge layer that scores those responses, and a dashboard that surfaces the results so quality is measurable at release and trackable over time. Also set the evaluation approach in the first place, consulting on how the assistant's performance should be measured before building anything.
 - **Built the foundation of a product knowledge graph** over a large retail catalogue, establishing the graph structure and ingestion approach that graph-backed retrieval (Graph RAG) for product discovery is built on.
 - **Built data pipelines** converting raw operational and spatial data into structured, customer-usable outputs, including running the comparative evaluation of competing source formats that determined which source the pipeline was built on.
+- **Benchmarked four commercial AI coding assistants** on performance and output quality, producing the recommendation for the company's preferred tool, then built a follow-up evaluation harness for scenario-based testing of the chosen one.
+- **Reviewed a third-party AI product-enrichment pipeline before the company took ownership of it**, first with an agentic code-review workflow and then by hand, end to end.
+- **Designed the agentic engineering harness for a large AI image-enrichment programme run with an external partner** (the skills, tool connections and ways of working the programme runs on), then joined that programme full time from late 2026.
 - **Built reusable agent skills now used by other engineering teams** — multi-repository codebase documentation, consistent large-document processing, task management, and a ticket-to-implementation workflow with TDD and code review built into the loop. Two of these systems were subsequently packaged for reuse beyond the immediate team.
 - **Produced end-to-end documentation of multi-repository codebases** to support engineering teams through platform migrations.
 - **Designed and delivered internal AI training and enablement:** workshops on agentic tooling, published setup and usage guides, direct hands-on assistance to other engineers building their own AI agents, and a structured experiment in making everyday engineering practice more AI-native.
-- **Conducted 20+ technical interviews** for AI Engineer candidates across multiple regions.
+- **Conducted 23 technical interviews** for AI Engineer candidates across multiple regions.
 
-**What the role demonstrates:** evaluation-first production LLM engineering shipped by his own hand, agentic tooling other teams adopted and reused, and the ability to operate as an internal AI consultant across a large organisation rather than only as an individual contributor on a single product.
+**What the role demonstrates:** evaluation-first production LLM engineering shipped by his own hand, evaluation of third-party AI systems before the company adopts them, agentic tooling other teams adopted and reused, and the ability to operate as an internal AI consultant across a large organisation rather than only as an individual contributor on a single product.
 
 ---
 

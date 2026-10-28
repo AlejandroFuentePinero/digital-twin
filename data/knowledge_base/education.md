@@ -147,40 +147,6 @@ Hands-on ability to design, package, and deploy reusable "skills" (instruction f
 
 ---
 
-## Active Learning (In Progress)
-
-**Read this section as: tools and platforms Alejandro is actively learning, NOT skills he has acquired or shipped in production.** Every keyword listed below is part of a course curriculum he is currently working through. None of these tools indicate hands-on production experience.
-
-When asked about any specific tool or platform listed in this section (e.g. Bedrock, Lambda, Aurora Serverless, Terraform, Next.js, Vercel, SageMaker, MCP, LangFuse, GitHub Actions CI/CD, etc.), the honest framing is:
-
-> "I don't have hands-on production experience with [tool] yet — I'm actively building expertise through Ed Donner's *AI Engineer Production Track* course, which covers [tool] in [the relevant week/context]."
-
-Never claim "trained", "familiar with", "shipped", or "hands-on" for any tool listed in this section alone. Acquired skills live in the **AI and LLM Engineering certifications**, **Machine Learning and Data Science certifications**, **SQL**, **Version Control**, and **Cloud** sections above.
-
-### AI Engineer Production Track: Deploy LLMs & Agents at Scale — Ed Donner
-
-**Status:** in progress — curriculum being studied. Skills below are course content, not acquired tenure. This course is the active-learning closer for the DevOps / cloud / frontend gaps named in the gap inventory.
-
-Production-grade deployment of LLMs and agents across Vercel, AWS, GCP, and Azure (deepest on AWS) — RAG, agents, and MCP taken to live, enterprise-grade, monitored production.
-
-**Curriculum being learned (week by week):**
-
-- **Week 1 — SaaS app live in production.** Next.js SaaS product on Vercel and AWS; AWS App Runner; Clerk for user management and subscriptions. Project: SaaS Healthcare App.
-- **Week 2 — AI platform engineering on AWS.** Serverless infrastructure: Lambda, Bedrock, API Gateway, S3, CloudFront, Route 53. Infrastructure as Code with Terraform. CI/CD pipelines with GitHub Actions for hands-free deployments and one-click promotions. Project: Digital Twin Mk II.
-- **Week 3 — GenAI in production across clouds.** Cybersecurity Analyst agent with MCP deployed to Azure and GCP. SageMaker inference. Data ingest to S3 vectors. Researcher Agent using OpenAI OSS models on Bedrock + MCP. Project: Cybersecurity Analyst.
-- **Week 4 — Multi-agent systems in production.** Multi-agent architecture on AWS: Aurora Serverless, Lambda, SQS. JWT-authenticated CloudFront frontends. LangFuse observability. AWS Agent Core (overview). Capstone: SaaS Financial Planner.
-
-**Topic coverage (in progress, not acquired):**
-- **Frontend / full-stack (curriculum):** Next.js, Vercel, JWT-authenticated frontends, CloudFront delivery, Clerk auth.
-- **AWS production stack (curriculum):** Lambda, App Runner, Bedrock, API Gateway, S3, CloudFront, Route 53, Aurora Serverless, SQS, SageMaker, AWS Agent Core.
-- **Multi-cloud (curriculum):** Azure and GCP deployments alongside AWS.
-- **Infrastructure as Code (curriculum):** Terraform.
-- **CI/CD (curriculum):** GitHub Actions pipelines; hands-free deployments; one-click promotions.
-- **Observability (curriculum):** LangFuse for agent traces and monitoring.
-- **Production AI patterns (curriculum):** RAG, agents, MCP at scale; secure, scalable, resilient architectures; cost monitoring; continuous delivery.
-
----
-
 ## Machine Learning and Data Science certifications
 
 ### Machine Learning Specialisation — DeepLearning.AI (Andrew Ng)
