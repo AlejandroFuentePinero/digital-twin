@@ -1,6 +1,6 @@
 {
-  "run_id": "run-20260505-132248-4aeb15",
-  "frozen_at": "2026-05-05T14:00:18.709685+00:00",
-  "frozen_git_sha": "4898d057363de946cba3ee4dc1158f38d1fb22fa",
-  "notes": ""
+  "run_id": "run-20261119-221912-d3a0a6",
+  "frozen_at": "2026-11-19T23:25:06.487113+00:00",
+  "frozen_git_sha": "d4d368664047f6d06f8464ff158ded11c2efa853",
+  "notes": "#55 refreeze: gpt-6 family (gpt-6.1-terra generator tier, gpt-6-luna classifier tier); the May 2026 gpt-4.1 baseline stopped being informative."
 }

@@ -7,7 +7,7 @@
 
 ## Session 71 (2026-11-20): gpt-4.1 / gpt-4.1-mini migration to the gpt-6 family (#55); C040 (#56) resolved by the classifier swap; the eval judge moved to gpt-6.2-sol with its prompt recalibrated.
 
-**Status:** pipeline and eval judge migrated, eval v8 and a 3-replicate canary run on the final code, not yet deployed. Suite at **642 passing, 1 skipped** (13 new).
+**Status:** pipeline and eval judge migrated, eval v8 and a 3-replicate canary run on the final code. Deployed 2026-11-20 (Space commit `d6f2315f`, five-branch API smoke passed, see the runbook); canary baseline refrozen to `run-20261119-221912-d3a0a6` at `d4d3686`. Suite at **642 passing, 1 skipped** (13 new).
 
 ### Model selection
 
