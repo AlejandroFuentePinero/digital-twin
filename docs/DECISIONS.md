@@ -5,9 +5,9 @@
 
 ---
 
-## Session 71 (2026-11-20): gpt-4.1 / gpt-4.1-mini migration to the gpt-6 family (#55); C040 (#56) resolved by the classifier swap; the eval judge stays on gpt-4.1.
+## Session 71 (2026-11-20): gpt-4.1 / gpt-4.1-mini migration to the gpt-6 family (#55); C040 (#56) resolved by the classifier swap; the eval judge moved to gpt-6.2-sol with its prompt recalibrated.
 
-**Status:** pipeline migrated, eval v8 and a 3-replicate canary run on the final code, not yet deployed. Suite at **640 passing, 1 skipped** (11 new). The eval judge is the one call still on `gpt-4.1` (shutdown 2027-01-14); see below.
+**Status:** pipeline and eval judge migrated, eval v8 and a 3-replicate canary run on the final code, not yet deployed. Suite at **642 passing, 1 skipped** (13 new).
 
 ### Model selection
 
@@ -34,17 +34,30 @@ A first run (`run-20261119-214421-99e82b`) is superseded: it showed five out-of-
 - **C040 on-call (#56): GAP 3/3 on both canary runs** (confidence 0.89 to 0.98) with the calibrated gap answer. Resolved by the classifier swap with no prompt change.
 - **Latency is a real cost.** Run p50 10.6 → 12.0 s, p95 17.9 → 21.6 s, inside Sentinel's healthy p95 ≤ 25 s. The retrieval stage (query rewrite on luna, rerank on terra) moved p50 2.6 → 4.1 s; classifier 0.9 / 1.1 → 1.1 / 1.6 s; generation p50 2.2 → 2.6 s. Zero refusals.
 
-### The eval judge stays on `gpt-4.1`
+### The eval judge: `gpt-6.2-sol`, prompt recalibrated
 
-Re-judging the v8 answers with candidate judges, same prompt: `gpt-6.2-sol` accuracy 2.55, `gpt-6.1-terra` (reasoning off) 2.91, against `gpt-4.1`'s 4.86 on identical answers, with 76 to 87 of 149 questions dropping two or more points. Both read the prompt's "invents details absent from both the question and the reference" literally and score true KB details beyond the short reference (a DOI, a year, a location) as inventions; `gpt-4.1` read it leniently. A drop-in swap would break the eval trajectory and reward short answers. The replacement is a judge-design decision (what the judge is allowed to treat as grounded), so `JUDGE_MODEL` stays on `gpt-4.1`, which serves until 2027-01-14. The next quarterly eval falls after that date.
+Re-judging the v8 answers with candidate judges on the old prompt: `gpt-6.2-sol` accuracy 2.55, `gpt-6.1-terra` (reasoning off) 2.91, against `gpt-4.1`'s 4.86 on identical answers, with 76 to 87 of 149 questions dropping two or more points. Both read "invents details absent from both the question and the reference" literally and scored true KB details beyond the short reference (a DOI, a year, a location) as inventions; `gpt-4.1` read it leniently. A drop-in swap would have broken the trajectory and rewarded short answers.
+
+The prompt now says details beyond the reference are not errors unless they contradict it or are implausible, and accuracy 1 is for a claim that contradicts the reference or is verifiably wrong. Re-judged with it, against `gpt-4.1` on the same answers (all four runs, per question, in `eval/results/judge_calibration_2026-11-20.json`):
+
+| Judge | accuracy | completeness | relevance | exact accuracy agreement |
+|---|---|---|---|---|
+| `gpt-4.1`, old prompt | 4.86 | 4.72 | 4.96 | |
+| `gpt-6.2-sol`, new prompt | 4.84 | 4.24 | 4.55 | 138/149 |
+| `gpt-6.1-terra`, new prompt | 4.89 | 4.36 | 4.84 | 138/149 |
+
+Accuracy calibrates. Of sol's 7 accuracy moves of two or more points, most read from the judge feedback as the new judge being right (for example "roost count unspecified" against a reference of 500+ roosts, scored 5 by `gpt-4.1`); one is a stale reference (AI-JIE's extractor is `gpt-5.4-mini` in the KB, GPT-4o-mini in `eval/tests.jsonl`). Completeness and relevance read stricter by about 0.4 to 0.5: **v9 onward carries that step against v8 and earlier**, so compare completeness and relevance only within the new-judge series. `gpt-6.2-sol` is chosen over terra by the runner's own rule (the judge should be stronger than the model under evaluation) and so the generator is not grading itself. It runs at its default reasoning: it rejects `none`, and the judge makes no tool calls.
+
+Trade accepted: the judge no longer flags an invented extra detail the reference is silent on. Reasoned, not measured: `gpt-4.1` scored the answers with extra details 5, so it was not catching them either; no test with planted inventions was run. A judge that also sees the retrieved KB context would catch them; not built.
 
 ### What changed
 
 1. Models: `classifier.py`, `retrieval.py` (`MODEL`, `REWRITE_MODEL`), `tools.py`, `generator.py`, `ingest.py`, `cluster_gaps.py`, `summarize_failures.py`; reasoning off at each via `openai_params.REASONING_OFF`.
 2. `startup_probe.py`: `max_completion_tokens=16` for every chat probe, reasoning off for OpenAI.
-3. `rules.contains_phrase` used by `event_classifier.py`, `app.py` and `eval/run_eval.py`. `pipeline.py`'s `knew_answer` write and `log_reader.py`'s pre-v4 normaliser keep the literal match: the first has no reader (TODO v5), the second reads only records written by gpt-4.1-family models.
-4. Re-ingest with luna enrichment (110 chunks). Self-description updated in the KB (`projects_ai_flagship.md`), `data/readmes/digital_twin.md`, canary C005 keywords, README, CLAUDE.md, CONTEXT.md, pipeline diagram and MAP, runbook, SENTINEL.md and the Sentinel tooltips.
-5. LIMITATIONS O9 (migration shipped, judge residual) and O5 trip-wire 3 (C040 resolved).
+3. Eval judge: `JUDGE_MODEL = "openai/gpt-6.2-sol"` and the recalibrated judge prompt (`eval/run_eval.py`).
+4. `rules.contains_phrase` used by `event_classifier.py`, `app.py` and `eval/run_eval.py`. `pipeline.py`'s `knew_answer` write and `log_reader.py`'s pre-v4 normaliser keep the literal match: the first has no reader (TODO v5), the second reads only records written by gpt-4.1-family models.
+5. Re-ingest with luna enrichment (110 chunks). Self-description updated in the KB (`projects_ai_flagship.md`), `data/readmes/digital_twin.md`, canary C005 keywords, README, CLAUDE.md, CONTEXT.md, pipeline diagram and MAP, runbook, SENTINEL.md and the Sentinel tooltips.
+6. LIMITATIONS O9 (migration shipped, judge recalibrated) and O5 trip-wire 3 (C040 resolved).
 
 ---
 

@@ -458,6 +458,36 @@ def test_judge_prompt_acknowledges_post_cutoff_content():
         "judge prompt must explicitly anchor scoring to the reference answer as ground truth"
 
 
+def _judge_call_kwargs() -> dict:
+    """Run eval_answer once with the judge mocked and return the judge request's kwargs."""
+    gen = MagicMock()
+    gen.generate.return_value = "Alejandro did tropical ecology at JCU."
+    with patch("run_eval.fetch_context", return_value=[make_doc("ecology at JCU")]), \
+         patch("run_eval.completion", return_value=_stub_judge_response()) as judge, \
+         patch.object(E, "_classifier", _stub_classifier(labels=["BEHAVIOURAL"], confidence=0.9)), \
+         patch.object(E, "_generator", gen):
+        eval_answer(make_test(keywords=["ecology"]))
+    return judge.call_args.kwargs
+
+
+def test_judge_runs_on_a_sol_model_at_its_default_reasoning():
+    """The judge request goes to gpt-6.2-sol with no reasoning override (sol rejects "none")."""
+    kwargs = _judge_call_kwargs()
+    assert kwargs["model"] == "openai/gpt-6.2-sol"
+    assert "extra_body" not in kwargs
+
+
+def test_judge_prompt_does_not_treat_extra_details_as_invented():
+    """The judge prompt no longer fails details the reference is silent on, only ones that contradict it.
+
+    #55: gpt-4.1 read "invents details absent from ... the reference" leniently; every
+    gpt-6 judge read it literally and scored true KB details (a DOI, a year) as accuracy 1.
+    """
+    system_prompt = _judge_call_kwargs()["messages"][0]["content"].lower()
+    assert "invents details" not in system_prompt
+    assert "contradict" in system_prompt
+
+
 def test_architecture_snapshot_records_routing_config():
     """The architecture snapshot in the result file records the routing config so v4
     runs are reproducible: branches with their final_k/tools/profile_sections, the

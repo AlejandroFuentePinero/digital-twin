@@ -59,8 +59,10 @@ RESULTS_DIR = Path(__file__).parent / "results"
 DB_PATH = str(Path(__file__).parent.parent / "data" / "preprocessed_db")
 KB_DIR = Path(__file__).parent.parent / "data" / "knowledge_base"
 
-# Separate model for judging — should be stronger than the model under evaluation
-JUDGE_MODEL = "openai/gpt-4.1"
+# Separate model for judging: should be stronger than the model under evaluation.
+# gpt-6.2-sol runs at its default reasoning: it rejects reasoning_effort "none",
+# and the judge makes no tool calls (#55).
+JUDGE_MODEL = "openai/gpt-6.2-sol"
 
 wait = wait_exponential(multiplier=1, min=10, max=120)
 stop = stop_after_attempt(5)
@@ -181,17 +183,22 @@ def _generate_routed(question: str, branch_name: str) -> str:
 # Session 27 after the v4 autopsy showed gpt-4.1 (judge) marking real-but-post-2024
 # papers as fabrications because they fall outside its training data — a judge-side
 # false positive that distorted the temporal-category score.
+# The extra-details sentence replaced "invents details absent from both the question
+# and the reference" in #55: gpt-4.1 read that leniently, the gpt-6 judges read it
+# literally and scored true KB details beyond the short reference as accuracy 1.
 _JUDGE_SYSTEM_PROMPT = (
     "You are an expert evaluator of answer quality. "
     "Score strictly — only award 5 for a perfect answer. "
-    "If any factual claim is wrong or invented, accuracy must be 1.\n\n"
+    "If any factual claim contradicts the reference or is verifiably wrong, accuracy must be 1.\n\n"
     "The reference answer is the ground truth for this evaluation. Some content may be "
     "more recent than your training cutoff (e.g. 2025/2026 publications, recent roles). "
     "When the generated answer aligns with the reference, do not penalise it for content "
     "you cannot independently verify against your training data — defer to the reference. "
-    "Only flag a factual error when the generated answer contradicts the reference, "
-    "invents details absent from both the question and the reference, or asserts a "
-    "fact you can confidently verify is wrong."
+    "The generated answer comes from a system with a larger knowledge base than the "
+    "reference, so it may add details the reference does not mention. Such details are "
+    "not errors and do not lower accuracy, unless they contradict the reference or are "
+    "implausible. Only flag a factual error when the generated answer contradicts the "
+    "reference or asserts a fact you can confidently verify is wrong."
 )
 
 
