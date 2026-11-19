@@ -133,7 +133,7 @@ These are observation-driven — they convert to active work only if observe-mod
 - **Drop fuzzy off-topic canary questions** ("favourite colour", "breakfast") that have no defensible correct branch.
 - **Tighten `branch_changed` to unanimous-vote** (3/3 required across replicates) to stop single-record flips swinging majorities.
 - **Per-question canary stability scoring** — downweight chronically-unstable questions in the drift count.
-- **v6 eval against the deployed pipeline** — only if real-recruiter traffic surfaces an answer-quality regression worth measuring.
+- **Ecography title retrieval miss** (Session 70). `fetch_context` returns no Ecography chunk for "What is the title of Alejandro's 2021 paper in Ecography?"; only the README tool recovers it. Fix in retrieval, not KB copy.
 - ~~**Pin `requirements.txt` to exact `uv.lock` versions**~~ Done in #59 (2026-10-29) after the 2026-10-28 redeploy rebuilt the dependency layer and the new LiteLLM broke every tool-enabled branch (`LIMITATIONS::O10`). Bumping a dependency now means `uv lock`, then copy the version into `requirements.txt`.
 
 ---

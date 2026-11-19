@@ -5,6 +5,41 @@
 
 ---
 
+## Session 70 (2026-11-20): first quarterly full eval in observe-mode (v7) and a two-replicate canary; one wrong answer found, two stale eval questions fixed.
+
+**Status:** the quarterly eval was 105 days overdue (last full eval v6 on 2026-05-07). Both checks run against the store rebuilt clean on 2026-10-29 (#58), which neither had measured. No pipeline code changed, no deploy.
+
+### Eval v7 (`eval/results/v7_2026-11-19.json`) against v6
+
+MRR 0.865 → 0.865, nDCG 0.863 → 0.864, accuracy 4.77 → 4.74, completeness 4.77 → 4.74, relevance 4.95 → 4.87, gap rate 0% both, low-confidence classifications 17 → 0 (classifier now `gpt-4.1-mini`). Four questions lost two or more accuracy points:
+
+- **Real error: the 2021 Ecography paper title.** Answered "Predicting Species Abundance from Environmental Suitability", the project heading in `research_projects_detail.md`, instead of the paper title. v6 got it right.
+- **Stale eval question: "the three flagship AI projects".** The KB has listed four since August (7PH Graph added); the judge scored the answer naming 7PH Graph as invented.
+- **Stale eval question: "the live deployed data science app".** Several live apps exist now; the reference expects only the Job Intelligence Engine.
+- **Judge error: "30 years of monitoring data".** Scored 1 for "150+ locations", which `education.md` and `experience.md` state; v6 scored the same answer 5.
+
+Without the three artefacts accuracy would be about 4.81.
+
+### Canary triage: `run-20261119-210242-b16cb4` (2 replicates)
+
+Two replicates by operator choice this run, so a 1-to-1 split is decided by first-seen order and single-question flips are weaker evidence than at 3.
+
+- **vs baseline: 16 flags (14 major, 2 minor)**, down from 18. Trajectory: 12 → 9 → 6 → 14 → 18 → 16. Every flagged question was triaged in Session 67 with the same behaviour (C035, C038, C048, C019, C049 moves toward the corpus contract or with the same outcome; C018 / C014 / C030 / C036 keyword phrasing). C040 on-call still routes BEHAVIOURAL (#56).
+- **vs the 2026-10-28 run: 7 flags (2 major, 5 minor)**, no branch, event or outcome change. Keyword drops C013, C025, C010 are phrasing (the full answers carry "PhD students", the Ollama backend, "33 iterations" in one replicate). C009 Go latency rose because the answer now explains the gap instead of the bare gap line. C026 and C024 latency are single-question.
+- Run level: p50 10.6 s, p95 17.9 s (October 10.6 / 18.1); zero refusals (October 1, May 2).
+
+### What changed
+
+1. **KB:** a `Paper title:` line under the Ecography section of `research_projects_detail.md`, so the project heading cannot be read as the title. Re-ingested (110 chunks).
+2. **Eval set:** question 5 now asks for the live Streamlit app for job market intelligence; question 91 asks for the flagship projects without a count and lists all four. v7 ran on the old wording, so these two are not comparable across v7 → v8.
+3. **`MAINTENANCE.md`:** the pending follow-up about a "v6 eval" replaced; the quarterly eval stands on its own.
+
+### Open: the Ecography question is a retrieval miss
+
+Three in-process probes after the fix: two correct titles (both fetched the paper's README through the tool), one "the context does not confirm the title". `fetch_context` returns no Ecography chunk in its top 10 for this question: all PhD, bird and possum sections, while `publications.md` and the project section both carry the paper. The guardrail rejected the fabricated title on first attempt in all three probes, so the live failure is a gap, not a wrong title. Not patched here: a fix belongs in retrieval, not in KB copy.
+
+---
+
 ## Session 69 (2026-10-29): startup model probe (#57) and a clean vector store with stale-file deletion on deploy (#58).
 
 **Status:** both tickets implemented test-first and deployed the same day #59 closed (Space commit `84cff4ca`); #57 and #58 closed with every acceptance box ticked. Suite at **629 passing, 1 skipped** (7 new). Observe-mode preserved: no per-turn pipeline code changed, no canary run.

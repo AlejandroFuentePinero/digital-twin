@@ -94,6 +94,7 @@ Detailed project-level summaries of Alejandro's research work, presented as data
 
 ## Predicting Species Abundance from Environmental Suitability
 
+**Paper title:** "Predicting species abundance by implementing the ecological niche theory" (the heading above is the project name, not the paper title)
 **Published:** *Ecography* (2021) — DOI: https://onlinelibrary.wiley.com/doi/full/10.1111/ecog.05776
 **Type:** First-author paper (PhD)
 
