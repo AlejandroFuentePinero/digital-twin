@@ -14,7 +14,7 @@ The deliberate framing: a single-prompt chatbot gives every recruiter the same s
 A classify-then-route pipeline (see [ADR-0003](https://github.com/AlejandroFuentePinero/digital-twin/blob/main/docs/adr/0003-classify-then-route-orchestration.md)). One question, five concrete stages, each with its own model and prompt.
 
 ### 1. Classifier
-`gpt-4.1-mini` returns `{labels, confidence}`. Sees the last 2 conversation turns plus the current question. Defaults to `GENERIC` on low confidence; multi-label allowed up to 2 labels. ~$0.0004 per call.
+`gpt-6-luna` returns `{labels, confidence}`. Sees the last 2 conversation turns plus the current question. Defaults to `GENERIC` on low confidence; multi-label allowed up to 2 labels. ~$0.0001 per call.
 
 ### 2. Branch composer
 Selects from five branches: `GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGISTICAL`. Each branch declares which `profile.md` sections to load (identity, gap_inventory, personal_stories, etc.) and which rules apply (calibration ladder, deflection, tool access). Sections and rules dereference shared constants, so the **same composer call drives both the generator and the guardrail** — eliminating the most common cause of guardrail-loops in retry pipelines, where writer and judge run on subtly different specs.
@@ -23,7 +23,7 @@ Selects from five branches: `GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGIS
 ChromaDB top-6 against an LLM-enriched chunk store: each chunk embeds `headline + summary + verbatim source` as one vector, so query phrasing has multiple match surfaces. Four-stage retrieval: query rewriting → dual retrieval pass (original + rewritten) → chunk merge → LLM rerank to final-k.
 
 ### 4. Generator
-`gpt-4.1` produces the answer. The `GENERIC`, `GAP`, and `TECHNICAL` branches each enter a bounded tool loop (`MAX_TOOL_CALLS = 3`) with `fetch_project_readme` for one of 29 distilled project / paper docs. The tool's argument is a `Literal[*REGISTRY.keys()]` pinned to the known project keys at startup; misconfiguration fails at import, not on first user turn. `LOGISTICAL` and `BEHAVIOURAL` are tool-free.
+`gpt-6.1-terra` produces the answer. The `GENERIC`, `GAP`, and `TECHNICAL` branches each enter a bounded tool loop (`MAX_TOOL_CALLS = 3`) with `fetch_project_readme` for one of 29 distilled project / paper docs. The tool's argument is a `Literal[*REGISTRY.keys()]` pinned to the known project keys at startup; misconfiguration fails at import, not on first user turn. `LOGISTICAL` and `BEHAVIOURAL` are tool-free.
 
 ### 5. Guardrail
 `Claude Sonnet 4.6` — a model from a different family — judges the answer against the same composed prompt the generator saw. Up to 3 retries with structured rejection feedback wrapped into the next attempt's system prompt; falls back to a polite canned-refusal floor if all attempts fail.

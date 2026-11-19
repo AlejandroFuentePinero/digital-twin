@@ -36,7 +36,7 @@ from composer import PromptComposer
 from generator import Generator
 from profile import ProfileLoader
 from retrieval import FINAL_K, MODEL, RETRIEVAL_K, fetch_context, format_context
-from rules import GAP_PHRASE
+from rules import GAP_PHRASE, contains_phrase
 from tools import ToolRegistry, build_fetch_project_readme_tool, make_litellm_tool_callable
 import tool_loop
 
@@ -392,7 +392,7 @@ def run_eval(notes: str = "", retrieval_only: bool = False, answer_only: bool = 
         if not retrieval_only:
             ans, generated, _ = eval_answer(test, classification)
             record["answer"] = {**ans.model_dump(), "generated_answer": generated}
-            knew = GAP_PHRASE not in generated
+            knew = not contains_phrase(generated, GAP_PHRASE)
             parts.append(
                 f"acc={ans.accuracy:.1f} cmp={ans.completeness:.1f} rel={ans.relevance:.1f}"
                 + ("" if knew else " [gap]")
@@ -449,7 +449,9 @@ def run_eval(notes: str = "", retrieval_only: bool = False, answer_only: bool = 
             for br in branches
         }
         # Gap rate: fraction of questions where the system said "I don't know"
-        gap_count = sum(1 for r in per_question if GAP_PHRASE in r["answer"]["generated_answer"])
+        gap_count = sum(
+            1 for r in per_question if contains_phrase(r["answer"]["generated_answer"], GAP_PHRASE)
+        )
         result["summary"]["gap_rate"] = round(gap_count / len(per_question), 4)
 
     # --- Save ---

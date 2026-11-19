@@ -64,6 +64,14 @@ def test_returns_deflected_when_non_logistical_branch_emits_a_deflection_marker(
     assert classify_event_type(branch="GENERIC", final_answer=answer) == "deflected"
 
 
+def test_phrase_rules_match_answers_written_with_typographic_apostrophes():
+    """gpt-6.1-terra writes "I’m" and "don’t" (U+2019) where the contract phrases use "'"; the deflection and gap rules still fire (#55 canary: C019, C047, C050 read as answered)."""
+    deflection = "I’m here to answer questions about Alejandro’s professional background."
+    gap = "That's a fair question. I don’t have that information in my knowledge base."
+    assert classify_event_type(branch="GENERIC", final_answer=deflection) == "deflected"
+    assert classify_event_type(branch="TECHNICAL", final_answer=gap) == "gap"
+
+
 def test_returns_answered_when_no_branch_or_phrase_rule_fires():
     """The fallback bucket: branch is non-GAP, non-LOGISTICAL; answer is a
     real substantive response — no GAP_PHRASE, no DEFLECTION_MARKERS. This is

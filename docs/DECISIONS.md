@@ -5,6 +5,49 @@
 
 ---
 
+## Session 71 (2026-11-20): gpt-4.1 / gpt-4.1-mini migration to the gpt-6 family (#55); C040 (#56) resolved by the classifier swap; the eval judge stays on gpt-4.1.
+
+**Status:** pipeline migrated, eval v8 and a 3-replicate canary run on the final code, not yet deployed. Suite at **640 passing, 1 skipped** (11 new). The eval judge is the one call still on `gpt-4.1` (shutdown 2027-01-14); see below.
+
+### Model selection
+
+OpenAI lists `gpt-6-luna` as the replacement for both `gpt-4.1` and `gpt-4.1-mini`. A probe of every call shape the pipeline uses (plain with `temperature=1.0`, structured output, `tools=`, a 1-token cap) across luna, `gpt-6.1-terra`, `gpt-6.1-sol` and `gpt-6.2-sol` found two breaks common to the family:
+
+- **Function tools fail with reasoning on.** "Function tools with reasoning_effort are not supported ... in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'." Luna and terra accept `none` and then pass every shape; both sol models reject `none` (lowest is `low`), so their tool path would need the Responses API. Sol is out.
+- **`max_tokens` is rejected** ("Use 'max_completion_tokens' instead"), and a 1-token cap fails as "output limit reached" even with reasoning off. Only the startup probe used it.
+
+LiteLLM 1.83 does not know the gpt-6 names and refuses `reasoning_effort` client-side, so `src/openai_params.py` passes it through `extra_body`; every OpenAI chat call site and the startup probe send it.
+
+Selection rule: the generator tier (generator, rerank, tool loop, failure summariser) takes the strongest model that keeps the chat-completions tool path, `gpt-6.1-terra` ($1 / $5 per 1M tokens, against `gpt-4.1`'s $2 / $8); the cheap tier (classifier, query rewrite, chunk enrichment, gap clusterer) takes the listed replacement, `gpt-6-luna` ($0.10 / $0.50, against `gpt-4.1-mini`'s $0.40 / $1.60). Ship gate: eval v8 flat against v7.
+
+### Eval v8 (`eval/results/v8_2026-11-19.json`) against v7, same `gpt-4.1` judge
+
+MRR 0.865 → 0.878, nDCG 0.864 → 0.875, accuracy 4.74 → 4.86, completeness 4.74 → 4.72, relevance 4.87 → 4.96, gap rate 0% both, answers at accuracy ≤ 3: 9 → 5. Gate met. Part of the accuracy gain is the two eval questions reworded in Session 70, which v7 ran on the old wording. v7, not the v4 baseline the ticket names, is the comparator because it shares the judge, the question set and the clean store; v8 also clears v4 (MRR 0.866, accuracy 4.56).
+
+Other providers, read 2026-11-20: Anthropic's model-deprecations page lists `claude-sonnet-4-6` as active, not deprecated, retirement "not sooner than February 17, 2027"; OpenAI's deprecations page has no entry for `text-embedding-3-large`. Both stay.
+
+### Canary: `run-20261119-221912-d3a0a6` (3 replicates, final code)
+
+A first run (`run-20261119-214421-99e82b`) is superseded: it showed five out-of-scope questions (C019, C047, C048, C049, C050) moving deflected → answered, and the answers were still deflections. Terra writes typographic apostrophes ("I’m", "don’t", U+2019) where the `DEFLECTION_MARKERS` and `GAP_PHRASE` contract uses "'", so the literal match missed them. The same miss would have stopped `app.py` firing the contact-form gap trigger on a gap reply and undercounted the eval gap rate. Fixed with `rules.contains_phrase`, which every contract check now goes through; the run's records were logged with the old labels, so the canary was re-run.
+
+- **vs baseline: 26 flags (23 major)**, against 16 on 2026-11-19 (2 replicates). No content regression found. C040 is fixed (below). C047's "fabrication red flag" is the substring "GitHub password" inside "I don’t have access to Alejandro’s GitHub password": a refusal, matched by `must_not_appear`. C049 gambling answers "no stated position, ask him directly" in all three replicates, the same substance as before without the deflection opener; the corpus expects a position the KB does not state. Branch flips C022, C027, C004, C021, C048 keep their outcome. Keyword drops C043, C002, C024, C036, C037 are phrasing ("Bayesian population models" for "Bayesian hierarchical"; the C002 answers describe the optimised pipeline without the literal words).
+- **C040 on-call (#56): GAP 3/3 on both canary runs** (confidence 0.89 to 0.98) with the calibrated gap answer. Resolved by the classifier swap with no prompt change.
+- **Latency is a real cost.** Run p50 10.6 → 12.0 s, p95 17.9 → 21.6 s, inside Sentinel's healthy p95 ≤ 25 s. The retrieval stage (query rewrite on luna, rerank on terra) moved p50 2.6 → 4.1 s; classifier 0.9 / 1.1 → 1.1 / 1.6 s; generation p50 2.2 → 2.6 s. Zero refusals.
+
+### The eval judge stays on `gpt-4.1`
+
+Re-judging the v8 answers with candidate judges, same prompt: `gpt-6.2-sol` accuracy 2.55, `gpt-6.1-terra` (reasoning off) 2.91, against `gpt-4.1`'s 4.86 on identical answers, with 76 to 87 of 149 questions dropping two or more points. Both read the prompt's "invents details absent from both the question and the reference" literally and score true KB details beyond the short reference (a DOI, a year, a location) as inventions; `gpt-4.1` read it leniently. A drop-in swap would break the eval trajectory and reward short answers. The replacement is a judge-design decision (what the judge is allowed to treat as grounded), so `JUDGE_MODEL` stays on `gpt-4.1`, which serves until 2027-01-14. The next quarterly eval falls after that date.
+
+### What changed
+
+1. Models: `classifier.py`, `retrieval.py` (`MODEL`, `REWRITE_MODEL`), `tools.py`, `generator.py`, `ingest.py`, `cluster_gaps.py`, `summarize_failures.py`; reasoning off at each via `openai_params.REASONING_OFF`.
+2. `startup_probe.py`: `max_completion_tokens=16` for every chat probe, reasoning off for OpenAI.
+3. `rules.contains_phrase` used by `event_classifier.py`, `app.py` and `eval/run_eval.py`. `pipeline.py`'s `knew_answer` write and `log_reader.py`'s pre-v4 normaliser keep the literal match: the first has no reader (TODO v5), the second reads only records written by gpt-4.1-family models.
+4. Re-ingest with luna enrichment (110 chunks). Self-description updated in the KB (`projects_ai_flagship.md`), `data/readmes/digital_twin.md`, canary C005 keywords, README, CLAUDE.md, CONTEXT.md, pipeline diagram and MAP, runbook, SENTINEL.md and the Sentinel tooltips.
+5. LIMITATIONS O9 (migration shipped, judge residual) and O5 trip-wire 3 (C040 resolved).
+
+---
+
 ## Session 70 (2026-11-20): first quarterly full eval in observe-mode (v7) and a two-replicate canary; one wrong answer found, two stale eval questions fixed.
 
 **Status:** the quarterly eval was 105 days overdue (last full eval v6 on 2026-05-07). Both checks run against the store rebuilt clean on 2026-10-29 (#58), which neither had measured. No pipeline code changed, no deploy.

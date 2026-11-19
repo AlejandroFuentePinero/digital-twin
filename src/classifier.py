@@ -1,6 +1,6 @@
 """Branch classifier (ADR-0003).
 
-Routes each turn to a Branch by calling gpt-4.1-mini with the last 2 turns of
+Routes each turn to a Branch by calling gpt-6-luna with the last 2 turns of
 conversation history plus the current question. Returns multi-label structured
 output (`{labels, confidence}`); the pipeline picks `labels[0]` as the primary
 branch and may merge `labels[:2]` for multi-branch context composition.
@@ -13,14 +13,14 @@ from pydantic import BaseModel, ValidationError
 from tenacity import retry
 
 from _retry_policy import DEFAULT_RETRY, DEFAULT_STOP, DEFAULT_WAIT
+from openai_params import REASONING_OFF
 
-MODEL = "openai/gpt-4.1-mini"
+MODEL = "openai/gpt-6-luna"
 CLASSIFIER_HISTORY_WINDOW = 2
 CLASSIFIER_CONFIDENCE_THRESHOLD = 0.5
-# Mini + small prompt + structured output — generous tail of ~30s, 60s timeout.
-# gpt-4.1-nano was retired by OpenAI on 2026-10-23; gpt-4.1-mini is the same-family
-# replacement so routing stays comparable with the frozen canary baseline (#54).
-# Both gpt-4.1 and gpt-4.1-mini are scheduled for shutdown on 2027-01-14.
+# Cheap tier + small prompt + structured output: generous tail of ~30s, 60s timeout.
+# gpt-4.1-nano was retired on 2026-10-23 (#54) and gpt-4.1-mini shuts down on
+# 2027-01-14; gpt-6-luna is OpenAI's listed replacement (#55).
 REQUEST_TIMEOUT_S = 60
 
 SYSTEM_PROMPT = """\
@@ -78,6 +78,7 @@ class Classifier:
             messages=messages,
             response_format=ClassifierResult,
             timeout=REQUEST_TIMEOUT_S,
+            **REASONING_OFF,
         )
         raw = response.choices[0].message.content or ""
         try:

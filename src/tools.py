@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from tenacity import retry
 
 from _retry_policy import DEFAULT_RETRY, DEFAULT_STOP, DEFAULT_WAIT
+from openai_params import REASONING_OFF
 from tool_loop import ModelResponse, ToolCall, ToolSpec
 
 REQUEST_TIMEOUT_S = 90
@@ -140,7 +141,7 @@ def build_fetch_project_readme_tool(
     return ToolSpec(name="fetch_project_readme", schema=schema, handler=handler)
 
 
-TOOL_MODEL = "openai/gpt-4.1"
+TOOL_MODEL = "openai/gpt-6.1-terra"
 
 
 def make_litellm_tool_callable(model: str = TOOL_MODEL):
@@ -157,6 +158,7 @@ def make_litellm_tool_callable(model: str = TOOL_MODEL):
             messages=messages,
             tools=tools,
             timeout=REQUEST_TIMEOUT_S,
+            **REASONING_OFF,
         )
         msg = response.choices[0].message
         tool_calls: list[ToolCall] = []

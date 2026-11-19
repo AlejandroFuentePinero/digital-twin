@@ -83,6 +83,17 @@ DEFLECTION_MARKERS: tuple[str, ...] = (
     "not in a position to answer",
 )
 
+
+def contains_phrase(text: str, phrase: str) -> bool:
+    """Whether `text` carries a contract phrase (GAP_PHRASE or a DEFLECTION_MARKER).
+
+    The phrases are written with "'"; gpt-6.1-terra writes "I’m" / "don’t"
+    (U+2019) while following the wording exactly (#55 canary). Every check of
+    the contract goes through here so the two spellings read the same.
+    """
+    return phrase in text.replace("’", "'")
+
+
 CALIBRATION_LADDER = f"""\
 ## Calibration ladder
 A guide for choosing claim verbs that match the depth of evidence in the retrieved \

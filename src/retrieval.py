@@ -15,14 +15,15 @@ from pydantic import BaseModel, Field, ValidationError
 from tenacity import retry
 
 from _retry_policy import DEFAULT_RETRY, DEFAULT_STOP, DEFAULT_WAIT
+from openai_params import REASONING_OFF
 
 load_dotenv(override=True)
 
 DB_PATH = str(Path(__file__).parent.parent / "data" / "preprocessed_db")
 COLLECTION = "digital_twin"
 EMBED_MODEL = "text-embedding-3-large"
-MODEL = "openai/gpt-4.1"
-REWRITE_MODEL = "openai/gpt-4.1-mini"
+MODEL = "openai/gpt-6.1-terra"
+REWRITE_MODEL = "openai/gpt-6-luna"
 RETRIEVAL_K = 20
 FINAL_K = 10
 
@@ -96,6 +97,7 @@ in the question. Respond with the query only — no explanation, no punctuation 
         model=REWRITE_MODEL,
         messages=[{"role": "user", "content": prompt}],
         timeout=REQUEST_TIMEOUT_S,
+        **REASONING_OFF,
     )
     return response.choices[0].message.content.strip()
 
@@ -123,6 +125,7 @@ def rerank(question: str, chunks: list[Chunk]) -> list[Chunk]:
         ],
         response_format=RankOrder,
         timeout=REQUEST_TIMEOUT_S,
+        **REASONING_OFF,
     )
     raw = response.choices[0].message.content or ""
     try:

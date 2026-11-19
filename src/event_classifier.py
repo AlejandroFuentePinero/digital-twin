@@ -16,7 +16,7 @@ DEFLECTION_MARKERS is a prompt↔producer contract rather than a detector.
 from __future__ import annotations
 
 from interaction_log import EventType
-from rules import DEFLECTION_MARKERS, GAP_PHRASE
+from rules import DEFLECTION_MARKERS, GAP_PHRASE, contains_phrase
 
 
 def classify_event_type(branch: str, final_answer: str | None) -> EventType:
@@ -26,8 +26,8 @@ def classify_event_type(branch: str, final_answer: str | None) -> EventType:
         return "gap"
     if branch == "LOGISTICAL":
         return "deflected"
-    if GAP_PHRASE in final_answer:
+    if contains_phrase(final_answer, GAP_PHRASE):
         return "gap"
-    if any(marker in final_answer for marker in DEFLECTION_MARKERS):
+    if any(contains_phrase(final_answer, marker) for marker in DEFLECTION_MARKERS):
         return "deflected"
     return "answered"

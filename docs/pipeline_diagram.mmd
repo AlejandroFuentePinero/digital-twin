@@ -20,7 +20,7 @@ flowchart TD
   classDef future fill:#cbd5e1,stroke:#64748b,color:#1f2937,stroke-width:2px,stroke-dasharray:5 4
 
   USER([User question + history]):::io
-  USER --> CLASSIFY["Classifier — gpt-4.1-mini<br/>last 2 turns + question<br/>multi-label + confidence"]:::llm
+  USER --> CLASSIFY["Classifier — gpt-6-luna<br/>last 2 turns + question<br/>multi-label + confidence"]:::llm
   CLASSIFY --> CONF{"confidence &ge; 0.5?"}:::decision
   CONF -->|no| GENFALL["override labels = GENERIC"]:::pure
   CONF -->|yes| FILTER["filter labels[:2] to<br/>known REGISTRY branches"]:::pure
@@ -31,7 +31,7 @@ flowchart TD
   GENFALL2 --> RETR
   ROUTE --> RETR["Retrieval — fetch_context<br/>ChromaDB top-K<br/>K = branch.final_k"]:::pure
   RETR --> COMP["PromptComposer<br/>UNIVERSAL rules + branch_rules<br/>+ profile sections (incl. active_learning for GAP)<br/>+ retrieved context"]:::pure
-  COMP --> GEN["Generator — gpt-4.1<br/>system + history + question"]:::llm
+  COMP --> GEN["Generator — gpt-6.1-terra<br/>system + history + question"]:::llm
   GEN -->|"GENERIC / GAP / TECHNICAL<br/>ToolLoop, MAX_TOOL_CALLS = 3<br/>per attempt"| TOOL["fetch_project_readme<br/>distilled README<br/>from data/readmes/"]:::tool
   TOOL --> GEN
   TOOL -.->|"tool-fetched content<br/>recomposed into judge prompt<br/>so guardrail sees what model grounded in<br/>(LIMITATIONS::R1)"| JUDGE
@@ -72,5 +72,6 @@ flowchart TD
   %% so LiteLLM's tool-call code path runs (LIMITATIONS::O10). A NotFoundError or
   %% any non-provider exception raises StartupProbeError and the Space build goes
   %% red; transient provider errors (timeout, 429, 5xx) are printed and skipped.
+  %% OpenAI probes send reasoning_effort "none" like every OpenAI stage (#55).
   PROBE["startup_probe.py (app start, #57)<br/>one call per configured model:<br/>classifier, rewrite, rerank, generator (plain + tools=),<br/>guardrail, embeddings<br/>NotFoundError / code fault → StartupProbeError, build fails<br/>timeout / 429 / 5xx → logged, startup continues"]:::sideEffect
   PROBE -.->|"must pass before<br/>the chat serves"| USER

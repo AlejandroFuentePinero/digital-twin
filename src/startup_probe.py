@@ -24,6 +24,7 @@ import generator
 import guardrail
 import retrieval
 import tools
+from openai_params import REASONING_OFF
 
 PROBE_TIMEOUT_S = 30
 
@@ -73,10 +74,14 @@ def _probe_one(probe: ModelProbe) -> None:
         )
         return
     kwargs = {"tools": [_PROBE_TOOL]} if probe.kind == "chat_tools" else {}
+    if probe.model.startswith("openai/"):
+        kwargs |= REASONING_OFF
+    # max_completion_tokens, not max_tokens: gpt-6 rejects the latter, and a
+    # 1-token cap fails as "output limit reached" even with reasoning off.
     completion(
         model=probe.model,
         messages=[{"role": "user", "content": "ok"}],
-        max_tokens=1,
+        max_completion_tokens=16,
         timeout=PROBE_TIMEOUT_S,
         **kwargs,
     )

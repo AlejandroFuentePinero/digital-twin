@@ -44,6 +44,7 @@ MODULE_CATEGORY: dict[str, str] = {
     "classifier": "LLM Callers",
     "generator": "LLM Callers",
     "guardrail": "LLM Callers",
+    "openai_params": "LLM Callers",
     "retrieval": "Retrieval (RAG)",
     "ingest": "Retrieval (RAG)",
     "kb_corpus": "Retrieval (RAG)",

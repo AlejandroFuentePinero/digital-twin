@@ -21,6 +21,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from failure_feed import classify_failure
 from interaction_log import InteractionRecord
+from openai_params import REASONING_OFF
 
 
 BATCH_DEFAULT_DAYS = 7
@@ -34,7 +35,7 @@ Group = Literal["unacceptable", "deflection", "gap"]
 # Writing-quality matters here — these reports get read by a human, not a
 # downstream classifier — and the volume is tiny (3 calls per weekly run).
 # Per the issue spec.
-SUMMARIZER_MODEL = "openai/gpt-4.1"
+SUMMARIZER_MODEL = "openai/gpt-6.1-terra"
 
 # Group-specific framing for the user prompt. Keys must match `Group`.
 _GROUP_INSTRUCTIONS: dict[Group, str] = {
@@ -151,6 +152,7 @@ class FailureSummarizer:
                 },
                 {"role": "user", "content": user_prompt},
             ],
+            **REASONING_OFF,
         )
         return response.choices[0].message.content
 

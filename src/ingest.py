@@ -24,13 +24,15 @@ from openai import OpenAI
 from pydantic import BaseModel
 from tqdm import tqdm
 
+from openai_params import REASONING_OFF
+
 load_dotenv(override=True)
 
 KB_PATH = Path(__file__).parent.parent / "data" / "knowledge_base"
 DB_PATH = str(Path(__file__).parent.parent / "data" / "preprocessed_db")
 COLLECTION = "digital_twin"
 EMBED_MODEL = "text-embedding-3-large"
-ENRICH_MODEL = "gpt-4.1-mini"
+ENRICH_MODEL = "gpt-6-luna"
 WORKERS = 10
 
 UNSPLIT = {"SUMMARY", "INDEX"}
@@ -138,6 +140,7 @@ def enrich_chunk(chunk: dict) -> dict:
         model=ENRICH_MODEL,
         messages=[{"role": "user", "content": prompt}],
         response_format=ChunkEnrichment,
+        **REASONING_OFF,
     )
     enrichment = response.choices[0].message.parsed
     if enrichment is None or not enrichment.headline.strip() or not enrichment.summary.strip():

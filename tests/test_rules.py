@@ -1,4 +1,11 @@
-from rules import RULES, UNIVERSAL
+from rules import GAP_PHRASE, RULES, UNIVERSAL, contains_phrase
+
+
+def test_contains_phrase_treats_a_typographic_apostrophe_as_the_contract_apostrophe():
+    """A reply carrying the gap phrase as "I don’t have…" (U+2019) contains GAP_PHRASE, so app.py's contact-form gap trigger still fires; an unrelated reply does not."""
+    assert contains_phrase("Sorry. I don’t have that information in my knowledge base.", GAP_PHRASE)
+    assert contains_phrase(f"Sorry. {GAP_PHRASE}", GAP_PHRASE)
+    assert not contains_phrase("I don’t have AWS experience yet.", GAP_PHRASE)
 
 
 def test_universal_keys_resolve_to_non_empty_rule_text():

@@ -101,9 +101,29 @@ def test_default_probes_exercise_the_tool_path_and_the_embedding_endpoint():
 
     tool_calls = [c for c in comp.call_args_list if c.kwargs.get("tools")]
     assert len(tool_calls) == 1
-    assert tool_calls[0].kwargs["model"] == "openai/gpt-4.1"
+    assert tool_calls[0].kwargs["model"] == "openai/gpt-6.1-terra"
     embed_client.embeddings.create.assert_called_once()
     assert embed_client.embeddings.create.call_args.kwargs["model"] == "text-embedding-3-large"
+
+
+def test_openai_probes_use_the_reasoning_model_call_shape_and_anthropic_does_not():
+    """OpenAI chat probes send max_completion_tokens with reasoning_effort "none" (gpt-6 rejects max_tokens and, with reasoning on, tools); the Anthropic probe sends no reasoning parameter."""
+    probes = [
+        ModelProbe(stage="classifier", model="openai/gpt-6-luna"),
+        ModelProbe(stage="generator tool loop", model="openai/gpt-6.1-terra", kind="chat_tools"),
+        ModelProbe(stage="guardrail", model="anthropic/claude-sonnet-4-6"),
+    ]
+    with patch("startup_probe.completion", side_effect=_ok_completion) as comp, patch(
+        "startup_probe.OpenAI", return_value=MagicMock()
+    ):
+        run_startup_probe(probes)
+
+    calls = {c.kwargs["model"]: c.kwargs for c in comp.call_args_list}
+    for model in ("openai/gpt-6-luna", "openai/gpt-6.1-terra"):
+        assert "max_tokens" not in calls[model]
+        assert calls[model]["max_completion_tokens"] >= 16
+        assert calls[model]["extra_body"] == {"reasoning_effort": "none"}
+    assert "extra_body" not in calls["anthropic/claude-sonnet-4-6"]
 
 
 def test_every_stage_is_probed_once_under_its_current_model_name():
@@ -119,8 +139,8 @@ def test_every_stage_is_probed_once_under_its_current_model_name():
     assert len(models) == 6
     assert set(models) == {
         "openai/swapped-classifier",
-        "openai/gpt-4.1-mini",
-        "openai/gpt-4.1",
+        "openai/gpt-6-luna",
+        "openai/gpt-6.1-terra",
         "anthropic/claude-sonnet-4-6",
     }
     assert client.return_value.embeddings.create.call_count == 1

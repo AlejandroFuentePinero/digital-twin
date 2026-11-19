@@ -38,13 +38,13 @@ A conversational agent representing Alejandro de la Fuente professionally — an
 User query
     │
     ▼
-Classifier (gpt-4.1-mini)
+Classifier (gpt-6-luna)
     │  picks Branch: GAP | BEHAVIOURAL | TECHNICAL | GENERIC | LOGISTICAL
     ▼
 Branch composer
     │  loads named profile.md sections + branch rules + retrieved chunks
     ▼
-Generator (gpt-4.1)  ──► [GENERIC / GAP / TECHNICAL: tool loop with fetch_project_readme]
+Generator (gpt-6.1-terra)  ──► [GENERIC / GAP / TECHNICAL: tool loop with fetch_project_readme]
     │
     ▼
 Guardrail (Claude Sonnet 4.6, branch-aware rules)

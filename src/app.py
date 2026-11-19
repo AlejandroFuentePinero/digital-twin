@@ -38,7 +38,7 @@ from hf_log_writer import install_sigterm_handler
 from interaction_log import make_log_writer
 from pipeline import CANNED_REFUSAL, Pipeline
 from profile import ProfileLoader
-from rules import GAP_PHRASE
+from rules import GAP_PHRASE, contains_phrase
 from session_state import (
     INITIAL_FORM_PROMPT,
     SessionState,
@@ -176,7 +176,7 @@ def respond(
     # Form will appear immediately for the visitor's next view of the page even
     # though this turn's log record may have contact_offered=False (the gap event
     # happened during this turn; offered semantics reflect pre-turn state).
-    if GAP_PHRASE in reply:
+    if contains_phrase(reply, GAP_PHRASE):
         state.mark_gap_event()
 
     history.append({"role": "user", "content": message})

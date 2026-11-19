@@ -13,10 +13,11 @@ from litellm import completion
 from tenacity import retry
 
 from _retry_policy import DEFAULT_RETRY, DEFAULT_STOP, DEFAULT_WAIT
+from openai_params import REASONING_OFF
 
-MODEL = "openai/gpt-4.1"
+MODEL = "openai/gpt-6.1-terra"
 TEMPERATURE = 1.0
-# 90s tolerates legitimately slow gpt-4.1 generations (long prompt + long
+# 90s tolerates legitimately slow generations (long prompt + long
 # output) while still catching genuine provider hangs well under LiteLLM's
 # 600s default. Tightening this further was tested and cut off real calls.
 REQUEST_TIMEOUT_S = 90
@@ -59,5 +60,6 @@ class Generator:
             messages=messages,
             temperature=self.TEMPERATURE,
             timeout=REQUEST_TIMEOUT_S,
+            **REASONING_OFF,
         )
         return response.choices[0].message.content

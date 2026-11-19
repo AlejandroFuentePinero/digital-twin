@@ -33,7 +33,7 @@ flowchart TD
   classDef future fill:#cbd5e1,stroke:#64748b,color:#1f2937,stroke-width:2px,stroke-dasharray:5 4
 
   USER([User question + history]):::io
-  USER --> CLASSIFY["Classifier — gpt-4.1-mini<br/>last 2 turns + question<br/>multi-label + confidence"]:::llm
+  USER --> CLASSIFY["Classifier — gpt-6-luna<br/>last 2 turns + question<br/>multi-label + confidence"]:::llm
   CLASSIFY --> CONF{"confidence &ge; 0.5?"}:::decision
   CONF -->|no| GENFALL["override labels = GENERIC"]:::pure
   CONF -->|yes| FILTER["filter labels[:2] to<br/>known REGISTRY branches"]:::pure
@@ -44,7 +44,7 @@ flowchart TD
   GENFALL2 --> RETR
   ROUTE --> RETR["Retrieval — fetch_context<br/>ChromaDB top-K<br/>K = branch.final_k"]:::pure
   RETR --> COMP["PromptComposer<br/>UNIVERSAL rules + branch_rules<br/>+ profile sections (incl. active_learning for GAP)<br/>+ retrieved context"]:::pure
-  COMP --> GEN["Generator — gpt-4.1<br/>system + history + question"]:::llm
+  COMP --> GEN["Generator — gpt-6.1-terra<br/>system + history + question"]:::llm
   GEN -->|"GENERIC / GAP / TECHNICAL<br/>ToolLoop, MAX_TOOL_CALLS = 3<br/>per attempt"| TOOL["fetch_project_readme<br/>distilled README<br/>from data/readmes/"]:::tool
   TOOL --> GEN
   TOOL -.->|"tool-fetched content<br/>recomposed into judge prompt<br/>so guardrail sees what model grounded in<br/>(LIMITATIONS::R1)"| JUDGE
@@ -85,6 +85,7 @@ flowchart TD
   %% so LiteLLM's tool-call code path runs (LIMITATIONS::O10). A NotFoundError or
   %% any non-provider exception raises StartupProbeError and the Space build goes
   %% red; transient provider errors (timeout, 429, 5xx) are printed and skipped.
+  %% OpenAI probes send reasoning_effort "none" like every OpenAI stage (#55).
   PROBE["startup_probe.py (app start, #57)<br/>one call per configured model:<br/>classifier, rewrite, rerank, generator (plain + tools=),<br/>guardrail, embeddings<br/>NotFoundError / code fault → StartupProbeError, build fails<br/>timeout / 429 / 5xx → logged, startup continues"]:::sideEffect
   PROBE -.->|"must pass before<br/>the chat serves"| USER
 ```
@@ -120,6 +121,7 @@ graph LR
     classifier["classifier.py"]:::llm
     generator["generator.py"]:::llm
     guardrail["guardrail.py"]:::llm
+    openai_params["openai_params.py"]:::llm
   end
 
   subgraph sg_retrieval["Retrieval (RAG)"]
@@ -208,8 +210,10 @@ graph LR
   canary_runner --> canary_baseline
   canary_runner --> canary_corpus
   canary_runner --> interaction_log
+  classifier --> openai_params
   cluster_gaps --> failure_feed
   cluster_gaps --> interaction_log
+  cluster_gaps --> openai_params
   composer --> branches
   composer --> profile
   composer --> rules
@@ -220,9 +224,11 @@ graph LR
   failure_feed --> interaction_log
   flag_detector --> dashboard_model
   flag_detector --> interaction_log
+  generator --> openai_params
   guardrail --> rules
   hf_contact_log --> contact_log
   hf_contact_log --> hf_log_writer
+  ingest --> openai_params
   log_reader --> interaction_log
   log_reader --> rules
   log_reader --> schema_migrations
@@ -237,6 +243,7 @@ graph LR
   pipeline --> retrieval
   pipeline --> rules
   pipeline --> tools
+  retrieval --> openai_params
   schema_migrations --> interaction_log
   sentinel --> branches
   sentinel --> cluster_gaps
@@ -258,8 +265,11 @@ graph LR
   startup_probe --> guardrail
   startup_probe --> retrieval
   startup_probe --> tools
+  startup_probe --> openai_params
   summarize_failures --> failure_feed
   summarize_failures --> interaction_log
+  summarize_failures --> openai_params
+  tools --> openai_params
   tools --> tool_loop
   app --> ext_Gradio__UI_
   classifier --> ext_OpenAI___Anthropic_API__via_LiteLLM_
@@ -321,6 +331,7 @@ graph LR
 | `log_reader.py` | Sentinel-facing typed reader over the canonical interaction log (issue #28). |
 | `metric_status.py` | Per-metric thresholds + shift-status + week-over-week deltas — Sentinel's |
 | `module_health.py` | Local Gradio dashboard showing pass/fail status of digital-twin tests. |
+| `openai_params.py` | Parameters every OpenAI chat completion in the pipeline sends (#55). |
 | `pipeline.py` | Per-turn orchestrator (ADR-0003). |
 | `profile.py` | Always-on profile loader (the Frame, per ADR-0001 / ADR-0003). |
 | `retrieval.py` | Retrieval helpers — embedding, ChromaDB query, merge, rewrite, rerank, format. |

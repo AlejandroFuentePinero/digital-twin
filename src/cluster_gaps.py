@@ -23,6 +23,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from failure_feed import classify_failure
 from interaction_log import InteractionRecord
+from openai_params import REASONING_OFF
 
 
 BATCH_DEFAULT_DAYS = 7
@@ -42,7 +43,7 @@ DEFAULT_ARCHIVE_DIR = (
 # Cheap classifier-tier model — this is a one-shot batch over a small (≤ ~50)
 # question list with structured output, not a high-stakes generation. Mirrors
 # classifier.py's choice for the same reasoning.
-MODEL = "openai/gpt-4.1-mini"
+MODEL = "openai/gpt-6-luna"
 
 
 SYSTEM_PROMPT = """\
@@ -104,6 +105,7 @@ class GapClusterer:
                 {"role": "user", "content": user_prompt},
             ],
             response_format=_ClustererResponse,
+            **REASONING_OFF,
         )
         parsed = _ClustererResponse.model_validate_json(
             response.choices[0].message.content
