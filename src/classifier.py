@@ -46,7 +46,9 @@ what to answer?", "what model are you?"). May trigger a tool call to fetch a pro
 education, what kind of roles he's looking for). The safe fallback when nothing more \
 specific fits.
 - **LOGISTICAL** — pure logistics: location, work authorisation, availability, notice \
-period, compensation. No narrative.
+period, compensation, and industries or kinds of role he would decline (e.g. \
+"Would you accept a role in the gambling industry?", "Would you work in advertising?"). \
+No narrative.
 
 Output a JSON object with two fields:
 - `labels`: list of 1 or 2 branch names (most likely first). Use 2 only when a single \

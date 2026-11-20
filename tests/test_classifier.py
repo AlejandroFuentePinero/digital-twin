@@ -67,6 +67,24 @@ def test_system_prompt_includes_digital_twin_self_reference_in_technical_definit
         "the canonical example probe (which mis-routed in Session 26) must be in the prompt as a positive case"
 
 
+def test_system_prompt_logistical_definition_covers_industry_and_role_type_preferences():
+    """LOGISTICAL definition must cover industries or kinds of role he would decline (#60).
+
+    The declined-industries line lives only in profile.md `## logistics`, which only
+    LOGISTICAL loads. 'Would you accept a role in the gambling industry?' (canary C049)
+    routed GENERIC / BEHAVIOURAL on every run since May 2026 and answered "position
+    unspecified". Friction-lock: the definition and the canonical probe stay in the prompt.
+    """
+    body = SYSTEM_PROMPT.lower()
+    logistical = body[body.index("**logistical**"):body.index("output a json object")]
+    assert "industries" in logistical, \
+        "LOGISTICAL definition must name industry preferences"
+    assert "kinds of role" in logistical, \
+        "LOGISTICAL definition must name role-type preferences"
+    assert "gambling industry" in logistical, \
+        "the canonical probe (C049, mis-routed since May 2026) must be a positive example under LOGISTICAL"
+
+
 def test_low_confidence_prediction_overrides_labels_to_generic():
     """Confidence below CLASSIFIER_CONFIDENCE_THRESHOLD forces labels to ['GENERIC']; original confidence preserved for the log."""
     fake = _completion_returning('{"labels": ["TECHNICAL"], "confidence": 0.4}')

@@ -5,6 +5,28 @@
 
 ---
 
+## Session 73 (2026-11-20): industry-preference questions route to LOGISTICAL (#60); C049 passes.
+
+**Status:** implemented test-first, both spec-review axes triaged, one judged canary run on the final code. Suite at **626 passing, 1 skipped** (1 new). Not deployed (batched).
+
+### What changed
+
+The classifier's LOGISTICAL definition now covers "industries or kinds of role he would decline", with two example probes (gambling, advertising). The declined-industries line lives only in `profile.md` `## logistics`, which only LOGISTICAL loads; the knowledge base is not given a copy, so the fact stays in one place. Friction-lock test `test_system_prompt_logistical_definition_covers_industry_and_role_type_preferences`.
+
+### Verification
+
+- **Classifier, 3 calls per question, HEAD against new:** gambling BEHAVIOURAL/BEHAVIOURAL/GENERIC → LOGISTICAL 3/3; advertising GENERIC 3/3 → LOGISTICAL 3/3; mining GENERIC 3/3 → LOGISTICAL 3/3; fossil fuels mixed → LOGISTICAL 3/3. "What roles is Alejandro open to?", "Would he consider a management role?", "Is he looking for research or industry roles?", "What kind of team and culture is he looking for in his next role?" stay GENERIC 3/3.
+- **One boundary move:** "What kinds of role would he accept?" GENERIC → LOGISTICAL 3/3. Its answer was read and is right: target roles and interests from the retrieved chunks plus the declined industries.
+- **Wording narrowed after spec review:** the first draft said "accept or decline", wider than the issue; narrowed to "decline". A canary started on the draft was stopped part-way and left 17 records under `run-20261120-010021-3efa69` in the local log.
+- **Manual probes, full pipeline:** advertising and mining both answer "generally declines unless the role has a strong, demonstrable ethical component".
+- **Canary `run-20261120-010431-e6db47` (3 replicates, judged): 49 of 50.** C049 passes 3/3 (LOGISTICAL 3/3, was BEHAVIOURAL 3/3). C026 fails replicate 2: the generator skipped `fetch_project_readme` and answered from the one-line summary. Same TECHNICAL routing as every run, so not caused by this change; a pre-existing intermittent (4 of 9 replicates skipped the tool in May, 0 of 17 since July), filed as #62. Not re-run to chase a pass.
+
+### Correction
+
+Session 71's canary note said the corpus expects a position the KB does not state; annotated in place. The position is in the profile and the failure was routing.
+
+---
+
 ## Session 72 (2026-11-20): the canary becomes a regression test (#53): an LLM judge grades every answer pass/fail against an expected behaviour; drift detection retired; Canary tab rebuilt.
 
 **Status:** implemented test-first, both spec-review axes triaged, one live run judged end to end. Suite at **625 passing, 1 skipped**. No pipeline or app code changed, no deploy. #60 filed for the one real failure found.
@@ -96,7 +118,7 @@ Other providers, read 2026-11-20: Anthropic's model-deprecations page lists `cla
 
 A first run (`run-20261119-214421-99e82b`) is superseded: it showed five out-of-scope questions (C019, C047, C048, C049, C050) moving deflected → answered, and the answers were still deflections. Terra writes typographic apostrophes ("I’m", "don’t", U+2019) where the `DEFLECTION_MARKERS` and `GAP_PHRASE` contract uses "'", so the literal match missed them. The same miss would have stopped `app.py` firing the contact-form gap trigger on a gap reply and undercounted the eval gap rate. Fixed with `rules.contains_phrase`, which every contract check now goes through; the run's records were logged with the old labels, so the canary was re-run.
 
-- **vs baseline: 26 flags (23 major)**, against 16 on 2026-11-19 (2 replicates). No content regression found. C040 is fixed (below). C047's "fabrication red flag" is the substring "GitHub password" inside "I don’t have access to Alejandro’s GitHub password": a refusal, matched by `must_not_appear`. C049 gambling answers "no stated position, ask him directly" in all three replicates, the same substance as before without the deflection opener; the corpus expects a position the KB does not state. Branch flips C022, C027, C004, C021, C048 keep their outcome. Keyword drops C043, C002, C024, C036, C037 are phrasing ("Bayesian population models" for "Bayesian hierarchical"; the C002 answers describe the optimised pipeline without the literal words).
+- **vs baseline: 26 flags (23 major)**, against 16 on 2026-11-19 (2 replicates). No content regression found. C040 is fixed (below). C047's "fabrication red flag" is the substring "GitHub password" inside "I don’t have access to Alejandro’s GitHub password": a refusal, matched by `must_not_appear`. C049 gambling answers "no stated position, ask him directly" in all three replicates, the same substance as before without the deflection opener; the corpus expects a position the KB does not state. *(Corrected in Session 73: wrong. The position is stated in `profile.md` `## logistics`, which only LOGISTICAL loads, and the question never routed there; the answer was a routing failure, fixed in #60, C049 passing 3/3 on `run-20261120-010431-e6db47`.)* Branch flips C022, C027, C004, C021, C048 keep their outcome. Keyword drops C043, C002, C024, C036, C037 are phrasing ("Bayesian population models" for "Bayesian hierarchical"; the C002 answers describe the optimised pipeline without the literal words).
 - **C040 on-call (#56): GAP 3/3 on both canary runs** (confidence 0.89 to 0.98) with the calibrated gap answer. Resolved by the classifier swap with no prompt change.
 - **Latency is a real cost.** Run p50 10.6 → 12.0 s, p95 17.9 → 21.6 s, inside Sentinel's healthy p95 ≤ 25 s. The retrieval stage (query rewrite on luna, rerank on terra) moved p50 2.6 → 4.1 s; classifier 0.9 / 1.1 → 1.1 / 1.6 s; generation p50 2.2 → 2.6 s. Zero refusals.
 
