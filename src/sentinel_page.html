@@ -46,10 +46,10 @@ nav.tabs a.on { color:var(--text); background:var(--hover); }
 /* summary */
 h1.head { font:350 36px/1.2 var(--serif); margin:0 0 8px; letter-spacing:0; }
 .sub { color:var(--text-muted); margin:0 0 24px; font-size:15px; }
-.kpis { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:16px; margin-bottom:40px; }
+.kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; margin-bottom:40px; }
 @media (max-width:980px){ .kpis { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 .kpi { text-align:left; font:inherit; color:inherit; background:var(--surface); border:var(--hair) solid var(--border); border-radius:var(--r-card); padding:18px 20px; cursor:pointer; }
-button.kpi:hover { border-color:var(--border-strong); }
+.kpi:hover { border-color:var(--border-strong); }
 .kpi .lab { font-size:14px; color:var(--text-2); }
 .kpi .big { font:400 36px/1.1 var(--serif); margin:10px 0 6px; }
 .kpi .big small { font:400 18px var(--serif); color:var(--text-muted); }
@@ -203,7 +203,7 @@ document.getElementById('nav').onclick = e => { const a = e.target.closest('a');
 /* ---------- source line + summary ---------- */
 const metricRows = D.metrics.flatMap(s => s.rows);
 const C = D.canary;
-document.getElementById('source').textContent = `${D.source.label}, ${D.source.visitors} visitor turns${D.source.newest ? `, newest ${ago(D.source.newest)} ago` : ''}`;
+document.getElementById('source').textContent = `${D.source.label}, ${D.source.records} turns${D.source.newest ? `, newest ${ago(D.source.newest)} ago` : ''}`;
 document.getElementById('refresh').textContent = D.commands.refresh;
 
 function renderSummary() {
@@ -213,7 +213,6 @@ function renderSummary() {
   const wk = D.failures.filter(f => READ - new Date(f.ts) <= 7 * 864e5);
   const wkFail = wk.filter(f => f.tier === 'failure'), wkOut = wk.filter(f => f.tier === 'outcome');
   const canon = D.coverage.filter(e => !e.off), never = canon.filter(e => e.count === 0);
-  const lastCheck = D.deploy_check;
 
   const p1 = fails.length ? `${cap(word(fails.length))} canary ${plural(fails.length, 'question')} ${fails.length === 1 ? 'fails' : 'fail'}` : 'The canary passes';
   const p2 = al.length ? `${word(al.length)} ${plural(al.length, 'metric')} ${al.length === 1 ? 'is' : 'are'} on alert`
@@ -230,7 +229,7 @@ function renderSummary() {
 
   document.getElementById('summary').innerHTML = `
     <h1 class="head">${p1} and ${p2}.</h1>
-    <p class="sub">${S.newest ? `Newest turn ${ago(S.newest)} ago` : 'No turns logged yet'}, ${D.window_totals[0]} visitor ${plural(D.window_totals[0], 'turn')} in the last 7 days (${S.checks} deploy-check ${plural(S.checks, 'turn')} and ${S.stubs} test ${plural(S.stubs, 'stub')} left out of every figure), read from ${S.files_read} ${plural(S.files_read, S.production ? 'day file' : 'file')} at ${when(S.read_at)}. ${writer}${D.flags.length ? ` Flags: ${D.flags.map(f => esc(f.headline)).join('; ')}.` : ' No flags raised.'}</p>
+    <p class="sub">${S.newest ? `Newest turn ${ago(S.newest)} ago` : 'No turns logged yet'}, ${D.window_totals[0]} ${plural(D.window_totals[0], 'turn')} in the last 7 days, read from ${S.files_read} ${plural(S.files_read, S.production ? 'day file' : 'file')} at ${when(S.read_at)}. ${writer}${D.flags.length ? ` Flags: ${D.flags.map(f => esc(f.headline)).join('; ')}.` : ' No flags raised.'}</p>
     ${notes.length ? `<ul class="notes">${notes.map(([c, t]) => `<li class="${c}">${c === 'bad' ? '<span class="vdot dot fail"></span>' : ''}${esc(t)}</li>`).join('')}</ul>` : ''}
     <div class="kpis">
       <button class="kpi" data-go="canary">
@@ -248,18 +247,13 @@ function renderSummary() {
         <div class="big">${wkFail.length}<small> refused, error or exhausted</small></div>
         <div class="ctx">${outBits.length ? 'Also ' + outBits.join(', ') : 'Nothing declined or unanswered'}</div>
       </button>
-      <div class="kpi" style="cursor:default">
-        <div class="lab">${dot(!lastCheck ? 'neutral' : lastCheck.answered < lastCheck.sent ? 'fail' : 'ok', 'Last deploy check')}</div>
-        <div class="big">${lastCheck ? `${lastCheck.answered}<small> of ${lastCheck.sent}</small>` : '&ndash;'}</div>
-        <div class="ctx">${lastCheck ? `turns answered, <span class="id">${esc(lastCheck.sha)}</span>, ${ago(lastCheck.ts)} ago` : 'no deploy check in the log'}</div>
-      </div>
       <button class="kpi" data-go="coverage">
         <div class="lab">${dot(never.length ? 'warn' : 'ok', 'Knowledge base')}</div>
         <div class="big">${never.length}<small> of ${canon.length}</small></div>
         <div class="ctx">sections never retrieved</div>
       </button>
     </div>`;
-  document.querySelectorAll('button.kpi').forEach(b => b.onclick = () => go(b.dataset.go));
+  document.querySelectorAll('.kpi').forEach(b => b.onclick = () => go(b.dataset.go));
 }
 
 /* ---------- metrics ---------- */
@@ -389,7 +383,7 @@ function renderFailures() {
   document.getElementById('t-failures').innerHTML = `
     <div class="card">
       <h2>Failures and outcomes</h2>
-      <p class="subtitle">Visitor turns only. Failures are turns where the twin gave nothing usable. Outcomes are answers worth scanning for patterns, not defects. Did not know, Declined and Error are read from the answer by the outcome judge; a turn it has not labelled yet shows as Not yet judged.</p>
+      <p class="subtitle">Failures are turns where the twin gave nothing usable. Outcomes are answers worth scanning for patterns, not defects. Did not know, Declined and Error are read from the answer by the outcome judge; a turn it has not labelled yet shows as Not yet judged.</p>
       <div class="filters">
         <div class="seg" id="fwin">${[[7,'7 days'],[30,'30 days'],[90,'90 days'],[null,'All time']].map(([d, l]) => `<button data-d="${d}">${l}</button>`).join('')}</div>
         <select id="fbranch"><option value="All">All branches</option>${branches.map(b => `<option>${esc(b)}</option>`).join('')}</select>
@@ -469,7 +463,7 @@ function renderCoverage() {
   document.getElementById('t-coverage').innerHTML = `
     <div class="card">
       <h2>Knowledge base coverage</h2>
-      <p class="subtitle">How often retrieval returned each section, across all ${D.source.visitors} ${D.source.production ? 'production' : 'local'} visitor turns (${total} retrievals). Sort by any column.</p>
+      <p class="subtitle">How often retrieval returned each section, across all ${D.source.records} ${D.source.production ? 'production' : 'local'} turns (${total} retrievals). Sort by any column.</p>
       <div class="tiles" style="grid-template-columns:repeat(3,minmax(0,1fr));max-width:720px">
         <div class="tile"><div class="lab">${dot('warn', 'Never retrieved')}</div><div class="big">${never.length}</div><div class="ctx">of ${canon.length} sections</div></div>
         <div class="tile"><div class="lab">${dot('ok', 'Retrieved')}</div><div class="big">${canon.length - never.length}</div><div class="ctx">at least once</div></div>

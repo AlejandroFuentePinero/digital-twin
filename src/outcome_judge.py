@@ -3,7 +3,7 @@
 The twin's logged ``event_type`` follows the branch that answered, not the
 answer (``LIMITATIONS::P17``). Sentinel reads the outcome from the answer
 instead: the canary judge's model reads each live turn's final answer once
-and labels it answered, declined, did not know, error or test stub.
+and labels it answered, declined, did not know or error.
 
 Labels are cached in ``data/logs/outcome_judgements.jsonl`` (gitignored,
 beside Sentinel's other caches), one line per turn keyed by the record's
@@ -48,9 +48,7 @@ _SYSTEM_PROMPT = (
     "for (for example \"I don't have that information in my knowledge base\") and "
     "gives no substantive answer to the question itself.\n"
     "- error: the visitor got an error message or the canned message asking them "
-    "to reach out to Alejandro directly instead of an answer.\n"
-    "- test stub: the turn is a test artefact rather than a real exchange, such as "
-    "a placeholder answer like \"ok\" or \"Hi.\" to a test question.\n\n"
+    "to reach out to Alejandro directly instead of an answer.\n\n"
     "Judge what the answer does, not how long it is. When an answer both says it "
     "lacks a specific detail and answers the rest of the question with substance, "
     "it is answered."
@@ -58,7 +56,7 @@ _SYSTEM_PROMPT = (
 
 
 class _JudgeOutput(BaseModel):
-    outcome: Literal["answered", "declined", "did not know", "error", "test stub"]
+    outcome: Literal["answered", "declined", "did not know", "error"]
 
 
 def judge_outcome(record: InteractionRecord) -> tuple[str | None, str | None]:

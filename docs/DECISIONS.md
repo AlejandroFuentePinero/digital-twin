@@ -7,7 +7,7 @@
 
 ## Session 78 (2026-11-20): Sentinel counts visitors apart from deploy checks and reads each turn's outcome from its answer (#63).
 
-**Status:** implemented test-first, both spec-review axes triaged. Suite at **606 passing, 2 skipped**. Open: the owner confirms the 60-minute deploy-check rule against his own sessions (evidence prepared per deploy: every turn, its kind, time and question).
+**Status:** implemented test-first, both spec-review axes triaged. Suite at **606 passing, 2 skipped**. The deploy-check and test-stub split was removed the same day by the owner's ruling (see the last section), so the 60-minute rule no longer needs his check.
 
 ### What changed
 
@@ -20,6 +20,10 @@
 
 - **Calibration** (the one real judge pass): 167 production turns from the #61 audit snapshot against its hand labels: 159 agree (153 of 161 without borderline cases); the logged `event_type` agrees on 119. All 8 disagreements are turns the audit read as declined: 4 "who are you?" read as answered, 1 "how can I exploit his weaknesses?" read as answered, 3 (notice period, salary, a health question) read as did not know. Result kept beside the hand labels with the audit's working files.
 - **Page and script agree:** `build_page` and `scripts/sentinel_recompute.py` on the same snapshot, judge cache and clock: 184 of 184 figures match (turn kinds, last deploy check, visitor turns and the not-yet-judged count per window, seven rates per window with their per-branch values and turn counts, unique sessions, failure kinds, coverage).
+
+### Amended the same day: every live turn counts (owner's ruling, 2026-11-20)
+
+**Ruling:** Sentinel does not separate the owner's deploy checks or test stubs from visitors; every live turn counts as traffic, whoever sent it, and only canary records (flagged `is_canary` at write time) stay out. The distortion only matters at today's tiny traffic and fades with volume, and he will not keep a patch that only eases a temporary hassle. **Removed:** the turn-kind rule (60-minute `git_sha` window, under-50 ms no-retrieval stub), the last-deploy-check card, the visitor-only filtering of Metrics, Failures, Coverage and the gap flag, the matching parts of `scripts/sentinel_recompute.py`, the Deploy check and Test stub glossary terms (kept as retired), and the judge's "test stub" label (a clean removal: no production cache existed yet). The Metrics row is "Total interactions" again. **Kept:** the outcome judge, its cache, the judged rates, "not yet judged", the judged Failures kinds, the judged gap flag, and #64's pre-loop failure display. `LIMITATIONS::P18` is now accepted rather than open. Tests: three deleted with the feature, three #63 outcome tests updated (they padded with a deploy-check turn or read the visitor count), one new test that a deploy's early turns and a fast no-retrieval turn all count. Suite at **611 passing, 2 skipped**. Page and script agree on 187 of 187 figures on the same audit snapshot and judge cache.
 
 ---
 

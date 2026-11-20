@@ -60,15 +60,10 @@ A local page (`src/sentinel.py` writes `data/logs/sentinel.html` and opens it) f
 **Pre-loop failure**:
 A turn whose classifier, retrieval or composer raised before the retry loop (#64). `Pipeline.run` logs one record with `event_type='refused'`, no attempts, `failed_stage` naming the stage, the error type and message, and the latency so far, then re-raises so `app.py` shows the visitor the canned refusal. Before #64 such a turn left no record (LIMITATIONS::O9). Distinct from a refusal inside the retry loop, where every attempt was rejected or raised.
 
-**Deploy check**:
-A live turn within 60 minutes of the first turn of its deploy (`git_sha`): the owner's post-deploy check, not a visitor. Sentinel leaves deploy checks out of every visitor figure and shows the last one on its own (turns answered of turns sent) (#63). A turn with no `git_sha` is never a deploy check.
-_Avoid_: Smoke test (the runbook's procedure; the deploy check is how its turns are recognised in the log)
-
-**Test stub**:
-A live turn the twin answered with no retrieval and a total under 50 ms: a hand-written test record, not a real exchange (five on 2026-05-07). Left out of every Sentinel figure like a **Deploy check**. A turn that failed fast is never a test stub.
+_Retired in #63 by the owner's ruling of 2026-11-20: **deploy check** (a live turn within 60 minutes of its deploy's first turn) and **test stub** (an answered turn with no retrieval under 50 ms, also an **Outcome judge** label). Sentinel counts both as traffic like every other live turn; only canary records are left out. `docs/DECISIONS.md` Session 78 records why._
 
 **Judged outcome**:
-What a live turn's final answer did, as read by the **Outcome judge**: answered, declined, did not know, error or test stub. Sentinel's answered, gap and deflection rates and the Failures tab's Did not know, Declined and Error kinds come from it (#63). An honest "he has not done that" is answered. A turn not judged yet shows as not yet judged and is left out of those rates.
+What a live turn's final answer did, as read by the **Outcome judge**: answered, declined, did not know or error. Sentinel's answered, gap and deflection rates and the Failures tab's Did not know, Declined and Error kinds come from it (#63). An honest "he has not done that" is answered. A turn not judged yet shows as not yet judged and is left out of those rates.
 
 **Outcome judge**:
 The canary judge's model (`gpt-6.2-sol`, `outcome_judge.py`) reading each live turn's final answer once to give its **Judged outcome**. It runs on a production Sentinel run and caches each label in `data/logs/outcome_judgements.jsonl`, keyed by the record's timestamp and session, so nothing the twin logs changes. A turn that failed before the retry loop (#64) is an error without a model call.

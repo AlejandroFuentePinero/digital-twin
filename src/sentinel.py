@@ -90,12 +90,6 @@ CANARY_SPARK_WINDOW = 12
 CANARY_SLOW_MULTIPLIER = 1.5  # per-question median latency vs baseline marks it slow
 CANARY_FULL_RUN = 150  # 50 questions x 3 answers
 
-# A live turn this many minutes or fewer after the first turn of its deploy
-# (git_sha) is the owner's deploy check, not a visitor (#63).
-DEPLOY_CHECK_MINUTES = 60
-# A turn with no retrieval and a total under this many ms is a test stub.
-STUB_MAX_TOTAL_MS = 50
-
 PAGE_PATH = DEFAULT_LOG_PATH.parent / "sentinel.html"
 TEMPLATE_PATH = Path(__file__).with_name("sentinel_page.html")
 
@@ -213,7 +207,7 @@ def _short_sha(sha: str | None) -> str:
 # no metric name is for orientation only: it never carries a mark.
 METRIC_SPECS: list[tuple[str, list[tuple]]] = [
     ("Outcome", [
-        ("Visitor turns",              None,                          lambda m: m.total_interactions, str),
+        ("Total interactions",         None,                          lambda m: m.total_interactions, str),
         ("Answered with substance",    "answered_with_substance_rate", lambda m: m.answered_with_substance_rate, _fmt_pct),
         ("Gap rate",                   "gap_rate",                    lambda m: m.gap_rate, _fmt_pct),
         ("Deflection rate",            "deflection_rate",             lambda m: m.deflection_rate, _fmt_pct),
@@ -253,11 +247,11 @@ METRIC_SPECS: list[tuple[str, list[tuple]]] = [
 # What each row measures, shown in its detail window. Keys match the labels
 # in METRIC_SPECS exactly (a test pins the two together).
 METRIC_GLOSSARY: dict[str, str] = {
-    "Visitor turns": "Every visitor turn in the window. Deploy checks (turns within an hour of a deploy's first turn) and test stubs are left out of every figure on this tab.",
-    "Answered with substance": "Share of judged visitor turns whose answer the outcome judge read as answered, including an honest \"he has not done that\". Read from the answer, not from the branch that handled the question.",
-    "Gap rate": "Share of judged visitor turns whose answer said it did not have the information asked for (the judge's \"did not know\").",
-    "Deflection rate": "Share of judged visitor turns whose answer declined a question as out of scope (the judge's \"declined\").",
-    "Not yet judged": "Visitor turns the outcome judge has not labelled yet. They are left out of the three rates above until a production run judges them.",
+    "Total interactions": "Every live turn in the window, whoever sent it: the owner's deploy checks count as traffic. Canary turns are left out.",
+    "Answered with substance": "Share of judged turns whose answer the outcome judge read as answered, including an honest \"he has not done that\". Read from the answer, not from the branch that handled the question.",
+    "Gap rate": "Share of judged turns whose answer said it did not have the information asked for (the judge's \"did not know\").",
+    "Deflection rate": "Share of judged turns whose answer declined a question as out of scope (the judge's \"declined\").",
+    "Not yet judged": "Turns the outcome judge has not labelled yet. They are left out of the three rates above until a production run judges them.",
     "Refusal rate": "Share of turns that ended in the canned refusal: the guardrail rejected all three attempts, or the classifier, retrieval or composer failed before the first attempt.",
     "Guardrail rejection rate": "Share of turns where the guardrail rejected at least one attempt.",
     "Retry-exhaustion rate": "Share of turns that used all three attempts, whether or not the last one was accepted.",
@@ -573,45 +567,6 @@ def _structured_cell(raw, label: str) -> dict | None:
     return None
 
 
-def turn_kinds(live: list[InteractionRecord]) -> list[str]:
-    """``visitor``, ``check`` or ``stub`` for each live turn, in order.
-
-    A stub is an answered turn with no retrieval and a total under
-    STUB_MAX_TOTAL_MS (a turn that failed fast is a real failure). A check is
-    a turn within DEPLOY_CHECK_MINUTES of the first turn of its git_sha.
-    Everything else, turns with no git_sha included, is a visitor."""
-    first: dict[str, datetime] = {}
-    for r in live:
-        t = datetime.fromisoformat(r.timestamp)
-        if r.git_sha and (r.git_sha not in first or t < first[r.git_sha]):
-            first[r.git_sha] = t
-    kinds = []
-    for r in live:
-        if _answered(r) and not r.retrieved_chunks and r.latency_ms.get("total", 0) < STUB_MAX_TOTAL_MS:
-            kinds.append("stub")
-        elif r.git_sha and datetime.fromisoformat(r.timestamp) - first[r.git_sha] <= timedelta(
-                minutes=DEPLOY_CHECK_MINUTES):
-            kinds.append("check")
-        else:
-            kinds.append("visitor")
-    return kinds
-
-
-def _answered(r: InteractionRecord) -> bool:
-    """The visitor got an answer: some attempt was accepted."""
-    return any(a.get("is_acceptable") for a in r.attempts)
-
-
-def _deploy_check_section(checks: list[InteractionRecord]) -> dict | None:
-    """The newest deploy check: its deploy, when it started, turns sent and answered."""
-    if not checks:
-        return None
-    sha = max(checks, key=lambda r: r.timestamp).git_sha
-    turns = [r for r in checks if r.git_sha == sha]
-    return {"sha": _short_sha(sha), "ts": _iso(min(r.timestamp for r in turns)),
-            "sent": len(turns), "answered": sum(_answered(r) for r in turns)}
-
-
 def _metrics_section(model: DashboardModel) -> tuple[list[dict], list[int]]:
     models = [model.for_window(days=d) for _, d in WINDOWS]
     # All time has no earlier window to compare with, so it gets no prior.
@@ -679,12 +634,12 @@ def _failure_mode(r: InteractionRecord, outcome: str | None) -> str | None:
     return "not-judged" if outcome is None else None
 
 
-def _failures_section(visitors: list[InteractionRecord], outcomes: dict[str, str]) -> list[dict]:
+def _failures_section(live: list[InteractionRecord], outcomes: dict[str, str]) -> list[dict]:
     sessions: dict[str, list[InteractionRecord]] = {}
-    for r in visitors:
+    for r in live:
         sessions.setdefault(r.session_id, []).append(r)
     rows = []
-    for r in visitors:
+    for r in live:
         outcome = outcomes.get(outcome_key(r))
         mode = _failure_mode(r, outcome)
         if mode is None:
@@ -845,29 +800,24 @@ def build_page(
     except LogReadError as exc:
         return {"failed": str(exc), "source": source, "commands": COMMANDS}
     report = reader.report
-    live = [r for r in all_records if not r.is_canary]
-    kinds = turn_kinds(live)
-    # Visitor figures only: deploy checks and test stubs are the owner's turns (#63).
-    visitors = [r for r, k in zip(live, kinds) if k == "visitor"]
     outcomes = read_outcomes(outcomes_path)
-    model = DashboardModel(visitors, provided_session_ids=provided_session_ids, outcomes=outcomes)
+    model = DashboardModel(all_records, provided_session_ids=provided_session_ids, outcomes=outcomes)
+    live = model.records
     source.update({
         "records": len(live), "files_read": report.files_read,
         "unreadable_lines": report.unreadable_lines, "duplicates": report.duplicates,
         "newest": max((_iso(r.timestamp) for r in live), default=None),
-        "visitors": len(visitors), "checks": kinds.count("check"), "stubs": kinds.count("stub"),
     })
     sections, totals = _metrics_section(model)
     coverage = [{"section": e.section_heading, "file": e.source_file, "count": e.retrieval_count,
-                 "off": e.off_canon} for e in _kb_coverage_entries(visitors)]
+                 "off": e.off_canon} for e in _kb_coverage_entries(live)]
     return {
         "failed": None, "source": source, "commands": COMMANDS,
         "writer": _writer_state(reader),
         "batch_messages": [m for m in (batch_messages or []) if m],
         "flags": [{"headline": f.headline, "detail": f.detail} for f in _build_flags(model)],
         "metrics": sections, "window_labels": WINDOW_LABELS, "window_totals": totals,
-        "deploy_check": _deploy_check_section([r for r, k in zip(live, kinds) if k == "check"]),
-        "failures": _failures_section(visitors, outcomes),
+        "failures": _failures_section(live, outcomes),
         "canary": _canary_section(all_records, verdicts_dir=verdicts_dir,
                                   baseline_path=baseline_path, corpus_path=corpus_path),
         # Built from production only; a local page does not show them.
