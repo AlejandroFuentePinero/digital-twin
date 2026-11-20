@@ -5,6 +5,28 @@
 
 ---
 
+## Session 74 (2026-11-20): projects the KB only mentions in passing fetch their README (#62); C026 and C027 fetch on the first attempt.
+
+**Status:** implemented test-first (commit `6f4f2be`), both spec-review axes triaged, one judged canary run on the final code plus a full pre-check run. Suite at **629 passing, 1 skipped** (3 new). Not deployed: deploy debt is this commit.
+
+### Cause
+
+The `fetch_project_readme` tool description lists every registry entry's summary. On a question about a project the KB covers in one bullet (C026 Synthetic A/B Dataset Generator, C027 Multi-Agent Conversation), the generator sometimes answered from that summary instead of fetching. The guardrail never sees the summaries, so it rejected true detail ("Gradio app", "conversion data") as fabrication and told the generator to stick to the KB. The retry usually fetched and recovered; sometimes it trimmed to the one-line bullet, which is the thin answer the #53 judge failed. Prompt plus tool description, with nondeterminism deciding when it shows. Measured on the canary history: C026 skipped on the first attempt in 10 of 35 replicates (all 10 rejected), C027 in 18 of 23 (16 rejected). The flagship projects skip safely because the KB covers them in depth.
+
+### What changed
+
+`tool_rules` (shared by GENERIC, GAP and TECHNICAL, writer and judge) now says: the summaries are an index for choosing an entry, not a source; a one-line mention in the retrieved context is not sufficient for a question about what an entry is, does or how it works (one new Fire-when bullet); and an answer about an entry rejected as unsupported is fetched on retry rather than trimmed. This is LIMITATIONS P8's "Option C", done in the prompt rather than in code.
+
+Considered and rejected: showing the summaries to the guardrail, which would make answers drawn only from summaries acceptable.
+
+### Verification
+
+- **Pre-check before any code change (scratch logs, canonical log untouched):** the candidate rule on the full corpus plus six probes for over-fetching ("Tell me about your projects", "What AI projects have you built?", "What's in the LLM Engineering Lab?", "Have you used Gradio?", multi-agent and pandas skill probes), with the current rule run on the probes as control. 186 of 186 judged replicates passed; no question that never fetches started fetching; the probes fetched 0 of 3 under both rules. The retry clause was then simplified after spec review (the model cannot see whether an earlier attempt fetched, so "and you had not fetched it" was dropped).
+- **Canary `run-20261120-031007-11eb6f` on `6f4f2be` (3 replicates, judged): 149 of 150.** C026 and C027 fetch on the first attempt 3/3 and pass (they fetched 11 of 12 and 2 of 12 before). No question that never fetches started fetching. C002 fetched 1 of 3 (was 15 of 15) and passed; it answers from the KB, which covers that project in depth. C046 failed replicate 1 on a labelling slip unrelated to the tool (it called a total that includes the under-review paper "26 published outputs"); 3/3 in the pre-check, first failure on record, not ticketed.
+- **One canary run, not two:** the issue asked for two consecutive runs. The full pre-check counts as the first: same text apart from the retry wording, which only acts after a rejection. A second run was started and stopped before it began, at the operator's request to justify its cost.
+
+---
+
 ## Session 73 (2026-11-20): industry-preference questions route to LOGISTICAL (#60); C049 passes.
 
 **Status:** implemented test-first, both spec-review axes triaged, one judged canary run on the final code. Suite at **626 passing, 1 skipped** (1 new). Deployed 2026-11-20 (Space commit `b0d1dc0c`, five-branch API smoke passed with gambling and advertising answered correctly on LOGISTICAL, see the runbook).

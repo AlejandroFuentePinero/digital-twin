@@ -290,6 +290,8 @@ The `fetch_project_readme` tool fires on the model's discretion — `tool_rules`
 
 **Trip-wire promotion to fix-candidate:** if 5+ real-recruiter sessions in production (post-Phase-7 deploy) hit factual-drill-followed-by-gap-acknowledge that visibly costs credibility within the first month of traffic, promote to fix-candidate (Option C from the Session 56 audit: guardrail-rejection-on-fabrication forces a tool fetch on retry).
 
+**Session 74 update (2026-11-20, #62): false negative observed and fixed for passing-mention projects.** The judged canary made it loud: C026 answered from the tool description's registry summary without fetching, the guardrail (which never sees the summaries) rejected true detail as fabrication, and the retry trimmed to the one-line KB bullet. `tool_rules` now treats the summaries as an index, not a source, fetches when the KB only mentions an entry in passing, and fetches on retry after an unsupported-detail rejection (Option C, in the prompt). C026 and C027 moved to first-attempt fetches 3/3 with no new fetching elsewhere (`run-20261120-031007-11eb6f`; details in DECISIONS Session 74). Still open: initial drills on flagship projects with deep KB coverage skip the tool by design and answer from the KB; C002 moved from 15 of 15 fetches to 1 of 3 and still passes. Trip-wire: a judged canary failure on a named-project question whose replicate made no tool call.
+
 ---
 
 ### O6 — Classifier routes specific-paper questions to GENERIC, losing TECHNICAL tool access
