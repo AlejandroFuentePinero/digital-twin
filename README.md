@@ -27,7 +27,7 @@ Built as a portfolio piece to demonstrate production-grade RAG, branch-routed pr
 
 A Gradio chat interface where recruiters and hiring managers can ask focused questions about my background. Behind the surface, every turn goes through a multi-stage pipeline: a small classifier routes the question to a topic-specific prompt, retrieval pulls relevant context from a vector store, a generator drafts an answer (with optional tool use to fetch project docs), and a separate model acts as a guardrail to check the result before it reaches the user. Failed attempts retry with structured feedback up to three times; persistent failures fall back to a polite "contact me directly" message.
 
-Every turn is logged with branch, classifier confidence, retrieval chunks, tool calls, retry attempts, and latency — readable in a local Gradio dashboard ("Sentinel") for drift detection and gap discovery.
+Every turn is logged with branch, classifier confidence, retrieval chunks, tool calls, retry attempts, and latency, readable on a local page ("Sentinel", rebuilt from the whole log on every run) for drift detection and gap discovery.
 
 ## How it works
 
@@ -176,7 +176,6 @@ graph LR
   sentinel --> failure_feed
   sentinel --> cluster_gaps
   sentinel --> canary_runner
-  sentinel --> ext_gradio
   canary_runner --> interaction_log
   failure_feed --> interaction_log
   cluster_gaps --> interaction_log

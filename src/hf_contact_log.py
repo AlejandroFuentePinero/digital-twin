@@ -41,6 +41,7 @@ from pathlib import Path
 from huggingface_hub import HfApi
 
 from contact_log import ContactRecord
+from log_reader import LogReadError
 from hf_log_writer import (
     DEFAULT_BUFFER_PATH as _DEFAULT_LOG_BUFFER_PATH,
     HFLogWriter,
@@ -121,12 +122,10 @@ class HFContactReader:
                 self._files_listed = self._api.list_repo_files(
                     repo_id=self._repo_id, repo_type="dataset"
                 )
-            except Exception:
-                _log.exception(
-                    "HFContactReader could not list repo %s", self._repo_id
-                )
-                self._files_listed = []
-                return []
+            except Exception as exc:
+                    raise LogReadError(
+                    f"could not list contacts in {self._repo_id}: {type(exc).__name__}: {exc}"
+                ) from exc
 
         targets = [f for f in self._files_listed if _HF_CONTACT_PATTERN.match(f)]
 
@@ -155,8 +154,9 @@ class HFContactReader:
                 repo_id=self._repo_id, filename=filename, repo_type="dataset"
             )
         except Exception as exc:
-            _log.warning("HFContactReader skipping %s (%s)", filename, exc)
-            return []
+            raise LogReadError(
+                f"could not download {filename}: {type(exc).__name__}: {exc}"
+            ) from exc
         out: list[dict] = []
         for lineno, line in enumerate(
             Path(local).read_text(encoding="utf-8").splitlines(), start=1

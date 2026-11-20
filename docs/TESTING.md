@@ -28,7 +28,7 @@ These files have no matching `test_*.py` because they have no testable behavior:
 
 `src/module_health.py` is a partial exemption: its pure helpers (`humanize`, `parse_report`) are covered in `tests/test_module_health.py`; the Gradio rendering, subprocess invocation, and `build_app()` wiring are not — they are tooling glue, verified by launching the dashboard.
 
-`src/sentinel.py` follows the same partial-exemption pattern: its pure formatters (`format_header`, `format_panel`) are covered in `tests/test_sentinel.py` alongside a `build_app()` smoke test (synthetic + live JSONL, no `.launch()`); the Gradio panel layout and refresh-button wiring are verified by running the dashboard locally.
+`src/sentinel.py` is not exempt since #61: it builds a page model (`build_page`) that holds every figure as plain data, tested in `tests/test_sentinel.py` with readers and the Hugging Face hub faked at the process boundary (including the injected failures: a listing failure, a failed day download, a missing token, a malformed line, a duplicate record, a writer that stopped writing). Only the browser-side layout in `src/sentinel_page.html` is verified by opening the page.
 
 ## The dashboard
 

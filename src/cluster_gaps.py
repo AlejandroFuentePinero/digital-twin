@@ -12,6 +12,8 @@ split keeps the dashboard fast and offline-safe.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -23,6 +25,9 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from failure_feed import classify_failure
 from interaction_log import InteractionRecord
+
+if TYPE_CHECKING:
+    from log_reader import LogReader
 from openai_params import REASONING_OFF
 
 
@@ -165,18 +170,22 @@ def run_batch(
     out_path: Path,
     log_path: Path | None = None,
     archive_dir: Path | None = DEFAULT_ARCHIVE_DIR,
+    reader: LogReader | None = None,
 ) -> Path:
     """Read the interaction log, extract recent gap questions, cluster them via
     the LLM, and write `gap_clusters.json`. Returns the output path so the CLI
     can print it.
 
-    `log_path=None` defaults to the canonical interactions.jsonl via LocalReader.
+    `reader`, when given, is read instead of a file (Sentinel passes its own,
+    so the clusters describe the log it shows). Otherwise `log_path=None`
+    defaults to the canonical interactions.jsonl via LocalReader.
     `archive_dir` is the dated-snapshot directory consumed by
     `flag_detector.detect_new_cluster`; pass ``None`` to skip archiving.
     """
     from log_reader import LocalReader
 
-    reader = LocalReader(log_path) if log_path is not None else LocalReader()
+    if reader is None:
+        reader = LocalReader(log_path) if log_path is not None else LocalReader()
     # Canary records share interactions.jsonl with live records (#39). Cluster
     # only over live gap questions — synthetic canary GAP-aimed probes
     # (C006-C009, C019-C022) would otherwise contaminate the cluster output.
@@ -206,12 +215,12 @@ def main() -> None:
         help=f"Output JSON path (default {DEFAULT_OUT_PATH}).",
     )
     args = parser.parse_args()
-    written = run_batch(days=args.days, out_path=args.out)
+    from log_reader import make_log_reader
+
+    # The log Sentinel shows: production when HF_TOKEN is set, else local.
+    written = run_batch(days=args.days, out_path=args.out, reader=make_log_reader())
     print(f"Wrote {written}")
 
-
-if __name__ == "__main__":
-    main()
 
 
 def extract_gap_questions(
@@ -227,3 +236,7 @@ def extract_gap_questions(
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         records = [r for r in records if r.timestamp >= cutoff]
     return [r.question for r in records if classify_failure(r) == "gap"]
+
+
+if __name__ == "__main__":
+    main()

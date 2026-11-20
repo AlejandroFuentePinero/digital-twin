@@ -1,44 +1,41 @@
-"""Local Gradio dashboard over the canonical interaction log (Phase 4).
+"""Sentinel: the operator's page over the interaction log (issue #61 rebuild).
 
-Three-tab layout (broad → specific): Metrics → Trends → Failures.
+One run reads the log, builds a page model (every figure the page shows,
+as plain data) and writes a static page in the calm dashboard style to
+``data/logs/sentinel.html`` (gitignored: it quotes visitors' questions),
+then opens it. Refresh means running it again; every run reads the log
+afresh.
 
-The Metrics tab opens with a status banner (`SENTINEL · N alerts · N
-warnings · N healthy`) followed by Flags and a single-header Health Overview
-where each metric row shows three windowed values inline (7d / 30d / Global)
-with divergence highlighting when the windows disagree.
+Four tabs, as before the rebuild: Metrics (the Trends split by branch now
+sits in each metric's detail window), Canary, Failures, Coverage. A summary
+above them says what needs attention and how fresh the log is.
 
-The Trends tab carries the Trend Explorer (scan + investigate). The Failures
-tab carries the Failure Feed (one collapsible accordion per row, expanding
-in place) plus the cached Gap Clusters and Deflection Summary panels.
+The read is all or nothing: if the dataset listing or any day file fails,
+the page says "Log read failed" with the reason and shows no numbers, so a
+broken read can never look like a quiet week. Lines that cannot be parsed
+and repeated records are counted on the page.
 
-On launch the cluster + summary batches auto-refresh when their cached file
-is missing or older than ``DEFAULT_FRESHNESS_DAYS``; failures surface as a
-visible warning banner rather than crashing the app.
+On each run the gap-cluster and deflection-summary caches are rebuilt when
+older than ``DEFAULT_FRESHNESS_DAYS``, from the same log the page reads.
 
-Visual language is *Midnight Mono*: near-black background, monospace for
-data, sans-serif for prose, restrained accent colours, no gradients or
-shadows.
-
-Run locally with ``uv run python src/sentinel.py``.
+Run with ``uv run python src/sentinel.py`` (``--local`` for the local log,
+``--no-open`` to skip opening the browser).
 """
 
 from __future__ import annotations
 
-import html
-import os
+import json
 import statistics
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+import webbrowser
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import gradio as gr
 import matplotlib
+from dotenv import load_dotenv
 
 matplotlib.use("Agg")  # non-interactive backend — no display needed
 from matplotlib.figure import Figure
-import pandas as pd
 
-from branches import REGISTRY as BRANCH_REGISTRY
 from cluster_gaps import (
     DEFAULT_ARCHIVE_DIR as CLUSTERS_ARCHIVE_DIR,
     DEFAULT_OUT_PATH as CLUSTERS_DEFAULT_PATH,
@@ -48,13 +45,10 @@ from cluster_gaps import (
 import cluster_gaps
 import canary_runner
 import summarize_failures
-from canary_baseline import (
-    DEFAULT_BASELINE_PATH,
-    resolve_baseline_records,
-    runs_after_baseline,
-)
-from canary_verdicts import DEFAULT_VERDICTS_DIR, QuestionVerdict, read_run_verdicts
-from contact_log import read_provided_session_ids
+from canary_baseline import DEFAULT_BASELINE_PATH, resolve_baseline_records
+from canary_corpus import DEFAULT_CORPUS_PATH
+from canary_verdicts import DEFAULT_VERDICTS_DIR, read_run_verdicts
+from contact_log import make_contact_reader, read_provided_session_ids
 from dashboard_model import METRIC_GETTERS, DashboardModel
 from flag_detector import (
     Flag,
@@ -63,24 +57,15 @@ from flag_detector import (
     detect_repeat_failure,
 )
 from summarize_failures import DEFAULT_SUMMARIES_DIR, latest_summary_path, read_summary
-from failure_feed import (
-    FAILURE_MODE_LABELS,
-    FAILURE_MODES,
-    FailureRow,
-    Session,
-    classify_failure,
-    failure_mode_counts,
-    group_by_session,
-    select_failures,
-    tier_for_mode,
-)
+from failure_feed import FAILURE_MODE_LABELS, classify_failure, tier_for_mode
+from failure_feed import _SEVERITY_RANK as _FEED_RANK
 from interaction_log import DEFAULT_LOG_PATH, InteractionRecord
 from kb_corpus import CoverageEntry, compute_coverage, load_sections
-from log_reader import HFLogReader, HFReader, LocalReader, LogReader, make_log_reader
+from log_reader import HFLogReader, LocalReader, LogReader, LogReadError, ReadReport, make_log_reader
 from metric_status import (
+    SHIFT_ALERT,
+    SHIFT_WARNING,
     THRESHOLDS,
-    TIER_B_METRICS,
-    WoWDelta,
     metric_status,
     shift_status,
     tier_of,
@@ -88,915 +73,51 @@ from metric_status import (
 )
 
 
-# Leftmost column = most recent. Operator opens Sentinel to check "what happened
-# this week" first; broad context (Global) sits to the right as reference.
-# 90d sits between 30d and Global so the column scan reads short → long.
+# Leftmost column = most recent; all time sits to the right as reference.
 WINDOWS = [("7d", 7), ("30d", 30), ("90d", 90), ("Global", None)]
-HEADLINE_WINDOW_DAYS = 7  # Drives the status-banner counters
+WINDOW_LABELS = ["7 days", "30 days", "90 days", "All time"]
 
-# Branch dropdown choices in Failure Feed.
-BRANCH_CHOICES = ["All", *BRANCH_REGISTRY.keys()]
-FAILURE_MODE_CHOICES = ["All", *FAILURE_MODES]
-
-# Auto-refresh cadence — matches the documented weekly batch cadence so any
-# launch sees data at most one cadence stale.
+# Cache rebuild cadence for the gap-cluster and deflection-summary batches.
 DEFAULT_FRESHNESS_DAYS = 7
 
-# Minimum data span before WoW deltas carry semantic colour. With <14 days of
-# log history a 'prior week' baseline is just a slice of the same chunk of
-# data — colouring it green/red implies a real comparison that doesn't exist.
+# Shift marks (the metrics judged on movement between windows) wait until
+# the log spans this many days: before that the windows overlap so much
+# that a "shift" is the same data compared with itself.
 MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA = 14
 
-# Tab identifiers so flag-click handlers can switch tabs by ID.
-TAB_METRICS = "tab-metrics"
-TAB_TRENDS = "tab-trends"
-TAB_CANARY = "tab-canary"
-TAB_FAILURES = "tab-failures"
-TAB_KB_COVERAGE = "tab-kb-coverage"
-
-# Sparklines render the last N canary runs as a tiny inline trend so each
-# metric row carries its own trajectory cell. 12 fits the natural cadence:
-# one weekly run × ~3 months of history.
 CANARY_SPARK_WINDOW = 12
+CANARY_SLOW_MULTIPLIER = 1.5  # per-question median latency vs baseline marks it slow
+CANARY_FULL_RUN = 150  # 50 questions x 3 answers
 
-FLAG_TARGET_TAB: dict[str, str] = {
-    "failure_feed": TAB_FAILURES,
-    "gap_clusters": TAB_FAILURES,
-    "trend": TAB_TRENDS,
-}
+PAGE_PATH = DEFAULT_LOG_PATH.parent / "sentinel.html"
+TEMPLATE_PATH = Path(__file__).with_name("sentinel_page.html")
 
-# Failure-feed expansion cap — number of pre-allocated gr.Accordion slots.
-# 30 covers the realistic upper bound (~17 failures in the live log today).
-MAX_FEED_ROWS = 30
+BRANCHES = ["GENERIC", "GAP", "TECHNICAL", "BEHAVIOURAL", "LOGISTICAL"]
+STAGES = ["total", "classifier", "retrieval", "generation", "guardrail"]
+DASH = "–"
 
-# Window-display modes the metrics overview supports. Sentinel ships in
-# ``stacked`` mode by default per operator directive — every row always shows
-# the three windowed values so the columns scan consistently. The other modes
-# remain available to direct callers but the UI doesn't expose a toggle.
-DISPLAY_MODES: list[str] = ["stacked", "collapse-when-same", "inline"]
-DISPLAY_MODE_DEFAULT = "stacked"
-
-# Flag-button slot cap. Three detector kinds; up to 6 covers repeat_failure
-# firing on multiple distinct questions.
-MAX_FLAGS_RENDERED = 6
-
-
-# ---- Midnight Mono CSS ------------------------------------------------------
-
-
-SENTINEL_CSS = """
-:root {
-    --bg-base:       #0b0b0d;
-    --bg-surface:    #141417;
-    --bg-surface-2:  #1c1c20;   /* elevated cards (Flags / Charts) */
-    --text-primary:  #f5f5f7;
-    --text-secondary:#9999a3;
-    --text-muted:    #5a5a64;
-    --border:        #1f1f24;
-    --border-strong: #2a2a30;
-    --healthy:       #34d399;
-    --warning:       #fbbf24;
-    --alert:         #f87171;
-    --divergence:    #a78bfa;
-    --alert-tint:    rgba(248, 113, 113, 0.08);
-    --warning-tint:  rgba(251, 191, 36, 0.06);
+CANARY_CATEGORY_LABELS: dict[str, str] = {
+    "tool_loop_project": "Project detail via README",
+    "branch_routing_technical_named": "Technical, named project",
+    "branch_routing_behavioural": "Behavioural",
+    "branch_routing_logistical": "Logistical",
+    "branch_routing_technical_gap": "Technical gap",
+    "branch_routing_gap": "Skill gap",
+    "numerical_fidelity": "Numbers",
+    "temporal": "Dates",
+    "calibration_ladder": "Calibration",
+    "personal_story_gated": "Personal story",
+    "comparative_spanning": "Comparison across sources",
+    "scope_refusal": "Out of scope",
 }
 
-body, .gradio-container {
-    background: var(--bg-base) !important;
-    color: var(--text-primary);
-    font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
-    font-weight: 400;
+COMMANDS = {
+    "refresh": "uv run python src/sentinel.py",
+    "rebaseline": "uv run python src/canary_runner.py --freeze-baseline",
 }
 
-/* Tighter focus ring — subtle outline rather than the bright Gradio default. */
-*:focus-visible {
-    outline: 1px solid var(--text-secondary) !important;
-    outline-offset: 1px !important;
-    box-shadow: none !important;
-}
 
-/* Page padding — 32px outer rhythm for the dashboard shell. */
-.gradio-container > .main { padding: 32px !important; }
-
-/* Monospace for data */
-.mono, code, .metric-value, .status-counts, .feed-meta, .threshold-caption {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-feature-settings: "tnum" on, "lnum" on;
-}
-
-/* ---- Status banner ---- */
-.status-banner {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 14px 18px;
-    margin: 6px 0 14px;
-}
-.status-banner .status-header {
-    display: flex; align-items: baseline; gap: 18px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border);
-}
-.status-banner .status-title {
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    font-size: 0.85em;
-    text-transform: uppercase;
-    color: var(--text-secondary);
-}
-.status-counts span {
-    font-weight: 600; font-size: 1em;
-    margin-right: 16px;
-}
-.status-counts .count-alert    { color: var(--alert); }
-.status-counts .count-warning  { color: var(--warning); }
-.status-counts .count-healthy  { color: var(--healthy); }
-
-.status-group {
-    margin-top: 10px;
-    padding: 6px 0 6px 12px;
-    border-left: 3px solid transparent;
-    display: flex; align-items: baseline; gap: 12px;
-    flex-wrap: wrap;
-}
-.status-group.alert    { border-left-color: var(--alert); }
-.status-group.warning  { border-left-color: var(--warning); }
-.status-group.healthy  { border-left-color: var(--healthy); }
-.status-group .group-label {
-    font-weight: 700;
-    font-size: 1em;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    min-width: 90px;
-}
-.status-group.alert    .group-label { color: var(--alert); }
-.status-group.warning  .group-label { color: var(--warning); }
-.status-group.healthy  .group-label { color: var(--healthy); }
-.status-group .group-items {
-    color: var(--text-primary);
-    font-size: 0.95em;
-}
-.status-group.alert    .group-items { color: var(--text-primary); }
-.status-group.warning  .group-items { color: var(--text-secondary); }
-.status-group.healthy  .group-items { color: var(--text-secondary); }
-
-/* ---- Section block (Metrics) ---- */
-.section-block {
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg-surface);
-    padding: 10px 14px;
-    margin: 8px 0;
-}
-.section-title {
-    font-size: 1.05em; font-weight: 700;
-    letter-spacing: 0.04em;
-    color: var(--text-primary);
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 6px; margin-bottom: 10px;
-}
-.metric-row {
-    display: grid;
-    /* label + N windowed values — N = len(WINDOWS) (currently 4: 7d/30d/90d/Global). */
-    grid-template-columns: 1.6fr repeat(4, 1fr);
-    column-gap: 14px;
-    align-items: baseline;
-    padding: 4px 8px;
-    border-radius: 3px;
-    border-left: 3px solid transparent;
-    margin: 1px 0;
-}
-.metric-row .col-header,
-.metric-row.header > div {
-    font-size: 0.85em; font-weight: 600;
-    color: var(--text-secondary);
-    letter-spacing: 0.1em; text-transform: uppercase;
-    padding-bottom: 4px;
-    border-bottom: 1px solid var(--border);
-}
-.metric-row.header .col-header.numeric { text-align: right; }
-.metric-row .metric-label { color: var(--text-primary); }
-.metric-row .metric-value {
-    text-align: right;
-    color: var(--text-primary);
-    padding: 1px 6px;
-    border-radius: 2px;
-}
-.metric-row .metric-value.healthy { color: var(--healthy); }
-.metric-row .metric-value.warning { color: var(--warning); }
-.metric-row .metric-value.alert   { color: var(--alert); }
-.metric-row .metric-value.divergent {
-    border: 1px solid var(--divergence);
-}
-.metric-row .metric-suffix {
-    color: var(--text-muted);
-    font-size: 0.85em;
-}
-/* WoW delta colouring — muted until 14d of history exists, semantic after. */
-.delta {
-    font-size: 11px;
-    margin-left: 4px;
-    color: var(--text-muted);
-}
-.delta.improving { color: var(--healthy); }
-.delta.degrading { color: var(--alert); }
-.delta.stable    { color: var(--text-muted); }
-.delta.muted     { color: var(--text-muted); }
-.metric-row .metric-value-inline {
-    /* Inline mode: the joined "9.4% / 9.4% / 9.4% / 9.4%" cell spans all
-       windowed value columns. */
-    grid-column: 2 / -1;
-    text-align: right;
-    color: var(--text-primary);
-    padding: 1px 6px;
-}
-.metric-row .metric-value-inline .inline-value {
-    color: var(--text-primary);
-    margin: 0 2px;
-}
-.metric-row .metric-value-inline .inline-value.healthy { color: var(--healthy); }
-.metric-row .metric-value-inline .inline-value.warning { color: var(--warning); }
-.metric-row .metric-value-inline .inline-value.alert   { color: var(--alert); }
-.metric-row .metric-value-inline .inline-value.divergent {
-    border: 1px solid var(--divergence);
-    border-radius: 2px;
-    padding: 0 4px;
-}
-.metric-row .metric-value-inline .inline-sep {
-    color: var(--text-muted);
-    margin: 0 2px;
-}
-
-/* Severity-driven row treatment — every severity gets the same density
-   (8px padding, 4px margin, 3px ribbon, tinted background); only the
-   ribbon colour + bg hue differ between severities. Subtle label tweaks
-   (alert bolder, healthy muted) preserve a soft hierarchy without
-   breaking the consistent bg-style the operator asked for. */
-.metric-row.row-alert,
-.metric-row.row-warning,
-.metric-row.row-orientation,
-.metric-row.row-healthy {
-    padding-top: 8px;
-    padding-bottom: 8px;
-    margin: 4px 0;
-    border-left-width: 3px;
-}
-.metric-row.row-alert {
-    background: rgba(248, 113, 113, 0.06);
-    border-left-color: var(--alert);
-}
-.metric-row.row-alert .metric-label {
-    font-weight: 500;
-}
-.metric-row.row-warning {
-    background: rgba(251, 191, 36, 0.06);
-    border-left-color: var(--warning);
-}
-.metric-row.row-orientation {
-    background: rgba(153, 153, 163, 0.05);
-    border-left-color: var(--text-muted);
-}
-.metric-row.row-healthy {
-    background: rgba(52, 211, 153, 0.06);
-    border-left-color: var(--healthy);
-}
-.metric-row.row-healthy .metric-label {
-    color: var(--text-secondary);
-}
-
-/* ---- Flags ---- */
-.flag-card {
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--alert);
-    border-radius: 3px;
-    background: var(--bg-surface);
-    padding: 8px 12px;
-    margin: 4px 0;
-}
-.flag-card .flag-headline { font-weight: 500; color: var(--alert); }
-.flag-card .flag-detail   { font-size: 0.88em; color: var(--text-secondary); margin-top: 2px; }
-
-/* Whole flag card is clickable — single full-width gr.Button styled to
-   look like the prior card. Alert-tinted background, alert ribbon on the
-   left, headline-first-line in alert colour, detail in text-secondary.
-
-   Gradio's secondary button class chain has high specificity, so we
-   - set the theme CSS variables on the wrapper (cascades into the inner
-     button and wins because it's the same property the framework reads)
-   - prefix with `.gradio-container` and stack `:not()` selectors to clear
-     Gradio's `.lg.secondary.svelte-XXX` specificity for the layout rules
-   - override every alignment-related property on the inner span as well
-     (Gradio wraps the label text in a span that centres + collapses `\n`).
-*/
-.flag-button {
-    /* Neon-red palette — saturated tint that reads as urgent on the dark
-       dashboard. Local to flag cards; doesn't change the global --alert
-       colour used elsewhere (status banner, metric badges, ribbons). */
-    --flag-neon: #ff1f4e;
-    --flag-neon-bright: #ff3a64;
-    --flag-bg:    rgba(255, 31, 78, 0.20);
-    --flag-bg-hover: rgba(255, 31, 78, 0.32);
-    --button-secondary-background-fill: var(--flag-bg) !important;
-    --button-secondary-background-fill-hover: var(--flag-bg-hover) !important;
-    --button-secondary-text-color: var(--text-secondary) !important;
-    --button-secondary-text-color-hover: var(--text-primary) !important;
-    --button-secondary-border-color: rgba(255, 31, 78, 0.4) !important;
-    --button-secondary-border-color-hover: var(--flag-neon-bright) !important;
-    --button-secondary-shadow: none !important;
-    --button-secondary-shadow-active: none !important;
-    --button-secondary-shadow-hover: none !important;
-    --button-shadow: none !important;
-    --button-shadow-active: none !important;
-    --button-shadow-hover: none !important;
-}
-.gradio-container .flag-button button,
-.gradio-container .flag-button button:not(.tertiary):not(.icon):not(.disabled) {
-    display: block !important;
-    width: 100% !important;
-    background: var(--flag-bg) !important;
-    background-color: var(--flag-bg) !important;
-    border: 1px solid rgba(255, 31, 78, 0.4) !important;
-    border-left: 3px solid var(--flag-neon) !important;
-    border-radius: 3px !important;
-    padding: 12px 16px !important;
-    margin: 4px 0 !important;
-    color: var(--text-secondary) !important;
-    font-size: 0.92em !important;
-    font-weight: 400 !important;
-    line-height: 1.55 !important;
-    text-align: left !important;
-    white-space: pre-line !important;
-    cursor: pointer !important;
-    box-shadow: none !important;
-    transition: background 0.12s ease, border-color 0.12s ease !important;
-}
-.gradio-container .flag-button button > *,
-.gradio-container .flag-button button > span,
-.gradio-container .flag-button button > div {
-    display: block !important;
-    width: 100% !important;
-    text-align: left !important;
-    white-space: pre-line !important;
-    color: inherit !important;
-    font-size: inherit !important;
-    font-weight: inherit !important;
-    line-height: inherit !important;
-    background: transparent !important;
-    margin: 0 !important;
-    padding: 0 !important;
-}
-.gradio-container .flag-button button:hover,
-.gradio-container .flag-button button:not(.tertiary):hover {
-    background: var(--flag-bg-hover) !important;
-    background-color: var(--flag-bg-hover) !important;
-    border-color: var(--flag-neon-bright) !important;
-    border-left-color: var(--flag-neon-bright) !important;
-    color: var(--text-primary) !important;
-}
-.gradio-container .flag-button button::first-line,
-.gradio-container .flag-button button:not(.tertiary)::first-line {
-    font-size: 1.08em !important;
-    font-weight: 700 !important;
-    color: var(--flag-neon-bright) !important;
-}
-
-/* ---- Refresh banner (LLM batch failure) ---- */
-.refresh-banner {
-    border: 1px solid var(--warning);
-    border-left: 3px solid var(--warning);
-    background: var(--bg-surface);
-    color: var(--warning);
-    border-radius: 3px;
-    padding: 6px 10px; margin: 6px 0;
-    font-size: 0.88em;
-}
-
-/* ---- Failure feed ---- */
-.feed-summary {
-    padding: 8px 0 16px;
-    color: var(--text-secondary);
-    font-size: 0.92em;
-}
-.feed-summary.failures {
-    padding-bottom: 8px;
-}
-.feed-summary.outcomes {
-    padding-top: 4px;
-    border-top: 1px dashed var(--border);
-}
-.feed-summary .feed-section-heading {
-    font-weight: 700;
-    color: var(--text-primary);
-    margin-right: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    font-size: 0.85em;
-}
-.feed-summary.failures .feed-section-heading {
-    color: var(--alert);
-}
-.feed-summary.outcomes .feed-section-heading {
-    color: var(--text-secondary);
-}
-.feed-summary .feed-summary-total {
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-right: 8px;
-}
-.feed-summary .feed-summary-mode {
-    margin-right: 12px;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-/* Per-mode colour palette — distinct per failure mode, all visible against
-   the dark background. refused = bright red; retry-exhausted = orange (needed
-   recovery loop but failed); rejected-then-recovered = amber (recovered);
-   gap = info-blue (operator-friendly, distinct from the gray that disappears
-   into the background); deflected = teal (informational, parked at lowest
-   severity — surfaced for pattern-spotting on out-of-scope redirects). */
-.feed-summary .feed-summary-mode.refused                  { color: #f87171; }
-.feed-summary .feed-summary-mode.retry-exhausted          { color: #fb923c; }
-.feed-summary .feed-summary-mode.rejected-then-recovered  { color: #fbbf24; }
-.feed-summary .feed-summary-mode.gap                      { color: #60a5fa; }
-.feed-summary .feed-summary-mode.deflected                { color: #2dd4bf; }
-
-.feed-row {
-    border: 1px solid var(--border);
-    border-left: 3px solid transparent;
-    border-radius: 3px;
-    background: var(--bg-surface);
-    margin: 4px 0;
-}
-.feed-row.sev-refused                  { border-left-color: #f87171; }
-.feed-row.sev-retry-exhausted          { border-left-color: #fb923c; }
-.feed-row.sev-rejected-then-recovered  { border-left-color: #fbbf24; }
-.feed-row.sev-gap                      { border-left-color: #60a5fa; }
-
-.feed-row summary {
-    list-style: none; cursor: pointer;
-    padding: 8px 12px;
-    display: grid;
-    grid-template-columns: 100px 100px 220px 1fr 60px 60px;
-    column-gap: 14px; align-items: center;
-}
-.feed-row summary::-webkit-details-marker { display: none; }
-.feed-row .feed-meta {
-    color: var(--text-secondary);
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.92em;
-}
-/* Branch + mode rendered as monospace pills */
-.feed-pill {
-    display: inline-block;
-    background: var(--bg-base);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 2px 8px;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.78em;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-secondary);
-}
-.feed-pill.sev-alert    { color: var(--alert); border-color: var(--alert); }
-.feed-pill.sev-warning  { color: var(--warning); border-color: var(--warning); }
-.feed-pill.sev-muted    { color: var(--text-muted); border-color: var(--text-muted); }
-
-.feed-row .feed-q { color: var(--text-primary); }
-.feed-row .feed-num {
-    color: var(--text-secondary); text-align: right;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.92em;
-}
-.feed-row[open] summary { border-bottom: 1px solid var(--border); }
-.feed-row .feed-body { padding: 10px 14px; color: var(--text-primary); }
-
-.feed-empty {
-    padding: 18px; text-align: center;
-    color: var(--text-muted); font-style: italic;
-}
-
-/* Session drilldown header — clearly delineates "you're now viewing one
-   session" from the multi-row failure feed. */
-.session-view-header {
-    background: var(--bg-surface-2);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--divergence);
-    border-radius: 6px;
-    padding: 14px 18px;
-    margin: 8px 0 16px;
-}
-.session-view-header .session-eyebrow {
-    font-size: 11px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--divergence);
-    margin-bottom: 4px;
-}
-.session-view-header .session-question {
-    font-size: 16px;
-    font-weight: 500;
-    color: var(--text-primary);
-    margin-bottom: 6px;
-}
-.session-view-header .session-meta {
-    font-size: 12px;
-    color: var(--text-secondary);
-}
-.session-view-header .session-meta code {
-    background: var(--bg-base);
-    border: 1px solid var(--border);
-    padding: 1px 6px;
-    border-radius: 3px;
-    margin-right: 4px;
-    color: var(--text-muted);
-}
-
-/* ---- Gap clusters (2-column card grid) ---- */
-.cluster-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-    gap: 12px;
-    margin-top: 8px;
-}
-.cluster-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 14px 16px;
-}
-.cluster-card .cluster-header {
-    display: flex; align-items: baseline; justify-content: space-between;
-    margin-bottom: 8px;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 6px;
-}
-.cluster-card .cluster-label {
-    font-weight: 600;
-    color: var(--text-primary);
-}
-.cluster-card .cluster-count {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.82em;
-    color: var(--text-muted);
-    background: var(--bg-base);
-    padding: 1px 8px;
-    border-radius: 4px;
-}
-.cluster-card ul {
-    margin: 0; padding-left: 1.1em;
-    color: var(--text-secondary);
-    font-size: 0.92em;
-}
-.cluster-card li { margin: 3px 0; }
-.cluster-card .cluster-meta {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.78em;
-    color: var(--text-muted);
-}
-
-/* ---- Charts: caption styling ---- */
-.threshold-caption {
-    color: var(--text-muted);
-    font-size: 0.82em;
-    margin-top: 2px;
-}
-
-/* ---- Canary tab ---- */
-.canary-banner {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.92em;
-    color: var(--text-secondary);
-    padding: 10px 14px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    margin: 6px 0 16px;
-}
-.canary-banner .count-alert    { color: var(--alert);   font-weight: 600; }
-.canary-banner .count-warning  { color: var(--warning); font-weight: 600; }
-.canary-empty {
-    padding: 18px;
-    color: var(--text-secondary);
-    background: var(--bg-surface);
-    border: 1px dashed var(--border-strong);
-    border-radius: 4px;
-    text-align: center;
-    font-size: 0.92em;
-}
-.canary-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.88em;
-    margin-top: 8px;
-}
-.canary-table th, .canary-table td {
-    text-align: left;
-    padding: 6px 10px;
-    border-bottom: 1px solid var(--border);
-}
-.canary-table th {
-    color: var(--text-secondary);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    font-size: 0.78em;
-}
-.canary-verdict-red    { border-left: 3px solid var(--alert);   color: var(--text-primary); }
-.canary-verdict-amber  { border-left: 3px solid var(--warning); color: var(--text-primary); }
-.canary-verdict-green  { border-left: 3px solid var(--healthy); color: var(--text-primary); }
-.canary-table tr.status-fail { background: var(--alert-tint); }
-.canary-table tr.status-slow { background: var(--warning-tint); }
-.canary-table tr.status-fail .canary-status { color: var(--alert); }
-.canary-table tr.status-slow .canary-status { color: var(--warning); }
-.canary-table tr.status-pass .canary-status { color: var(--healthy); }
-.canary-status, .canary-latency {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    white-space: nowrap;
-}
-.canary-detail-question { margin: 8px 0; color: var(--text-primary); }
-.canary-replicate {
-    margin: 6px 0;
-    padding: 10px 14px;
-    border-left: 3px solid var(--healthy);
-    background: var(--bg-surface);
-    border-radius: 3px;
-}
-.canary-replicate.status-fail { border-left-color: var(--alert); background: var(--alert-tint); }
-.canary-replicate-head { font-size: 0.85em; color: var(--text-secondary); margin-bottom: 6px; }
-.canary-replicate-answer { white-space: pre-wrap; font-size: 0.92em; }
-.canary-rebaseline-warning {
-    color: var(--text-secondary);
-    font-size: 0.88em;
-    background: var(--warning-tint);
-    border-left: 3px solid var(--warning);
-    padding: 10px 14px;
-    border-radius: 3px;
-    margin: 4px 0 10px;
-}
-
-/* Canary health sections — same .section-block + .metric-row visual
-   language as the Metrics tab. Post-#51 the trajectory view renders 5
-   columns (Metric | Benchmark | +1 | +2 | +3) instead of the pre-#51
-   (Metric | Current | Δ baseline) shape. */
-.canary-section { margin: 8px 0; }
-.metric-row.canary-row {
-    grid-template-columns: 2.4fr repeat(4, 1fr);
-}
-.canary-row .metric-suffix {
-    margin-left: 8px;
-    font-style: italic;
-}
-.canary-row .canary-delta-cell .delta {
-    font-size: 0.88em;
-}
-
-/* Restraint: no shadows, no gradients, small radii everywhere */
-button { border-radius: 6px !important; }
-
-/* Hide Gradio default footer ("Built with Gradio · Settings · Use via API") */
-footer { display: none !important; }
-
-/* ---- Page header (eyebrow + title + metadata line) ---- */
-.page-header {
-    display: flex; align-items: flex-end; justify-content: space-between;
-    margin-bottom: 16px;
-}
-.page-header .eyebrow {
-    font-size: 11px; font-weight: 400;
-    letter-spacing: 0.12em; text-transform: uppercase;
-    color: var(--text-secondary);
-    margin-bottom: 4px;
-}
-.page-header .page-title {
-    font-size: 28px; font-weight: 500;
-    color: var(--text-primary);
-    line-height: 1.1;
-}
-.page-header .page-meta {
-    margin-top: 8px;
-    font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-/* Ghost Refresh button — transparent, 1px subtle border, 32px height. */
-.ghost-button button {
-    background: transparent !important;
-    border: 1px solid var(--border-strong) !important;
-    color: var(--text-secondary) !important;
-    height: 32px !important;
-    border-radius: 6px !important;
-    font-weight: 400 !important;
-}
-.ghost-button button:hover {
-    color: var(--text-primary) !important;
-    border-color: var(--text-secondary) !important;
-}
-
-/* ---- Section header hierarchy ----
-   Two levels:
-   - .section-header-major — top-of-tab landmarks (Flags, Health overview,
-     Failure Feed, Gap Clusters, Deflection summary; KB Source Coverage
-     lives on its own tab post-Session 50).
-     Reads as "you've entered a new area."
-   - .section-header — sub-section inside a major area (Outcome, Routing,
-     Engagement, Tool use, Latency under Health overview; the per-block
-     groupings under Trend Explorer's scan mode).
-*/
-.section-header-major {
-    font-size: 20px; font-weight: 700;
-    letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--text-primary);
-    margin: 36px 0 14px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--border-strong);
-}
-.section-header-major:first-of-type { margin-top: 12px; }
-.section-header {
-    font-size: 13px; font-weight: 600;
-    letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--text-secondary);
-    margin: 24px 0 10px;
-    padding-bottom: 5px;
-    border-bottom: 1px solid var(--border);
-}
-.section-header:first-of-type { margin-top: 8px; }
-
-/* Latency stages — p50 muted, p95 primary, share muted; pipe sep dim.
-   Labels (p50 / p95 / share) appear once in the section caption above. */
-.metric-row .latency-p50   { color: var(--text-secondary); }
-.metric-row .latency-p95   { color: var(--text-primary); font-weight: 500; }
-.metric-row .latency-share { color: var(--text-secondary); }
-.metric-row .latency-sep   { color: var(--text-muted); }
-
-/* Section caption — sits between the section header and the rows. Used by
-   Latency to label the tri-tuple (p50 | p95 | share) once at the top. */
-.section-caption {
-    color: var(--text-muted);
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    margin: -8px 0 6px;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-
-/* ---- Chart card — wrap each scan-mode chart in a bordered surface ---- */
-.chart-card {
-    background: var(--bg-surface-2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 12px 12px 8px;
-    margin: 4px 0;
-}
-.chart-card .chart-header {
-    margin-bottom: 4px;
-    color: var(--text-primary);
-}
-.chart-card .gradio-plot, .chart-card img, .chart-card svg {
-    width: 100% !important; max-width: 100%;
-}
-
-/* Shared branch legend — single strip at the top of the Trends tab.
-   Five colour swatches + branch names, monospace, compact. */
-.branch-legend {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 14px 22px;
-    margin: 0 0 18px;
-    padding: 10px 14px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-}
-.branch-legend .legend-label {
-    font-size: 0.72em;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--text-muted);
-    margin-right: 8px;
-}
-.branch-legend .branch-swatch {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.85em;
-    color: var(--text-secondary);
-}
-.branch-legend .swatch-color {
-    width: 12px;
-    height: 12px;
-    border-radius: 2px;
-    display: inline-block;
-}
-
-/* ---- Filter bar (Failures) — single 36px row ---- */
-.filter-bar { gap: 8px !important; }
-.filter-bar .gradio-dropdown,
-.filter-bar .gradio-textbox { min-height: 36px !important; }
-
-/* ---- Log writer health panel (Metrics tab, #49) ---- */
-.writer-health {
-    display: flex; flex-direction: column; gap: 4px;
-    margin: 4px 0 12px;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.92em;
-}
-.writer-health-row, .writer-health-error {
-    display: flex; gap: 16px;
-}
-.writer-health-label {
-    color: var(--text-secondary);
-    min-width: 110px;
-}
-.writer-health-value-ok  { color: var(--healthy); }
-.writer-health-value-bad { color: var(--alert); }
-
-/* ---- KB coverage panel (Failures tab) ---- */
-.kb-coverage-summary {
-    padding: 8px 0 12px;
-    color: var(--text-secondary);
-    font-size: 0.92em;
-    display: flex; gap: 16px; flex-wrap: wrap;
-}
-.kb-coverage-summary .kb-cov-count {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-.kb-coverage-summary .kb-cov-count.never     { color: var(--alert); }
-.kb-coverage-summary .kb-cov-count.retrieved { color: var(--text-primary); }
-.kb-coverage-summary .kb-cov-count.off-canon { color: var(--warning); }
-.kb-cov-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 8px;
-    margin-top: 4px;
-}
-.kb-cov-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-left: 3px solid transparent;
-    border-radius: 4px;
-    padding: 8px 12px;
-}
-.kb-cov-card.never     { border-left-color: var(--alert); }
-.kb-cov-card.retrieved { border-left-color: var(--healthy); }
-.kb-cov-card.off-canon { border-left-color: var(--warning); }
-.kb-cov-header {
-    display: flex; align-items: baseline; justify-content: space-between;
-    margin-bottom: 2px;
-}
-.kb-cov-label {
-    font-weight: 500; color: var(--text-primary); font-size: 0.92em;
-}
-.kb-cov-chip {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.78em;
-    color: var(--text-muted);
-    background: var(--bg-base);
-    padding: 1px 8px;
-    border-radius: 4px;
-}
-.kb-cov-chip.never { color: var(--alert); }
-.kb-cov-meta {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.78em;
-    color: var(--text-muted);
-}
-
-/* ---- Glossary (Metrics tab, bottom, collapsed by default) ---- */
-.glossary { padding: 4px 0 8px; }
-.glossary-section-header {
-    font-size: 12px; font-weight: 700;
-    letter-spacing: 0.06em; text-transform: uppercase;
-    color: var(--text-secondary);
-    margin: 14px 0 6px;
-    padding-bottom: 4px;
-    border-bottom: 1px solid var(--border);
-}
-.glossary-section-header:first-child { margin-top: 4px; }
-.glossary-row {
-    display: grid;
-    grid-template-columns: 280px 1fr;
-    column-gap: 14px;
-    padding: 4px 2px;
-    align-items: baseline;
-}
-.glossary-row .glossary-name {
-    color: var(--text-primary);
-    font-size: 0.92em;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-.glossary-row .glossary-desc {
-    color: var(--text-secondary);
-    font-size: 0.92em;
-    line-height: 1.45;
-}
-"""
-
-
-# ---- Reader bootstrap -------------------------------------------------------
+# ---- Readers ----------------------------------------------------------------
 
 
 class _HFWithLocalCanaryOverlay:
@@ -1004,18 +125,15 @@ class _HFWithLocalCanaryOverlay:
     JSONL's canary records.
 
     ``canary_runner.py`` writes records to ``data/logs/interactions.jsonl``
-    regardless of ``DIGITAL_TWIN_LOG_BACKEND`` (hardcoded ``LogWriter`` at
-    ``canary_runner.py:118``). When Sentinel is pointed at the production
-    HF Dataset for live metrics, this wrapper additionally reads the local
-    JSONL and surfaces the ``is_canary=True`` records so the Canary tab
-    works in the same session as live tabs.
+    regardless of ``DIGITAL_TWIN_LOG_BACKEND``. When Sentinel is pointed at
+    the production HF Dataset for live metrics, this wrapper additionally
+    reads the local JSONL and surfaces the ``is_canary=True`` records so the
+    Canary tab works in the same run as the live tabs.
 
-    The overlay is canary-only: live records on the local file (e.g. dev
-    sessions before the operator switched to ``DIGITAL_TWIN_LOG_BACKEND=hf``)
-    are ignored, so they cannot double-count against records already on HF.
-
-    ``invalidate_cache`` is forwarded to the HF reader; the local reader
-    has no cache (re-parses on each ``read``)."""
+    The overlay is canary-only: live records on the local file are ignored,
+    so they cannot double-count against records already on HF. Its
+    ``report`` is the production read's, with any unreadable local line
+    added."""
 
     def __init__(self, primary: HFLogReader, *, local_path=None):
         self._primary = primary
@@ -1026,355 +144,66 @@ class _HFWithLocalCanaryOverlay:
         canary = [r for r in self._local.read(days=days) if r.is_canary]
         return live + canary
 
-    def invalidate_cache(self) -> None:
-        if hasattr(self._primary, "invalidate_cache"):
-            self._primary.invalidate_cache()
+    @property
+    def report(self) -> ReadReport:
+        p = self._primary.report
+        return ReadReport(
+            files_read=p.files_read,
+            unreadable_lines=p.unreadable_lines + self._local.report.unreadable_lines,
+            duplicates=p.duplicates,
+        )
 
 
 def _wrap_with_canary_overlay_if_hf(reader: LogReader) -> LogReader:
     """If ``reader`` is an ``HFLogReader``, wrap it with
-    ``_HFWithLocalCanaryOverlay`` so today's local canary records overlay
-    onto the HF live records. Pass-through for any other reader (LocalReader
-    already includes canaries; mocks in tests should not be wrapped)."""
+    ``_HFWithLocalCanaryOverlay`` so the local canary records overlay onto
+    the HF live records. Pass-through for any other reader."""
     if isinstance(reader, HFLogReader):
         return _HFWithLocalCanaryOverlay(reader)
     return reader
 
 
 def _default_reader() -> LogReader:
-    """Selects the read backend via ``log_reader.make_log_reader`` (#49):
-    ``HF_TOKEN`` + ``HF_DATASET_REPO`` set → ``HFLogReader`` against the
-    production dataset; otherwise ``LocalReader``. The ``--local`` CLI
-    flag at the entry point bypasses this in favour of a forced
-    ``LocalReader`` even when full HF creds are present.
-
-    When the resolved backend is HF, the reader is wrapped with
-    ``_HFWithLocalCanaryOverlay`` so today's local canary records appear
-    in the same Sentinel session as live HF traffic."""
+    """``HF_TOKEN`` + ``HF_DATASET_REPO`` set → production (``HFLogReader``
+    with the local canary overlay); otherwise the local log."""
     return _wrap_with_canary_overlay_if_hf(make_log_reader())
 
 
-def _source_label(reader: LogReader) -> str:
+def _production_reader(reader: LogReader) -> HFLogReader | None:
     if isinstance(reader, _HFWithLocalCanaryOverlay):
-        return "HF Dataset · canary overlay from local"
+        return reader._primary
     if isinstance(reader, HFLogReader):
-        return "HF Dataset"
-    return "Local JSONL"
+        return reader
+    return None
 
 
-# ---- Date / number formatters ----------------------------------------------
-
-
-EM_DASH = "—"
-
-
-def _fmt_date(value) -> str:
-    """Date-only render (``YYYY-MM-DD``) for any ISO timestamp / datetime /
-    date / pd.Timestamp."""
-    if value is None:
-        return EM_DASH
-    if isinstance(value, pd.Timestamp):
-        return value.strftime("%Y-%m-%d")
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.date().isoformat()
-        return value.astimezone(timezone.utc).date().isoformat()
-    return str(value)[:10]
-
-
-def format_header(source: str, loaded_at: datetime) -> str:
-    """Single-line metadata for the page header — source + load date in mono."""
-    return f"{source}  ·  loaded {_fmt_date(loaded_at)}"
+# ---- Formatters --------------------------------------------------------------
 
 
 def _fmt_pct(rate: float | None) -> str:
-    return EM_DASH if rate is None else f"{rate * 100:.1f}%"
+    return DASH if rate is None else f"{rate * 100:.1f}%"
 
 
 def _fmt_seconds(ms: float | None) -> str:
-    """Render latency in seconds with 2 decimals (operator directive — ms is
-    too granular to scan; sub-second precision isn't load-bearing)."""
-    return EM_DASH if ms is None else f"{ms / 1000:.2f} s"
+    return DASH if ms is None else f"{ms / 1000:.2f} s"
 
 
-# Backwards-compatible alias for older call sites — same seconds rendering.
 _fmt_ms = _fmt_seconds
 
 
 def _fmt_num(n: float | None, ndigits: int = 1) -> str:
-    return EM_DASH if n is None else f"{n:.{ndigits}f}"
+    return DASH if n is None else f"{n:.{ndigits}f}"
 
 
-def _fmt_branches(distribution: dict[str, float]) -> str:
-    if not distribution:
-        return EM_DASH
-    parts = sorted(distribution.items(), key=lambda kv: -kv[1])
-    return " | ".join(f"{branch} {fraction * 100:.0f}%" for branch, fraction in parts)
+def _short_sha(sha: str | None) -> str:
+    return sha[:7] if sha else DASH
 
 
-def _fmt_dropoff(dropoff: dict[int, int]) -> str:
-    """Surface only the most common drop-off turn — the operator wants the
-    headline pattern (where do most users last interact?), not the per-turn
-    table. Computed as ``count_at_N − count_at_N+1`` for each N; biggest
-    drop wins."""
-    if not dropoff:
-        return EM_DASH
-    sorted_counts = sorted(dropoff.items())
-    drops: dict[int, int] = {}
-    for i, (turn, count) in enumerate(sorted_counts):
-        next_count = sorted_counts[i + 1][1] if i + 1 < len(sorted_counts) else 0
-        drops[turn] = count - next_count
-    most_common = max(drops, key=drops.get)
-    return f"after t{most_common} ({drops[most_common]} sessions)"
+# ---- Metric definitions -------------------------------------------------------
 
 
-def _fmt_latency_row(p: dict) -> str:
-    """Three-column latency cell — values only; the per-column labels (p50 |
-    p95 | share) appear once in the section caption above the rows.
-
-    p50 muted, p95 primary, share muted. The label-once design keeps each
-    cell short enough to fit the 4-window grid without truncation."""
-    p50 = _fmt_seconds(p.get("p50"))
-    p95 = _fmt_seconds(p.get("p95"))
-    share_v = p.get("share")
-    share = EM_DASH if share_v is None else f"{share_v * 100:.0f}%"
-    sep = "<span class='latency-sep'> | </span>"
-    return (
-        f"<span class='latency-p50'>{p50}</span>{sep}"
-        f"<span class='latency-p95'>{p95}</span>{sep}"
-        f"<span class='latency-share'>{share}</span>"
-    )
-
-
-def _fmt_attempts_distribution(d: dict[str, float]) -> str:
-    """Inline distribution: ``1: 75% · 2: 18% · 3: 7%`` — same compact
-    pattern as branch_distribution."""
-    if not d:
-        return EM_DASH
-    return " · ".join(f"{k}: {v * 100:.0f}%" for k, v in d.items())
-
-
-# ---- Threshold-aware rendering helpers --------------------------------------
-
-
-def _status_class(metric_name: str | None, value: float | None) -> str:
-    """CSS class for the metric value cell — drives the colour treatment.
-
-    Only Tier A (value-on-band) drives per-cell colour; Tier B's shift
-    status is row-level (the per-cell values are context for the shift, not
-    independently classifiable as healthy/warning/alert). Tier C / unknown
-    → no class. Post-#48 tier framework."""
-    if metric_name is None:
-        return ""
-    if tier_of(metric_name) != "A":
-        return ""
-    return metric_status(metric_name, value) or ""
-
-
-def _data_history_days(records: list[InteractionRecord]) -> int:
-    """Number of days spanned by the record set (max-timestamp − min-timestamp).
-
-    Drives the delta-colour gate: with <14d the WoW comparison isn't a real
-    'this week vs last week' read, so deltas render muted to suppress false
-    alarms before the system has accumulated enough history to be trusted."""
-    if not records:
-        return 0
-    timestamps = [r.timestamp for r in records]
-    earliest = min(timestamps)[:10]
-    latest = max(timestamps)[:10]
-    try:
-        d_early = datetime.fromisoformat(earliest).date()
-        d_late = datetime.fromisoformat(latest).date()
-    except ValueError:
-        return 0
-    return (d_late - d_early).days
-
-
-def _delta_inline(
-    metric_name: str | None,
-    current,
-    prior,
-    history_days: int = 0,
-) -> str:
-    """Compact inline delta arrow (post-value), or empty string when no delta applies.
-
-    When ``history_days < MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA`` the delta
-    renders in muted colour at 11px — there isn't enough history yet for the
-    'good vs bad' interpretation to be trustworthy. Above that threshold the
-    delta picks up the semantic colour (improving = healthy green; degrading
-    = alert red; stable = muted) — direction already accounts for the
-    metric's polarity (gap rate up = degrading; tool-call success up =
-    improving) via ``wow_delta``.
-    """
-    if metric_name is None or prior is None:
-        return ""
-    delta = wow_delta(metric_name, current, prior)
-    if delta is None:
-        return ""
-    if delta.unit == "pp":
-        magnitude = f"{abs(delta.delta) * 100:.1f}pp"
-    elif delta.unit == "ms":
-        magnitude = f"{abs(delta.delta):.0f}ms"
-    else:
-        magnitude = f"{abs(delta.delta):.1f}"
-    if delta.direction == "stable":
-        body = f"{delta.arrow}"
-    else:
-        body = f"{delta.arrow}{magnitude}"
-    css_class = (
-        "delta muted" if history_days < MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA
-        else f"delta {delta.direction}"
-    )
-    return f"<span class='{css_class}'>{body}</span>"
-
-
-# ---- Status banner (top of every tab) --------------------------------------
-
-
-# Plain-language labels for the status banner — strip parentheticals and
-# operator jargon so the banner reads to anyone, not just the engineer who
-# wrote the metric definitions. Metric grids elsewhere keep the technical
-# names; this map is banner-only.
-FRIENDLY_BANNER_LABELS: dict[str, str] = {
-    # Tier A — value-on-band
-    "refusal_rate":                 "Refused to answer",
-    "retry_exhausted_rate":         "Retries exhausted",
-    "contact_conversion_rate":      "Contact form submitted",
-    "tool_call_success_rate":       "Tool calls succeeded",
-    "latency_p95_total":            "Slow responses",
-    # Tier B — shift-on-band (banner reads "shifted" semantically; same
-    # plain-language label, but the badge is shift-driven)
-    "gap_rate":                     "Unknown answers",
-    "deflection_rate":              "Deflected to story",
-    "guardrail_rejection_rate":     "Quality-check rejections",
-    "low_confidence_rate":          "Uncertain classifications",
-    "mean_classification_confidence": "Classifier confidence",
-    "answered_with_substance_rate": "Substantive answers",
-    "mean_turns_per_session":       "Avg questions per session",
-    "turns_per_session_median":     "Conversation depth",
-    "contact_offer_rate":           "Contact form offered",
-}
-
-
-def _status_summary(model: DashboardModel) -> dict[str, list[str]]:
-    """Aggregate metric statuses into 3 buckets for the page-level banner.
-
-    Returns ``{"alert": [...], "warning": [...], "healthy": [...]}`` of
-    *friendly* metric labels (banner-readable, not technical).
-
-    Combines two kinds of status (post-#48 tier framework):
-    - **Tier A** (in `THRESHOLDS`): value-on-band against the headline
-      window. Crossing band IS the failure event. Always evaluated.
-    - **Tier B** (in `TIER_B_METRICS`): shift-on-band across the
-      (7d↔30d) and (30d↔90d) window pairs. Worst of either comparison
-      drives the bucket. Gated on ``history_days >=
-      MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA`` (Session 54) — under 14 days
-      of data the comparison is structurally noisy (windows overlap
-      heavily), so Tier B is suppressed from the banner rather than
-      firing cold-start spurious alerts.
-
-    Tier C / unregistered metrics never appear in the banner — they're
-    pure orientation reflections of system state."""
-    buckets: dict[str, list[str]] = {"alert": [], "warning": [], "healthy": []}
-    history_days = _data_history_days(model.records)
-    tier_b_eligible = history_days >= MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA
-
-    def _push(metric: str, status: str | None) -> None:
-        if status is None:
-            return
-        buckets[status].append(
-            FRIENDLY_BANNER_LABELS.get(metric, METRIC_LABELS.get(metric, metric))
-        )
-
-    for metric, getter in METRIC_GETTERS.items():
-        t = tier_of(metric)
-        if t == "A":
-            _push(metric, metric_status(metric, getter(model)))
-        elif t == "B" and tier_b_eligible:
-            v_7 = getter(model.for_window(7))
-            v_30 = getter(model.for_window(30))
-            v_90 = getter(model.for_window(90))
-            s = _worst_status([
-                shift_status(v_7, v_30),
-                shift_status(v_30, v_90),
-            ])
-            _push(metric, s)
-        # Tier C / unknown: never surfaced in banner.
-        # Tier B with insufficient history: suppressed (cold-start safety).
-    return buckets
-
-
-def _worst_status(statuses: list[str | None]) -> str | None:
-    """Reduce a list of statuses to the worst (alert > warning > healthy).
-    Returns None if every input is None."""
-    s = [x for x in statuses if x is not None]
-    if not s:
-        return None
-    if "alert" in s:
-        return "alert"
-    if "warning" in s:
-        return "warning"
-    return "healthy"
-
-
-def format_status_banner(summary: dict[str, list[str]]) -> str:
-    """Render the SENTINEL banner — counts header + always-expanded groups.
-
-    Banner is intentionally short (one row per severity, items separated by
-    ``|``); no collapse-toggles because the per-group lists are already
-    short enough to scan inline."""
-    alerts = summary.get("alert", [])
-    warnings = summary.get("warning", [])
-    healthy = summary.get("healthy", [])
-
-    counts = (
-        f"<span class='count-alert'>{len(alerts)} alerts</span>"
-        f"<span class='count-warning'>{len(warnings)} warnings</span>"
-        f"<span class='count-healthy'>{len(healthy)} healthy</span>"
-    )
-
-    def _group(severity: str, names: list[str]) -> str:
-        if not names:
-            return (
-                f"<div class='status-group {severity}'>"
-                f"<span class='group-label'>{severity.title()}</span>"
-                f"<span class='group-items'>—</span>"
-                f"</div>"
-            )
-        items = " | ".join(html.escape(n) for n in names)
-        return (
-            f"<div class='status-group {severity}'>"
-            f"<span class='group-label'>{severity.title()}</span>"
-            f"<span class='group-items'>{items}</span>"
-            f"</div>"
-        )
-
-    # Drop the explicit "SENTINEL" prefix — the page header already names
-    # the dashboard, and the per-severity counts speak for themselves.
-    return (
-        "<div class='status-banner'>"
-        "<div class='status-header'>"
-        f"<span class='status-counts'>{counts}</span>"
-        "</div>"
-        f"{_group('alert', alerts)}"
-        f"{_group('warning', warnings)}"
-        f"{_group('healthy', healthy)}"
-        "</div>"
-    )
-
-
-# ---- Per-section / per-metric rendering (single header, 3 inline values) ---
-
-
-# Each metric spec: (display_label, metric_name_or_None, getter, formatter)
-# When metric_name is None the row is orientation only — no badge, no
-# divergence highlight, no per-value colour.
-def _all_attempts_rejected(record_attempts) -> bool:
-    return any(not a.get("is_acceptable", True) for a in record_attempts)
-
-
+# Each row: (display label, metric name or None, getter, formatter). A row with
+# no metric name is for orientation only: it never carries a mark.
 METRIC_SPECS: list[tuple[str, list[tuple]]] = [
     ("Outcome", [
         ("Total interactions",         None,                          lambda m: m.total_interactions, str),
@@ -1384,12 +213,12 @@ METRIC_SPECS: list[tuple[str, list[tuple]]] = [
         ("Refusal rate",               "refusal_rate",                lambda m: m.refusal_rate, _fmt_pct),
         ("Guardrail rejection rate",   "guardrail_rejection_rate",    lambda m: m.guardrail_rejection_rate, _fmt_pct),
         ("Retry-exhaustion rate",      "retry_exhausted_rate",        lambda m: m.retry_exhausted_rate, _fmt_pct),
-        ("Attempts distribution",      None,                          lambda m: m.attempts_distribution, _fmt_attempts_distribution),
+        ("Attempts distribution",      None,                          lambda m: m.attempts_distribution, None),
     ]),
     ("Routing", [
-        ("Classifier branch distribution",         None,                          lambda m: m.branch_distribution, _fmt_branches),
+        ("Classifier branch distribution",         None,                          lambda m: m.branch_distribution, None),
         ("Classifier mean confidence",             "mean_classification_confidence", lambda m: m.mean_classification_confidence, lambda v: _fmt_num(v, 2)),
-        ("Classifier mean confidence by branch",   None,                          lambda m: m.mean_confidence_by_branch, _fmt_branches),
+        ("Classifier mean confidence by branch",   None,                          lambda m: m.mean_confidence_by_branch, None),
         ("Classifier low-confidence rate (<0.7)",  "low_confidence_rate",         lambda m: m.low_confidence_rate(), _fmt_pct),
     ]),
     ("Engagement", [
@@ -1401,1052 +230,49 @@ METRIC_SPECS: list[tuple[str, list[tuple]]] = [
     ]),
     ("Tool use", [
         ("Tool calls (count)",         None,                          lambda m: m.tool_call_count, str),
-        # tool_calls_by_branch (Session 56) replaced technical_tool_call_rate
-        # after the tool was opened to TECHNICAL/GAP/GENERIC. Distribution
-        # metric (sums to 100% of tool-firing turns); descriptive — not a
-        # tiered alert.
-        ("Tool calls by branch",       None,                          lambda m: m.tool_calls_by_branch, _fmt_attempts_distribution),
+        ("Tool calls by branch",       None,                          lambda m: m.tool_calls_by_branch, None),
         ("Tool-call success rate",     "tool_call_success_rate",      lambda m: m.tool_call_success_rate, _fmt_pct),
     ]),
     ("Latency", [
-        ("classifier",                 None,                          lambda m: m.latency_with_share("classifier"), _fmt_latency_row),
-        ("retrieval",                  None,                          lambda m: m.latency_with_share("retrieval"), _fmt_latency_row),
-        ("generation",                 None,                          lambda m: m.latency_with_share("generation"), _fmt_latency_row),
-        ("guardrail",                  None,                          lambda m: m.latency_with_share("guardrail"), _fmt_latency_row),
+        ("classifier",                 None,                          lambda m: m.latency_with_share("classifier"), None),
+        ("retrieval",                  None,                          lambda m: m.latency_with_share("retrieval"), None),
+        ("generation",                 None,                          lambda m: m.latency_with_share("generation"), None),
+        ("guardrail",                  None,                          lambda m: m.latency_with_share("guardrail"), None),
         ("total (p95)",                "latency_p95_total",           lambda m: m.latency_percentiles("total").get(95), _fmt_ms),
     ]),
 ]
 
-
-# Per-section caption rendered between the section header and the rows.
-# Used today only by Latency to label the per-cell tri-tuple (p50 | p95 |
-# share) once at the top of the section, so each row's cell can render the
-# values without redundant labels.
-SECTION_CAPTIONS: dict[str, str] = {
-    "Latency": "each cell: p50 | p95 | share of total p95",
-}
-
-
-# One-sentence description per row in METRIC_SPECS — surfaced via the
-# collapsed Glossary accordion at the bottom of the Metrics tab. Keys must
-# match the display labels in METRIC_SPECS exactly; a forcing-function test
-# pins the two together so a label rename can't silently drop a description.
+# What each row measures, shown in its detail window. Keys match the labels
+# in METRIC_SPECS exactly (a test pins the two together).
 METRIC_GLOSSARY: dict[str, str] = {
-    # Outcome
-    "Total interactions":                                  "Count of all logged turns in the window — pure volume signal (Tier C).",
-    "Answered with substance":                             "Share of turns the producer classified as substantive answers (event_type='answered'). Completes the 4-bucket Outcome partition: gap + deflected + refused + answered = 100%. Tier B — shift-detected.",
-    "Gap rate":                                            "Share of turns where the system either acknowledged it didn't have the information (canonical gap phrase) or produced a structured gap-aware response about an absent skill. Tier B — shift-detected.",
-    "Deflection rate":                                     "Share of turns where the system politely redirected an out-of-scope question (general coding help, trivia, opinions) rather than answering. Tier B — shift-detected.",
-    "Refusal rate":                                        "Share of turns that bottomed out into the canned-refusal copy after 3 rejected guardrail attempts. Tier A — value alert (mechanism IS failure).",
-    "Guardrail rejection rate":                            "Share of turns where the guardrail rejected at least one attempt — composite over fabrication, scope, tone, injection, dishonest gap. Tier B — shift-detected.",
-    "Retry-exhaustion rate":                               "Share of turns that consumed all 3 generation attempts — superset of refusal_rate; the gap is barely-accepted turns. Tier A — value alert.",
-    "Attempts distribution":                               "Share of turns by attempt count (1 / 2 / 3) — fills the middle between first-attempt-pass and retry-exhausted. MAX_ATTEMPTS=3 is the hard ceiling, so the bucket key is exact (no '3+'). Tier C — orientation chip.",
-    # Routing
-    "Classifier branch distribution":                      "Fraction of turns routed to each branch (GENERIC / GAP / TECHNICAL / BEHAVIOURAL / LOGISTICAL). Tier C — orientation chip.",
-    "Classifier mean confidence":                          "Average classifier confidence across the window — direct read of how sure the classifier is on average. Tier B — shift-detected.",
-    "Classifier mean confidence by branch":                "Per-branch mean confidence chip — actionable read for 'which branch is the classifier wobbling on?'. Tier C — orientation chip.",
-    "Classifier low-confidence rate (<0.7)":               "Share of turns where the classifier itself flagged uncertainty — catches misroutes the classifier admits to. Tier B — shift-detected.",
-    # Engagement
-    "Unique sessions":                                     "Count of distinct chat sessions — volume orientation.",
-    "Avg questions per session":                           "Mean turns per session — companion to the median, more sensitive to deeply-engaged outliers.",
-    "Turns/session (median)":                              "Median chat depth — typical engagement signal; pair with contact_conversion before judging.",
-    "Contact-offer rate":                                  "Fraction of turns where the contact form was visible — depends on traffic shape and trigger configuration.",
-    "Contact-conversion rate":                             "Share of offered sessions that submitted the form — joined session-level on contacts.jsonl.",
-    # Tool use
-    "Tool calls (count)":                                  "Total fetch_project_readme invocations across the window — volume signal.",
-    "Tool calls by branch":                                "Distribution of tool-firing turns across branches — fractions sum to 100%. Numerator per branch: turns with at least one tool call AND branch=X. Denominator: total turns with a tool call. Replaced ``Tool calls / TECHNICAL turn`` (Session 56) after ``fetch_project_readme`` was opened to TECHNICAL/GAP/GENERIC. Descriptive shape metric — not threshold-alerted.",
-    "Tool-call success rate":                              "Fraction of tool invocations that returned successfully — should be ~100% for local file reads.",
-    # Latency
-    "classifier":                                          "p50 | p95 | share of total p95 for the classifier stage — typical 1.1s, p95 ≈ 1.6s on gpt-6-luna (since #55; gpt-4.1-mini ran 1s / 1.4s, gpt-4.1-nano 0.65s / 1.1s).",
-    "retrieval":                                           "p50 | p95 | share of total p95 for the ChromaDB retrieval stage — sub-100ms typical; spikes signal embedding cache miss.",
-    "generation":                                          "p50 | p95 | share of total p95 for the OpenAI generation stage — typical 3.5s; spikes correlate with retry rounds.",
-    "guardrail":                                           "p50 | p95 | share of total p95 for the Anthropic guardrail stage — typical 5s; slower than the gpt-6.1-terra generator.",
-    "total (p95)":                                         "End-to-end p95 latency — the headline operator-facing number across all stages.",
+    "Total interactions": "Every logged turn in the window, deploy checks included.",
+    "Answered with substance": "Share of turns logged as answered. Not yet trustworthy: the twin sets this label from the branch that handled the question, not from reading the answer (#63).",
+    "Gap rate": "Share of turns logged as a gap: the twin said it did not have the information, or answered on the gap branch. Not yet trustworthy: the label follows the branch, not the answer (#63).",
+    "Deflection rate": "Share of turns logged as deflected: the twin redirected a question it treats as out of scope, or answered on the logistical branch. Not yet trustworthy: the label follows the branch, not the answer (#63).",
+    "Refusal rate": "Share of turns that ended in the canned refusal after the guardrail rejected all three attempts.",
+    "Guardrail rejection rate": "Share of turns where the guardrail rejected at least one attempt.",
+    "Retry-exhaustion rate": "Share of turns that used all three attempts, whether or not the last one was accepted.",
+    "Attempts distribution": "Share of turns by how many attempts they took: one, two or three.",
+    "Classifier branch distribution": "Share of turns the classifier sent to each branch.",
+    "Classifier mean confidence": "The classifier's average confidence in the branch it chose.",
+    "Classifier mean confidence by branch": "The classifier's average confidence, for each branch it chose.",
+    "Classifier low-confidence rate (<0.7)": "Share of turns where the classifier's confidence was below 0.7.",
+    "Unique sessions": "Distinct conversations in the window.",
+    "Avg questions per session": "Turns per conversation, on average.",
+    "Turns/session (median)": "Turns in the typical conversation.",
+    "Contact-offer rate": "Share of turns where the contact form was on offer.",
+    "Contact-conversion rate": "Share of conversations offered the contact form that submitted it, matched against the contact submissions.",
+    "Tool calls (count)": "README fetches the twin made in the window.",
+    "Tool calls by branch": "Where the README fetches happened: each branch's share of the turns that fetched one.",
+    "Tool-call success rate": "Share of README fetches that returned the file.",
+    "classifier": "Time in the classifier stage: the slowest 5% of turns (p95), the typical turn (p50), and the stage's share of the whole turn's p95.",
+    "retrieval": "Time in the retrieval stage: the slowest 5% of turns (p95), the typical turn (p50), and the stage's share of the whole turn's p95.",
+    "generation": "Time in the answer-writing stage: the slowest 5% of turns (p95), the typical turn (p50), and the stage's share of the whole turn's p95.",
+    "guardrail": "Time in the guardrail stage: the slowest 5% of turns (p95), the typical turn (p50), and the stage's share of the whole turn's p95.",
+    "total (p95)": "Time for the whole turn, for the slowest 5% of turns.",
 }
 
-
-def format_metrics_glossary() -> str:
-    """Glossary HTML — one row per metric, grouped by the same sections as
-    METRIC_SPECS. Rendered inside a collapsed Accordion at the bottom of the
-    Metrics tab so the operator can recall what each row means without
-    leaving the dashboard."""
-    parts: list[str] = []
-    for section_name, specs in METRIC_SPECS:
-        parts.append(
-            f"<div class='glossary-section-header'>{html.escape(section_name)}</div>"
-        )
-        for spec in specs:
-            label = spec[0]
-            desc = METRIC_GLOSSARY.get(label, "")
-            parts.append(
-                "<div class='glossary-row'>"
-                f"<span class='glossary-name'>{html.escape(label)}</span>"
-                f"<span class='glossary-desc'>{html.escape(desc)}</span>"
-                "</div>"
-            )
-    return "<div class='glossary'>" + "".join(parts) + "</div>"
-
-
-def _value_cell(
-    metric_name: str | None,
-    raw_value,
-    formatted: str,
-    *,
-    divergent: bool,
-    delta_html: str = "",
-) -> str:
-    """Wrap a formatted value in its severity-coloured cell.
-
-    ``formatted`` is trusted as safe HTML — formatters in this module
-    produce strings from controlled internal data (rates, latencies, branch
-    distributions over the registry), no user input. Escaping here would
-    break the embedded ``<span>`` markup the latency formatter uses to
-    differentiate p50 / p95."""
-    classes = ["metric-value"]
-    status = _status_class(metric_name, raw_value) if metric_name else ""
-    if status:
-        classes.append(status)
-    if divergent:
-        classes.append("divergent")
-    return (
-        f"<div class='{' '.join(classes)}'>"
-        f"{formatted}{delta_html}"
-        f"</div>"
-    )
-
-
-def _is_divergent(values: list[str]) -> bool:
-    """A row diverges when its three formatted strings aren't all the same."""
-    return len(set(values)) > 1
-
-
-def _row_severity(
-    metric_name: str | None, raws: list, history_days: int = 0,
-) -> str:
-    """Worst per-row status — drives the row's visual treatment.
-
-    Tier-aware (post-#48):
-    - **Tier A:** worst per-window value-status across `raws` (a metric
-      that's healthy on 7d but alerted on Global gets the alert row).
-      Always evaluated — value-band semantics don't depend on data history.
-    - **Tier B:** worst shift-status across (raws[0] vs raws[1]) and
-      (raws[1] vs raws[2]). Gated on `history_days >=
-      MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA` (Session 54) — under 14 days
-      of data the comparison is structurally noisy (the windows overlap
-      heavily), so Tier B falls through to orientation rather than firing
-      cold-start spurious alerts. Mirrors the gate `_delta_inline` already
-      applies to the WoW delta arrows.
-    - **Tier C / unknown:** orientation (no badge).
-
-    Worst-status ranking: alert > warning > healthy."""
-    if metric_name is None:
-        return "orientation"
-    t = tier_of(metric_name)
-    if t == "A":
-        statuses = {metric_status(metric_name, v) for v in raws}
-        if "alert" in statuses:
-            return "alert"
-        if "warning" in statuses:
-            return "warning"
-        if "healthy" in statuses:
-            return "healthy"
-        return "orientation"
-    if t == "B":
-        if len(raws) < 3:
-            return "orientation"
-        if history_days < MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA:
-            return "orientation"
-        s = _worst_status([
-            shift_status(raws[0], raws[1]),
-            shift_status(raws[1], raws[2]),
-        ])
-        return s or "orientation"
-    return "orientation"
-
-
-# Sort priority within a section. Lower number → rendered higher.
-_SEVERITY_RANK = {"alert": 0, "warning": 1, "orientation": 2, "healthy": 3}
-
-
-def _inline_value_cell(
-    metric_name: str | None,
-    raws: list,
-    formatted: list[str],
-    divergent: bool,
-) -> str:
-    """Pack the three windowed values into one cell: ``9.4% / 9.4% / 9.4%``.
-
-    Each value gets its own status colour; divergent values get the
-    divergence accent inline. Used by the ``inline`` display mode."""
-    parts: list[str] = []
-    for i, (raw, fmt) in enumerate(zip(raws, formatted)):
-        classes = ["inline-value"]
-        status = _status_class(metric_name, raw) if metric_name else ""
-        if status:
-            classes.append(status)
-        if divergent:
-            classes.append("divergent")
-        parts.append(
-            f"<span class='{' '.join(classes)}'>{html.escape(fmt)}</span>"
-        )
-    joiner = "<span class='inline-sep'>/</span>"
-    return f"<div class='metric-value-inline'>{joiner.join(parts)}</div>"
-
-
-def _render_metric_row(
-    label: str,
-    metric_name: str | None,
-    getter,
-    formatter,
-    models: list[DashboardModel],
-    priors: list[DashboardModel | None],
-    severity: str,
-    display_mode: str = DISPLAY_MODE_DEFAULT,
-    history_days: int = 0,
-) -> str:
-    """One row in the metric grid: label + windowed value cells + suffix.
-
-    ``display_mode`` controls how the three windowed values lay out:
-
-    - ``collapse-when-same`` (default): one cell + ``· same across windows``
-      suffix when identical; three separate cells when divergent.
-    - ``stacked``: three separate cells always.
-    - ``inline``: one cell with ``9.4% / 9.4% / 9.4%`` style inline values.
-    """
-    raws = [getter(m) for m in models]
-    formatted = [formatter(v) if formatter is not str else str(v) for v in raws]
-    prior_raws = [getter(p) if p is not None else None for p in priors]
-    divergent = _is_divergent(formatted)
-
-    n_windows = len(models)
-    if display_mode == "inline":
-        # One spanning cell that joins all N values inline.
-        cells = [_inline_value_cell(metric_name, raws, formatted, divergent)]
-    elif display_mode == "stacked":
-        cells = []
-        for i, (raw, fmt) in enumerate(zip(raws, formatted)):
-            delta = _delta_inline(metric_name, raw, prior_raws[i], history_days)
-            cells.append(_value_cell(
-                metric_name, raw, fmt, divergent=divergent, delta_html=delta,
-            ))
-    else:  # collapse-when-same
-        if not divergent:
-            # Render the value in column 1; tag the inline suffix onto its
-            # delta_html so the "· same across windows" hint sits beside the
-            # value rather than occupying its own column. The remaining
-            # window columns render empty so the grid stays aligned.
-            delta = _delta_inline(metric_name, raws[0], prior_raws[0], history_days)
-            suffix = "<span class='metric-suffix'> · same across windows</span>"
-            cells = [
-                _value_cell(metric_name, raws[0], formatted[0], divergent=False,
-                            delta_html=delta + suffix),
-            ]
-            for _ in range(n_windows - 1):
-                cells.append("<div></div>")
-        else:
-            cells = []
-            for i, (raw, fmt) in enumerate(zip(raws, formatted)):
-                delta = _delta_inline(metric_name, raw, prior_raws[i], history_days)
-                cells.append(_value_cell(
-                    metric_name, raw, fmt, divergent=True, delta_html=delta,
-                ))
-    return (
-        f"<div class='metric-row row-{severity}'>"
-        f"<div class='metric-label'>{html.escape(label)}</div>"
-        + "".join(cells)
-        + "</div>"
-    )
-
-
-def format_metrics_overview(
-    models: list[DashboardModel],
-    priors: list[DashboardModel | None],
-    display_mode: str = DISPLAY_MODE_DEFAULT,
-) -> str:
-    """Full metrics overview: one section block per thematic group.
-
-    Within each section, rows are sorted by severity (alerts first, then
-    warnings, then orientation context, then healthy). Each row carries a
-    severity CSS class so the alert ones dominate visually and healthy ones
-    collapse to a compact line. ``display_mode`` ∈ {collapse-when-same,
-    stacked, inline} controls how the three windowed values lay out.
-
-    History depth is computed from the Global window's record set and
-    threaded through to ``_delta_inline`` so deltas render muted until the
-    log spans at least ``MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA`` days."""
-    # Global model is the third entry per WINDOWS = [(7d, 7), (30d, 30), (Global, None)].
-    history_days = _data_history_days(models[-1].records) if models else 0
-
-    blocks: list[str] = []
-    for section_name, specs in METRIC_SPECS:
-        annotated = []
-        for spec in specs:
-            label, metric_name, getter, formatter = spec
-            raws = [getter(m) for m in models]
-            severity = _row_severity(metric_name, raws, history_days=history_days)
-            annotated.append((severity, spec))
-        annotated.sort(key=lambda pair: _SEVERITY_RANK.get(pair[0], 99))
-
-        # One header cell per window — derived from WINDOWS so adding a window
-        # doesn't drift from the body cells below.
-        window_headers = "".join(
-            f"<div class='col-header numeric'>{label}</div>"
-            for label, _ in WINDOWS
-        )
-        rows = [
-            "<div class='metric-row header'>"
-            "<div class='col-header'></div>"
-            f"{window_headers}"
-            "</div>"
-        ]
-        for severity, (label, metric_name, getter, formatter) in annotated:
-            rows.append(_render_metric_row(
-                label, metric_name, getter, formatter, models, priors,
-                severity, display_mode, history_days,
-            ))
-        # No card wrapper — whitespace + the section header carry the
-        # separation. Cleaner, less chrome (operator directive).
-        caption = SECTION_CAPTIONS.get(section_name, "")
-        caption_html = (
-            f"<div class='section-caption'>{html.escape(caption)}</div>"
-            if caption else ""
-        )
-        blocks.append(
-            f"<div class='section-header'>{section_name}</div>"
-            f"{caption_html}"
-            f"{''.join(rows)}"
-        )
-    return "".join(blocks)
-
-
-# ---- Failure Feed (inline expansion via accordions) ------------------------
-
-
-def _truncate(s: str, n: int = 90) -> str:
-    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
-
-
-def _failure_accordion_label(row: FailureRow) -> str:
-    """Single-line accordion label — Gradio's Accordion only accepts plain text
-    so the visual treatment lives on the row container; this is the headline."""
-    return (
-        f"{_fmt_date(row.timestamp)}  ·  {row.branch}  ·  "
-        f"{FAILURE_MODE_LABELS.get(row.failure_mode, row.failure_mode)}  ·  "
-        f"{_truncate(row.question, 90)}"
-    )
-
-
-def format_feed_summary(rows: list[FailureRow], counts: dict[str, int]) -> str:
-    """Per-tier counts above the feed (Session 49 split).
-
-    Two sub-section summaries: **Failures** (refused, retry-exhausted —
-    modes where the metric IS the failure event) and **Outcomes**
-    (rejected-then-recovered, gap, deflected — modes where the metric
-    IS a system-output shape worth scanning, not a defect). Same data
-    flow as before; the regrouping is display-only.
-
-    Each sub-section: '{tier} · {N} total · {n} {friendly mode} · ...'
-    with per-mode chips coloured by severity for at-a-glance scan.
-    Sub-sections only render when their tier has ≥1 record."""
-    total = len(rows)
-    if total == 0:
-        return ""
-    from failure_feed import _SEVERITY_RANK as _MODE_RANK
-
-    def _tier_block(tier: str, label: str, css_class: str) -> str:
-        tier_modes = [m for m in counts if tier_for_mode(m) == tier]
-        tier_total = sum(counts[m] for m in tier_modes)
-        if tier_total == 0:
-            return ""
-        parts = [
-            f"<span class='feed-section-heading'>{label}</span>",
-            f"<span class='feed-summary-total'>{tier_total} total</span>",
-        ]
-        sorted_modes = sorted(tier_modes, key=lambda m: _MODE_RANK.get(m, 99))
-        for mode in sorted_modes:
-            n = counts[mode]
-            if n == 0:
-                continue
-            friendly = FAILURE_MODE_LABELS.get(mode, mode).split(" (")[0]
-            parts.append(
-                f"<span class='feed-summary-mode {mode}'>{n} {html.escape(friendly)}</span>"
-            )
-        return f"<div class='feed-summary {css_class}'>" + "".join(parts) + "</div>"
-
-    return _tier_block("failure", "Failures", "failures") + _tier_block("outcome", "Outcomes", "outcomes")
-
-
-def format_failure_drilldown(record: InteractionRecord) -> str:
-    """Markdown drilldown for one failure — every per-attempt + chunk + tool-call field."""
-    labels = ", ".join(record.classifier_labels) if record.classifier_labels else EM_DASH
-    parts: list[str] = [
-        "**Question:** " + record.question,
-        f"**Branch:** `{record.branch}`  ·  **Classifier labels:** `{labels}`  "
-        f"·  **Confidence:** {record.classification_confidence:.2f}  ·  **Event:** `{record.event_type}`",
-        f"**Date:** {_fmt_date(record.timestamp)}",
-        "",
-        "**Attempts:**",
-    ]
-    for i, attempt in enumerate(record.attempts):
-        ok = attempt.get("is_acceptable", True)
-        badge = "PASS" if ok else "FAIL"
-        parts.append(f"- *Attempt {i}* — **{badge}**")
-        parts.append(f"    - **answer:** {attempt.get('answer', '')}")
-        parts.append(f"    - **guardrail_feedback:** {attempt.get('guardrail_feedback', '')}")
-    parts.append("")
-    parts.append("**Retrieved chunks:**")
-    if not record.retrieved_chunks:
-        parts.append("- _none_")
-    else:
-        for c in record.retrieved_chunks:
-            parts.append(
-                f"- `{c.get('source_file', '')}` · {c.get('section_heading', '')}"
-            )
-    parts.append("")
-    parts.append("**Tool calls:**")
-    if not record.tool_calls:
-        parts.append("- _none_")
-    else:
-        for c in record.tool_calls:
-            parts.append(
-                f"- `{c.get('name', '')}` · args={c.get('args', {})} · status={c.get('status', '')}"
-            )
-    parts.append("")
-    lat = record.latency_ms
-    parts.append("**Latency (ms):**")
-    parts.append(
-        f"- classifier {lat.get('classifier', 0)} · retrieval {lat.get('retrieval', 0)} "
-        f"· generation {lat.get('generation', 0)} · guardrail {lat.get('guardrail', 0)} "
-        f"· **total {lat.get('total', 0)}**"
-    )
-    return "\n".join(parts)
-
-
-def _turn_summary(record: InteractionRecord) -> str:
-    mode = classify_failure(record)
-    badge = "PASS" if mode is None else f"FAIL · {mode}"
-    truncated = record.question[:80] + ("…" if len(record.question) > 80 else "")
-    return (
-        f"<b>Turn {record.turn_index}</b> · {record.branch} · {record.event_type} · "
-        f"{html.escape(truncated)} <i>[{badge}]</i>"
-    )
-
-
-def format_session_view(session: Session) -> str:
-    """Per-session view, prefixed with a prominent header so the operator
-    sees clearly that they've left the feed and entered a single-session
-    drilldown."""
-    contact_bits = []
-    if session.contact_offered:
-        contact_bits.append("offered")
-    if session.contact_provided:
-        contact_bits.append("provided")
-    contact_str = ", ".join(contact_bits) if contact_bits else "neither"
-
-    first_q = (
-        session.records[0].question if session.records else "(no records)"
-    )
-    first_q_truncated = first_q[:120] + ("…" if len(first_q) > 120 else "")
-
-    header = (
-        "<div class='session-view-header'>"
-        "<div class='session-eyebrow'>Session drilldown</div>"
-        f"<div class='session-question'>{html.escape(first_q_truncated)}</div>"
-        f"<div class='session-meta mono'>"
-        f"<code>{session.session_id}</code>  ·  "
-        f"{session.turn_count} turns  ·  "
-        f"contact: {contact_str}  ·  "
-        f"total latency: {session.total_latency_ms / 1000:.2f} s"
-        "</div>"
-        "</div>"
-    )
-
-    parts = [header, ""]
-    for r in session.records:
-        body = format_failure_drilldown(r)
-        parts.append(
-            f"<details>\n<summary>{_turn_summary(r)}</summary>\n\n{body}\n\n</details>\n"
-        )
-    return "\n".join(parts)
-
-
-# ---- Cluster + Deflection panels --------------------------------------------
-
-
-CLUSTER_EMPTY_PLACEHOLDER = (
-    "_No cached gap clusters yet. Auto-refresh skipped (no gap turns in window, "
-    "or LLM unavailable)._"
-)
-DEFLECTION_EMPTY_PLACEHOLDER = (
-    "<div class='cluster-card' style='text-align:center; "
-    "color: var(--text-muted); font-style: italic;'>"
-    "No cached deflection summary yet. Auto-refresh skipped — no deflection "
-    "turns in window, or LLM unavailable."
-    "</div>"
-)
-
-
-def format_cluster_panel(data: dict | None) -> str:
-    """Render gap clusters as a responsive 2-column card grid (one card per
-    cluster) — easier to scan than a flat bullet list when there are several
-    clusters of varying sizes."""
-    if data is None:
-        return CLUSTER_EMPTY_PLACEHOLDER
-    clusters = data.get("clusters", [])
-    if not clusters:
-        return (
-            f"_No clusters in the last {data.get('period_days', '?')} days "
-            "(no gap turns, or all groups below the minimum size)._"
-        )
-    cards: list[str] = []
-    for cluster in clusters:
-        examples = cluster.get("examples", [])
-        examples_html = (
-            "<ul>"
-            + "".join(f"<li>{html.escape(ex)}</li>" for ex in examples)
-            + "</ul>"
-        ) if examples else ""
-        cards.append(
-            "<div class='cluster-card'>"
-            "<div class='cluster-header'>"
-            f"<span class='cluster-label'>{html.escape(cluster['label'])}</span>"
-            f"<span class='cluster-count'>{cluster['count']}</span>"
-            "</div>"
-            f"{examples_html}"
-            "</div>"
-        )
-    meta = (
-        f"<div class='cluster-meta'>generated {_fmt_date(data.get('generated_at'))} "
-        f"· window {data.get('period_days', '?')}d</div>"
-    )
-    return meta + "<div class='cluster-grid'>" + "".join(cards) + "</div>"
-
-
-def format_deflection_panel(text: str | None) -> str:
-    if text is None:
-        return DEFLECTION_EMPTY_PLACEHOLDER
-    return text
-
-
-KB_COVERAGE_EMPTY_PLACEHOLDER = (
-    "_No KB sections found — check that ``data/knowledge_base/*.md`` exists._"
-)
-
-
-def format_kb_coverage_panel(entries: list[CoverageEntry]) -> str:
-    """Source coverage — every canonical KB section with its retrieval count
-    in the window, sorted ascending. Never-retrieved sections surface first
-    (alert ribbon); off-canon retrievals (embedded sections that no longer
-    exist in source files) sit at the bottom as a drift signal."""
-    if not entries:
-        return KB_COVERAGE_EMPTY_PLACEHOLDER
-
-    never_retrieved = [e for e in entries if not e.off_canon and e.retrieval_count == 0]
-    retrieved = [e for e in entries if not e.off_canon and e.retrieval_count > 0]
-    off_canon = [e for e in entries if e.off_canon]
-
-    summary = (
-        f"<div class='kb-coverage-summary'>"
-        f"<span class='kb-cov-count never'>{len(never_retrieved)} never retrieved</span>"
-        f"<span class='kb-cov-count retrieved'>{len(retrieved)} retrieved</span>"
-        + (
-            f"<span class='kb-cov-count off-canon'>{len(off_canon)} off-canon</span>"
-            if off_canon else ""
-        )
-        + "</div>"
-    )
-
-    def _card(e: CoverageEntry, ribbon: str) -> str:
-        count_chip = (
-            f"<span class='kb-cov-chip never'>0</span>"
-            if e.retrieval_count == 0 and not e.off_canon
-            else f"<span class='kb-cov-chip'>{e.retrieval_count}</span>"
-        )
-        return (
-            f"<div class='kb-cov-card {ribbon}'>"
-            f"<div class='kb-cov-header'>"
-            f"<span class='kb-cov-label'>{html.escape(e.section_heading)}</span>"
-            f"{count_chip}"
-            f"</div>"
-            f"<div class='kb-cov-meta'>{html.escape(e.source_file)}</div>"
-            f"</div>"
-        )
-
-    cards: list[str] = []
-    for e in never_retrieved:
-        cards.append(_card(e, "never"))
-    for e in retrieved:
-        cards.append(_card(e, "retrieved"))
-    for e in off_canon:
-        cards.append(_card(e, "off-canon"))
-
-    return summary + "<div class='kb-cov-grid'>" + "".join(cards) + "</div>"
-
-
-# ---- Flags panel ------------------------------------------------------------
-
-
-FLAGS_EMPTY_PLACEHOLDER = (
-    "_No anomalies detected — every detector returned no flags. Stable / quiet "
-    "weeks render no flags by design._"
-)
-
-# Human-readable destination labels for flag click handlers — operator sees
-# "→ Failures" not "→ failure_feed". Maps the FlagDetector targets onto
-# the actual tab names (failure_feed and gap_clusters both live on Failures).
-_FLAG_TARGET_LABEL: dict[str, str] = {
-    "failure_feed": "Failures",
-    "gap_clusters": "Failures",
-    "trend": "Trends",
-}
-
-
-WRITER_HEALTH_LOCAL_PLACEHOLDER = (
-    "_Backend: Local JSONL. Writer health applies only to the HF backend._"
-)
-WRITER_HEALTH_NO_STATE_PLACEHOLDER = (
-    "_No writer state file yet — the HF writer hasn't completed a flush "
-    "attempt against this dataset._"
-)
-
-
-def format_writer_health(reader: LogReader) -> str:
-    """Render ``hf_writer_state.json`` for the Sentinel "Log writer health"
-    panel (#49). Three rows: last flush time, current buffer size, and
-    the last error if any. Only meaningful for the HF backend; the local
-    backend renders a placeholder so the panel is self-explanatory in
-    dev. Errors fetching the state file degrade to a placeholder rather
-    than crashing the dashboard — the writer's own broad ``except`` is
-    the durability path; this panel is purely diagnostic."""
-    if not isinstance(reader, HFLogReader):
-        return WRITER_HEALTH_LOCAL_PLACEHOLDER
-
-    from hf_log_writer import read_writer_state
-
-    try:
-        state = read_writer_state(reader._api, repo_id=reader._repo_id)
-    except Exception as exc:
-        return f"_Could not fetch writer state ({type(exc).__name__}: {exc})._"
-
-    if state is None:
-        return WRITER_HEALTH_NO_STATE_PLACEHOLDER
-
-    last_flush = state.get("last_flush_time") or "—"
-    buffer_size = state.get("buffer_size", 0)
-    last_error = state.get("last_error")
-    error_block = (
-        f"<div class='writer-health-error'>"
-        f"<span class='writer-health-label'>Last error</span>"
-        f"<span class='writer-health-value writer-health-value-bad'>"
-        f"{html.escape(str(last_error))}</span></div>"
-        if last_error
-        else (
-            "<div class='writer-health-row'>"
-            "<span class='writer-health-label'>Last error</span>"
-            "<span class='writer-health-value writer-health-value-ok'>none</span>"
-            "</div>"
-        )
-    )
-    return (
-        "<div class='writer-health'>"
-        "<div class='writer-health-row'>"
-        "<span class='writer-health-label'>Last flush</span>"
-        f"<span class='writer-health-value'>{html.escape(str(last_flush))}</span>"
-        "</div>"
-        "<div class='writer-health-row'>"
-        "<span class='writer-health-label'>Buffer size</span>"
-        f"<span class='writer-health-value'>{int(buffer_size)}</span>"
-        "</div>"
-        f"{error_block}"
-        "</div>"
-    )
-
-
-def format_flag_card(flag: Flag) -> str:
-    """One flag card's HTML. Used by `build_app` to populate the per-flag
-    slot rows."""
-    headline = html.escape(flag.headline)
-    detail = html.escape(flag.detail)
-    return (
-        "<div class='flag-card'>"
-        f"<div class='flag-headline'>{headline}</div>"
-        f"<div class='flag-detail'>{detail}</div>"
-        "</div>"
-    )
-
-
-def format_flags_summary(flags: list[Flag]) -> str:
-    """All flag cards joined into one HTML block. Kept for the empty-state
-    rendering + as a back-compat surface for callers that only want the
-    visual cards (no click handlers)."""
-    if not flags:
-        return FLAGS_EMPTY_PLACEHOLDER
-    return "\n".join(format_flag_card(f) for f in flags)
-
-
-CANARY_EMPTY_PLACEHOLDER = (
-    "<div class='canary-empty'>"
-    "No canary runs yet. Run "
-    "<code>uv run python src/canary_runner.py</code> to populate."
-    "</div>"
-)
-
-CANARY_NO_BASELINE = (
-    "<div class='canary-empty'>"
-    "No baseline frozen yet. Run the canary CLI with "
-    "<code>--freeze-baseline</code> or use the Re-baseline button below."
-    "</div>"
-)
-
-
-def _short_sha(sha: str | None) -> str:
-    if not sha:
-        return "—"
-    return sha[:7]
-
-
-def _delta_cell(current: float | None, baseline: float | None,
-                *, as_pct: bool = True, lower_is_better: bool = True) -> str:
-    """`Δ baseline` cell — colour-coded delta. `lower_is_better=True` for
-    rates / latency (delta>0 is degrading); `False` for things where higher
-    is better (pass rate, outcome_accuracy)."""
-    if current is None or baseline is None:
-        return "<span class='delta'>—</span>"
-    delta = current - baseline
-    if abs(delta) < 1e-9:
-        return "<span class='delta stable'>=</span>"
-    is_degrading = (delta > 0) if lower_is_better else (delta < 0)
-    cls = "delta degrading" if is_degrading else "delta improving"
-    sign = "+" if delta > 0 else ""
-    body = f"{sign}{delta * 100:.1f}pp" if as_pct else f"{sign}{delta:.0f}"
-    return f"<span class='{cls}'>{body}</span>"
-
-
-def _delta_ms(current: float | None, baseline: float | None) -> str:
-    if current is None or baseline is None:
-        return "<span class='delta'>—</span>"
-    delta = current - baseline
-    if abs(delta) < 1:
-        return "<span class='delta stable'>=</span>"
-    cls = "delta degrading" if delta > 0 else "delta improving"
-    sign = "+" if delta > 0 else ""
-    return f"<span class='{cls}'>{sign}{delta / 1000:+.2f}s</span>"
-
-
-CANARY_TRAJECTORY_SLOTS = 3   # +1, +2, +3 post-baseline runs in the trajectory view
-EM_DASH_CELL = "<span class='delta'>—</span>"
-
-
-def _canary_metric_row(label: str, cells: list[str], *, suffix: str = "") -> str:
-    """Render one canary trajectory row.
-
-    `cells` is exactly ``1 + CANARY_TRAJECTORY_SLOTS`` formatted strings —
-    [Benchmark, +1, +2, +3] — matching the 5-column grid post-#51. Empty
-    slots should pre-render as ``EM_DASH_CELL`` so the row layout doesn't
-    collapse when fewer than 3 post-baseline runs exist.
-    """
-    suffix_html = (
-        f"<span class='metric-suffix'>{suffix}</span>" if suffix else ""
-    )
-    cell_htmls = "".join(
-        f"<div class='metric-value'>{c}</div>" for c in cells
-    )
-    return (
-        "<div class='metric-row canary-row'>"
-        f"<div class='metric-label'>{label}{suffix_html}</div>"
-        f"{cell_htmls}"
-        "</div>"
-    )
-
-
-def _canary_section(title: str, rows_html: str) -> str:
-    """Mirror of the Metrics tab `.section-block` container — header row
-    carries the trajectory column labels (Benchmark | +1 | +2 | +3)."""
-    plus_headers = "".join(
-        f"<div class='col-header numeric'>+{i + 1}</div>"
-        for i in range(CANARY_TRAJECTORY_SLOTS)
-    )
-    return (
-        "<div class='section-block canary-section'>"
-        f"<div class='section-title'>{title}</div>"
-        "<div class='metric-row header canary-row'>"
-        "<div class='col-header'>Metric</div>"
-        "<div class='col-header numeric'>Benchmark</div>"
-        f"{plus_headers}"
-        "</div>"
-        f"{rows_html}"
-        "</div>"
-    )
-
-
-def _trajectory_cells(
-    formatter,
-    benchmark_value,
-    post_run_values: list,
-) -> list[str]:
-    """Build the 4-cell trajectory series for one metric row.
-
-    `formatter` receives a value (or None) and returns the formatted string
-    for display. `benchmark_value` is the baseline-run value (em-dash when
-    no baseline). `post_run_values` is a list of up to N values, in
-    chronological order, padded with em-dash when fewer than N exist."""
-    cells = [formatter(benchmark_value) if benchmark_value is not None else EM_DASH_CELL]
-    for i in range(CANARY_TRAJECTORY_SLOTS):
-        if i < len(post_run_values) and post_run_values[i] is not None:
-            cells.append(formatter(post_run_values[i]))
-        else:
-            cells.append(EM_DASH_CELL)
-    return cells
-
-
-def format_canary_health_blocks(
-    latest_run_records: list[InteractionRecord],
-    baseline_records: list[InteractionRecord],
-    post_baseline_runs: list[list[InteractionRecord]] | None = None,
-) -> str:
-    """Stage-latency section, trajectory view. Issue #53 removed the Drift
-    and Quality sections: correctness is the judge's pass/fail verdict now,
-    and latency is the one canary signal that only has meaning against an
-    earlier run.
-
-    Each row renders 5 columns: Metric | Benchmark | +1 | +2 | +3, where +N
-    is the Nth canary run that happened after the baseline was frozen.
-    Empty slots (fewer than CANARY_TRAJECTORY_SLOTS post-baseline runs
-    exist) render as em-dash placeholders. Pre-#51 the layout was
-    (Current | Δ baseline) for the latest-run snapshot; the trajectory
-    view shows the temporal arc instead.
-
-    `post_baseline_runs` is a list of up to CANARY_TRAJECTORY_SLOTS record
-    lists, one per +N run in chronological order. When None or empty
-    (cold-start / freshly-frozen baseline) all +N columns render em-dash.
-
-    Cold-start safe — when `baseline_records` is empty, every cell degrades
-    to em-dash instead of crashing."""
-    if not latest_run_records and not (post_baseline_runs or []):
-        # Nothing to render even on a blank trajectory — no canary records on disk.
-        return ""
-
-    baseline_model = DashboardModel(
-        baseline_records, include_canary=True, only_canary=True,
-    ) if baseline_records else None
-
-    post_baseline_runs = post_baseline_runs or []
-    post_models = [
-        DashboardModel(records, include_canary=True, only_canary=True)
-        for records in post_baseline_runs
-    ]
-
-    # ---- Latency ----------------------------------------------------------
-    def _stage_p95(model: DashboardModel | None, stage: str) -> float | None:
-        if model is None or not model.records:
-            return None
-        return model.latency_percentiles(stage).get(95)
-
-    latency_stages = [
-        ("Total p95", "total"),
-        ("Classifier p95", "classifier"),
-        ("Retrieval p95", "retrieval"),
-        ("Generation p95", "generation"),
-        ("Guardrail p95", "guardrail"),
-    ]
-    latency_rows = ""
-    for label, stage in latency_stages:
-        latency_rows += _canary_metric_row(
-            label,
-            _trajectory_cells(
-                _fmt_seconds,
-                _stage_p95(baseline_model, stage),
-                [_stage_p95(m, stage) for m in post_models],
-            ),
-        )
-
-    return _canary_section("Latency", latency_rows)
-
-
-CANARY_SLOW_MULTIPLIER = 1.5  # per-question median latency vs baseline → amber
-
-
-@dataclass(frozen=True)
-class CanaryView:
-    """Everything the Canary tab renders for the latest run (issue #53)."""
-    run_id: str | None
-    verdict_html: str
-    table_html: str
-    latency_html: str
-    question_ids: list[str]  # detail picker choices, failing first
-
-
-def _median_total_ms(records: list[InteractionRecord]) -> dict[str, float]:
-    by_q: dict[str, list[float]] = {}
-    for r in records:
-        by_q.setdefault(r.question, []).append(r.latency_ms.get("total", 0))
-    return {q: statistics.median(v) for q, v in by_q.items()}
-
-
-def build_canary_view(
-    all_records: list[InteractionRecord],
-    *,
-    baseline_path: Path = DEFAULT_BASELINE_PATH,
-    verdicts_dir: Path = DEFAULT_VERDICTS_DIR,
-) -> CanaryView:
-    """The canary as a regression test: verdict first, then one row per
-    question with failing rows first. A question fails when any replicate
-    fails (red); a passing question is amber when its median latency runs
-    over CANARY_SLOW_MULTIPLIER × the frozen baseline's, or when the run was
-    never judged."""
-    runs = _canary_runs_grouped(all_records)
-    if not runs:
-        return CanaryView(None, CANARY_EMPTY_PLACEHOLDER, "", "", [])
-    run_id, latest = runs[-1]
-    canary_only = [r for r in all_records if r.is_canary]
-    baseline_records = resolve_baseline_records(canary_only, baseline_path)
-    post_ids = runs_after_baseline(canary_only, n=CANARY_TRAJECTORY_SLOTS, path=baseline_path)
-    by_run = dict(runs)
-    latency_html = format_canary_health_blocks(
-        latest, baseline_records, [by_run.get(rid, []) for rid in post_ids],
-    )
-
-    run_at = (min(r.timestamp for r in latest) or "")[:10]
-    run_label = f"run {html.escape(run_at)} (<code>{html.escape(_short_sha(latest[0].git_sha))}</code>)"
-    verdicts = read_run_verdicts(run_id, verdicts_dir)
-    if verdicts is None:
-        verdict_html = (
-            "<div class='canary-banner canary-verdict-amber'>"
-            f"Latest {run_label} is not judged. Run "
-            f"<code>uv run python src/canary_runner.py --judge-run {html.escape(run_id)}</code>"
-            "</div>"
-        )
-        return CanaryView(run_id, verdict_html, "", latency_html, [])
-
-    current_ms = _median_total_ms(latest)
-    baseline_ms = _median_total_ms(baseline_records)
-
-    def _is_slow(v: QuestionVerdict) -> bool:
-        cur, base = current_ms.get(v.question), baseline_ms.get(v.question)
-        return bool(cur is not None and base and cur > CANARY_SLOW_MULTIPLIER * base)
-
-    failing = [v for v in verdicts if not v.passed]
-    slow = [v for v in verdicts if v.passed and _is_slow(v)]
-    if failing:
-        ids = ", ".join(html.escape(v.question_id) for v in failing)
-        verdict_html = (
-            "<div class='canary-banner canary-verdict-red'>"
-            f"<strong>{len(failing)} of {len(verdicts)} questions fail</strong>: {ids} · {run_label}"
-            "</div>"
-        )
-    elif slow:
-        ids = ", ".join(html.escape(v.question_id) for v in slow)
-        verdict_html = (
-            "<div class='canary-banner canary-verdict-amber'>"
-            f"<strong>All {len(verdicts)} questions pass</strong>, {len(slow)} slow: {ids} · {run_label}"
-            "</div>"
-        )
-    else:
-        verdict_html = (
-            "<div class='canary-banner canary-verdict-green'>"
-            f"<strong>All {len(verdicts)} questions pass</strong> · {run_label}"
-            "</div>"
-        )
-
-    ordered = sorted(verdicts, key=lambda v: (v.passed, v.question_id))
-    rows = []
-    for v in ordered:
-        cur, base = current_ms.get(v.question), baseline_ms.get(v.question)
-        status = "fail" if not v.passed else ("slow" if _is_slow(v) else "pass")
-        bad = [r for r in v.replicates if not r.passed]
-        reason = bad[0].reason if bad else f"{len(v.replicates)}/{len(v.replicates)} pass"
-        latency = (
-            f"{base / 1000:.1f}s → {cur / 1000:.1f}s" if cur is not None and base
-            else (f"{cur / 1000:.1f}s" if cur is not None else "—")
-        )
-        rows.append(
-            f"<tr class='status-{status}'>"
-            f"<td class='canary-status'>{status}</td>"
-            f"<td><code>{html.escape(v.question_id)}</code></td>"
-            f"<td>{html.escape(v.question)}</td>"
-            f"<td>{html.escape(reason)}</td>"
-            f"<td class='canary-latency'>{latency}</td>"
-            "</tr>"
-        )
-    table_html = (
-        "<table class='canary-table'><thead><tr>"
-        "<th>Status</th><th>ID</th><th>Question</th><th>Judge</th><th>Latency (baseline → now)</th>"
-        f"</tr></thead><tbody>{''.join(rows)}</tbody></table>"
-    )
-    return CanaryView(
-        run_id, verdict_html, table_html, latency_html,
-        [v.question_id for v in ordered],
-    )
-
-
-def format_canary_detail(
-    run_id: str | None,
-    question_id: str | None,
-    *,
-    verdicts_dir: Path = DEFAULT_VERDICTS_DIR,
-) -> str:
-    """Every replicate's answer for one question, with its verdict and reason."""
-    if not run_id or not question_id:
-        return ""
-    verdicts = read_run_verdicts(run_id, verdicts_dir) or []
-    match = next((v for v in verdicts if v.question_id == question_id), None)
-    if match is None:
-        return ""
-    blocks = []
-    for r in match.replicates:
-        status = "pass" if r.passed else "fail"
-        blocks.append(
-            f"<div class='canary-replicate status-{status}'>"
-            f"<div class='canary-replicate-head'>replicate {r.replicate_index} · "
-            f"<strong>{status}</strong> · {html.escape(r.reason)}</div>"
-            f"<div class='canary-replicate-answer'>{html.escape(r.answer)}</div>"
-            "</div>"
-        )
-    return (
-        f"<div class='canary-detail-question'><code>{html.escape(match.question_id)}</code> "
-        f"{html.escape(match.question)}</div>" + "".join(blocks)
-    )
-
-
-def _kb_coverage_entries(records: list[InteractionRecord]) -> list[CoverageEntry]:
-    """Flatten retrieved chunks across `records` and cross-reference against
-    the canonical KB section list. Pure helper — Sentinel calls this at
-    page-load and refresh."""
-    flat = [chunk for r in records for chunk in r.retrieved_chunks]
-    return compute_coverage(flat, load_sections())
-
-
-def _build_flags(model: DashboardModel) -> list[Flag]:
-    return [
-        *detect_gap_rate_jump(model.records),
-        *detect_new_cluster(
-            read_clusters(CLUSTERS_DEFAULT_PATH),
-            read_cluster_history(CLUSTERS_ARCHIVE_DIR),
-        ),
-        *detect_repeat_failure(model.records),
-    ]
-
-
-# ---- Trend Explorer (chart helpers) -----------------------------------------
-
-
-METRIC_LABELS: dict[str, str] = {
-    "gap_rate": "Gap rate",
-    "deflection_rate": "Deflection rate",
-    "refusal_rate": "Refusal rate",
-    "guardrail_rejection_rate": "Guardrail rejection rate",
-    "retry_exhausted_rate": "Retry-exhaustion rate",
-    "answered_with_substance_rate": "Answered with substance",
-    "low_confidence_rate": "Low-confidence rate (<0.7)",
-    "mean_classification_confidence": "Classifier mean confidence",
-    "latency_p95_total": "Total latency p95",
-    "tool_call_success_rate": "Tool-call success rate",
-    "contact_conversion_rate": "Contact-conversion rate",
-    "contact_offer_rate": "Contact-offer rate",
-    "turns_per_session_median": "Turns/session (median)",
-    "mean_turns_per_session": "Avg questions per session",
-}
-
+# The metrics whose Trends split by branch now sits in the Metrics detail window.
 THEMATIC_BLOCKS: dict[str, list[str]] = {
     "Outcome": [
         "answered_with_substance_rate", "gap_rate", "deflection_rate",
@@ -2461,83 +287,19 @@ THEMATIC_BLOCKS: dict[str, list[str]] = {
     "Latency": ["latency_p95_total"],
 }
 
-# Per-branch palette — fixed dict-iteration order is the source of truth
-# for both the bar-grouping order and the shared legend at the top of the
-# Trends tab. Distinct from the failure-feed mode palette (which lives on
-# the Failures tab); same hue family, different roles per tab.
-BRANCH_CHART_COLORS: dict[str, str] = {
-    "GENERIC":     "#60a5fa",  # blue
-    "GAP":         "#9ca3af",  # gray (the "no answer" branch — neutral)
-    "TECHNICAL":   "#34d399",  # green
-    "BEHAVIOURAL": "#c084fc",  # purple
-    "LOGISTICAL":  "#fb923c",  # orange
-}
-BRANCH_BAR_ALPHA = 0.85
-
-
-
-# Per-metric unit registry for chart formatting / scaling. Independent of
-# THRESHOLDS post-#48: Tier B metrics (gap_rate, deflection_rate, etc.) are
-# no longer in THRESHOLDS but still need pp/ms unit info for their chart
-# labels and value formatting. Tier A metrics also resolve here for
-# consistency. Default fall-through is "" (raw number).
 METRIC_UNITS: dict[str, str] = {
-    # Rates (percentage points)
-    "gap_rate": "pp",
-    "deflection_rate": "pp",
-    "refusal_rate": "pp",
-    "guardrail_rejection_rate": "pp",
-    "retry_exhausted_rate": "pp",
-    "answered_with_substance_rate": "pp",
-    "low_confidence_rate": "pp",
-    "tool_call_success_rate": "pp",
-    "contact_conversion_rate": "pp",
-    "contact_offer_rate": "pp",
-    # Latency (milliseconds)
-    "latency_p95_total": "ms",
-    # Raw numbers (no scale, no suffix)
-    "mean_classification_confidence": "",
-    "turns_per_session_median": "",
+    "gap_rate": "pp", "deflection_rate": "pp", "refusal_rate": "pp",
+    "guardrail_rejection_rate": "pp", "retry_exhausted_rate": "pp",
+    "answered_with_substance_rate": "pp", "low_confidence_rate": "pp",
+    "tool_call_success_rate": "pp", "contact_conversion_rate": "pp",
+    "contact_offer_rate": "pp", "latency_p95_total": "ms",
+    "mean_classification_confidence": "", "turns_per_session_median": "",
     "mean_turns_per_session": "",
 }
 
 
-def _unit_for(metric: str) -> str:
-    """Resolve the metric's display unit. Falls back to THRESHOLDS for
-    backward compatibility, then to "" (raw number)."""
-    if metric in METRIC_UNITS:
-        return METRIC_UNITS[metric]
-    threshold = THRESHOLDS.get(metric)
-    if threshold is not None:
-        return threshold.unit
-    return ""
-
-
-def _y_axis_title(metric: str) -> str:
-    label = METRIC_LABELS.get(metric, metric)
-    unit = _unit_for(metric)
-    if unit == "pp":
-        return f"{label} (%)"
-    if unit == "ms":
-        return f"{label} (s)"
-    return label
-
-
-def _scale_value(metric: str, value: float | None) -> float | None:
-    """Convert raw values to chart-axis units. ``pp`` → percentages (×100);
-    ``ms`` → seconds (÷1000); other passes through."""
-    if value is None:
-        return None
-    unit = _unit_for(metric)
-    if unit == "pp":
-        return value * 100
-    if unit == "ms":
-        return value / 1000
-    return value
-
-
 def _fmt_metric_value(metric: str, value: float | None) -> str:
-    unit = _unit_for(metric)
+    unit = METRIC_UNITS.get(metric, "")
     if unit == "pp":
         return _fmt_pct(value)
     if unit == "ms":
@@ -2545,164 +307,81 @@ def _fmt_metric_value(metric: str, value: float | None) -> str:
     return _fmt_num(value)
 
 
-@dataclass(frozen=True)
-class BarPoint:
-    """One bar position in the grouped bar chart.
-
-    `value` is in chart-axis units (post-`_scale_value`); `has_data=False`
-    means the branch had no records (or the metric returned None) in the
-    window — the bar renders at zero height with a `—` annotation rather
-    than as a 0% bar, so `no data` is visually distinct from `measured 0%`.
-    """
-    window: str
-    branch: str
-    value: float
-    has_data: bool
-
-
-def bar_chart_data(model: DashboardModel, metric: str) -> list[BarPoint]:
-    """Per-(window, branch) bar positions for the Trends bar chart.
-
-    Iterates `WINDOWS` × `BRANCH_CHART_COLORS` in stable order; the caller
-    can rely on the result tracking the visual layout of bar groups (left to
-    right) and bar slots within each group (legend order).
-    """
-    points: list[BarPoint] = []
-    for window_label, days in WINDOWS:
-        window_model = model.for_window(days=days)
-        for branch in BRANCH_CHART_COLORS:
-            branch_records = [r for r in window_model.records if r.branch == branch]
-            if not branch_records:
-                points.append(BarPoint(window_label, branch, 0.0, False))
-                continue
-            value = METRIC_GETTERS[metric](DashboardModel(branch_records))
-            if value is None:
-                points.append(BarPoint(window_label, branch, 0.0, False))
-            else:
-                scaled = _scale_value(metric, value)
-                points.append(BarPoint(window_label, branch, float(scaled), True))
-    return points
-
-
-def render_metric_bars(
-    model: DashboardModel,
-    metric: str,
-    *,
-    height: int = 220,
-) -> Figure:
-    """Grouped bar chart — N windows × M branches per window.
-
-    X-axis: WINDOWS labels (7d / 30d / 90d / Global). Y-axis: metric value
-    in chart-axis units. One coloured bar per branch within each window
-    group; bars whose value is undefined render at zero with a `—`
-    annotation so missing data is visually distinct from a measured zero.
-
-    Threshold reference lines drawn as faint horizontal dashes at the
-    healthy/warning levels for thresholded metrics. No legend on the figure
-    itself — the shared `.branch-legend` strip at the top of the Trends tab
-    carries the colour↔branch mapping for every chart on the page.
-
-    Uses `matplotlib.figure.Figure` directly (not `plt.subplots`) so figures
-    don't accumulate in the pyplot global registry across the many renders
-    this dashboard does.
-    """
-    points = bar_chart_data(model, metric)
-
-    # 10in × dpi=200 → 2000px wide; same canvas size as the line chart.
-    fig = Figure(figsize=(10, height / 100), dpi=200, facecolor="#1c1c20")
-    ax = fig.add_subplot(111)
-    ax.set_facecolor("#1c1c20")
-
-    n_windows = len(WINDOWS)
-    n_branches = len(BRANCH_CHART_COLORS)
-    # 0.78 group width leaves ~22% spacing between groups for visual breathing.
-    bar_width = 0.78 / n_branches
-    group_positions = list(range(n_windows))
-
-    # Index points by (window, branch) for stable lookup per branch series.
-    by_key = {(p.window, p.branch): p for p in points}
-    em_dash_targets: list[tuple[float, float]] = []  # (x, y_baseline) for `—` labels
-
-    for i, (branch, color) in enumerate(BRANCH_CHART_COLORS.items()):
-        offset = (i - (n_branches - 1) / 2) * bar_width
-        x_positions = [pos + offset for pos in group_positions]
-        values = [by_key[(label, branch)].value for label, _ in WINDOWS]
-        has_data = [by_key[(label, branch)].has_data for label, _ in WINDOWS]
-        ax.bar(
-            x_positions, values, bar_width,
-            color=color, alpha=BRANCH_BAR_ALPHA, edgecolor="none", zorder=2,
+def _mark_rule(metric: str | None) -> str:
+    """The rule behind a row's mark, in plain words."""
+    if metric is None or tier_of(metric) == "C":
+        return "Not marked: it describes the system rather than judging it."
+    if tier_of(metric) == "B":
+        return (
+            f"Judged on movement: a warning when it moves {SHIFT_WARNING:.0%} or more "
+            f"between the 7- and 30-day or the 30- and 90-day windows, an alert at "
+            f"{SHIFT_ALERT:.0%}. Not marked until the log spans "
+            f"{MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA} days."
         )
-        for x, ok in zip(x_positions, has_data):
-            if not ok:
-                em_dash_targets.append((x, 0.0))
-
-    # `—` annotations for missing-data positions — drawn after bars so the
-    # text sits above the (zero-height) bar mark.
-    for x, y in em_dash_targets:
-        ax.text(
-            x, y, "—", ha="center", va="bottom",
-            color="#5a5a64", fontsize=7, zorder=3,
-        )
-
-    # X-axis: categorical window labels, no tick lines.
-    ax.set_xticks(group_positions)
-    ax.set_xticklabels(
-        [label for label, _ in WINDOWS],
-        color="#9999a3", fontsize=8.5,
-    )
-    ax.tick_params(axis="x", length=0)
-    ax.tick_params(axis="y", colors="#9999a3", labelsize=8.5)
-    for spine in ax.spines.values():
-        spine.set_color("#1f1f24")
-    ax.set_ylabel(_y_axis_title(metric), color="#9999a3", fontsize=9)
-    ax.grid(True, axis="y", color="#1f1f24", linewidth=0.5, zorder=1)
-    ax.set_axisbelow(True)
-
-    # Y-axis floor at zero (rates) — without this matplotlib auto-frames the
-    # zero-height "no data" bars off the bottom edge.
-    ymin, ymax = ax.get_ylim()
-    if ymin > 0:
-        ax.set_ylim(0, ymax)
-
-    fig.tight_layout()
-    return fig
+    t = THRESHOLDS[metric]
+    fmt = _fmt_seconds if t.unit == "ms" else (lambda v: f"{v * 100:g}%")
+    if t.higher_is_better:
+        return (f"Judged on its value: healthy at {fmt(t.healthy)} or more, a warning "
+                f"down to {fmt(t.warning)}, an alert below.")
+    return (f"Judged on its value: healthy at {fmt(t.healthy)} or less, a warning "
+            f"up to {fmt(t.warning)}, an alert above.")
 
 
-def branch_legend_html() -> str:
-    """Shared per-branch colour swatches at the top of the Trends tab.
-
-    One legend strip serves every chart below it — no per-chart legend
-    chrome on individual figures. Iterates `BRANCH_CHART_COLORS` in fixed
-    order so the swatch sequence matches the bar order within each group."""
-    swatches = "".join(
-        "<span class='branch-swatch'>"
-        f"<span class='swatch-color' style='background:{color}'></span>"
-        f"{branch}"
-        "</span>"
-        for branch, color in BRANCH_CHART_COLORS.items()
-    )
-    return (
-        "<div class='branch-legend'>"
-        "<span class='legend-label'>Branches</span>"
-        f"{swatches}"
-        "</div>"
-    )
+# ---- Status rules --------------------------------------------------------------
 
 
-def format_trend_header(metric: str, model: DashboardModel) -> str:
-    """Inline header above each chart — `<b>Label:</b> {global value}`.
-
-    The chart itself is per-branch; the header surfaces the global aggregate
-    as the headline number so the operator sees `what does this metric look
-    like overall?` without summing the bars mentally. No status colour
-    applied — Metrics tab is the source of truth for `is this healthy?`."""
-    label = METRIC_LABELS.get(metric, metric)
-    value = METRIC_GETTERS[metric](model)
-    value_str = _fmt_metric_value(metric, value)
-    return f"<b>{label}:</b> <span class='mono'>{value_str}</span>"
+def _status_class(metric_name: str | None, value: float | None) -> str:
+    """Mark for one value cell: only metrics judged on their value carry one."""
+    if metric_name is None or tier_of(metric_name) != "A":
+        return ""
+    return metric_status(metric_name, value) or ""
 
 
-# ---- Auto-refresh of cached cluster + summary files -------------------------
+def _data_history_days(records: list[InteractionRecord]) -> int:
+    """Days spanned by the record set (latest date minus earliest date)."""
+    if not records:
+        return 0
+    timestamps = [r.timestamp for r in records]
+    try:
+        d_early = datetime.fromisoformat(min(timestamps)[:10]).date()
+        d_late = datetime.fromisoformat(max(timestamps)[:10]).date()
+    except ValueError:
+        return 0
+    return (d_late - d_early).days
+
+
+def _worst_status(statuses: list[str | None]) -> str | None:
+    s = [x for x in statuses if x is not None]
+    if not s:
+        return None
+    if "alert" in s:
+        return "alert"
+    if "warning" in s:
+        return "warning"
+    return "healthy"
+
+
+def _row_severity(metric_name: str | None, raws: list, history_days: int = 0) -> str:
+    """Worst status of a row: value bands over every window for metrics
+    judged on value; movement 7d↔30d and 30d↔90d for metrics judged on
+    movement (only once the log spans MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA
+    days); "orientation" for the rest."""
+    if metric_name is None:
+        return "orientation"
+    t = tier_of(metric_name)
+    if t == "A":
+        return _worst_status([metric_status(metric_name, v) for v in raws]) or "orientation"
+    if t == "B":
+        if len(raws) < 3 or history_days < MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA:
+            return "orientation"
+        return _worst_status([shift_status(raws[0], raws[1]), shift_status(raws[1], raws[2])]) or "orientation"
+    return "orientation"
+
+
+_SEVERITY_RANK = {"alert": 0, "warning": 1, "orientation": 2, "healthy": 3}
+
+
+# ---- Cached cluster and summary batches -------------------------------------------
 
 
 def is_stale(path: Path, max_age_days: int = DEFAULT_FRESHNESS_DAYS) -> bool:
@@ -2719,7 +398,11 @@ def _run_with_capture(label: str, fn) -> str | None:
         fn()
         return None
     except Exception as exc:
-        return f"{label} batch failed: {type(exc).__name__}: {exc}"
+        # A retried call fails as tenacity's RetryError, whose text hides the
+        # cause; report the last attempt's exception instead.
+        last = getattr(exc, "last_attempt", None)
+        cause = last.exception() if last is not None and last.exception() is not None else exc
+        return f"{label} batch failed: {type(cause).__name__}: {cause}"
 
 
 def ensure_fresh_clusters(
@@ -2727,6 +410,8 @@ def ensure_fresh_clusters(
     out_path: Path = CLUSTERS_DEFAULT_PATH,
     archive_dir: Path | None = CLUSTERS_ARCHIVE_DIR,
     max_age_days: int = DEFAULT_FRESHNESS_DAYS,
+    *,
+    reader: LogReader | None = None,
 ) -> str | None:
     if not is_stale(out_path, max_age_days):
         return None
@@ -2737,6 +422,7 @@ def ensure_fresh_clusters(
             out_path=out_path,
             log_path=log_path,
             archive_dir=archive_dir,
+            reader=reader,
         ),
     )
 
@@ -2745,6 +431,8 @@ def ensure_fresh_summaries(
     log_path: Path | None = None,
     out_dir: Path = DEFAULT_SUMMARIES_DIR,
     max_age_days: int = DEFAULT_FRESHNESS_DAYS,
+    *,
+    reader: LogReader | None = None,
 ) -> str | None:
     latest = latest_summary_path("deflection", out_dir)
     if latest is not None and not is_stale(latest, max_age_days):
@@ -2755,6 +443,7 @@ def ensure_fresh_summaries(
             days=summarize_failures.BATCH_DEFAULT_DAYS,
             out_dir=out_dir,
             log_path=log_path,
+            reader=reader,
         ),
     )
 
@@ -2773,9 +462,7 @@ def ensure_fresh_canaries(
     runner: callable = canary_runner.run_batch,
 ) -> str | None:
     """Run the canary batch when the most recent canary run is older than
-    ``max_age_days`` (or absent). Sentinel calls this on launch alongside
-    ``ensure_fresh_clusters`` / ``ensure_fresh_summaries`` per the issue
-    spec; failures surface as a banner rather than crashing."""
+    ``max_age_days`` (or absent); failures come back as a message."""
     reader = reader or _default_reader()
     latest = _latest_canary_timestamp(reader.read())
     if latest is not None:
@@ -2788,17 +475,12 @@ def ensure_fresh_canaries(
 def _canary_runs_grouped(
     records: list[InteractionRecord],
 ) -> list[tuple[str, list[InteractionRecord]]]:
-    """Group canary records by ``run_id``, ordered oldest-first by the run's
-    earliest timestamp. Sparklines + per-run drift comparisons consume this
-    chronologically."""
+    """Canary records grouped by ``run_id``, oldest run first."""
     canary = [r for r in records if r.is_canary and r.run_id]
     by_run: dict[str, list[InteractionRecord]] = {}
     for r in canary:
         by_run.setdefault(r.run_id, []).append(r)
-    return sorted(
-        by_run.items(),
-        key=lambda kv: min(r.timestamp for r in kv[1]),
-    )
+    return sorted(by_run.items(), key=lambda kv: min(r.timestamp for r in kv[1]))
 
 
 def canary_metric_history(
@@ -2808,8 +490,7 @@ def canary_metric_history(
     last_n: int = CANARY_SPARK_WINDOW,
 ) -> list[float | None]:
     """One value per canary run for ``metric``, oldest-first, capped to the
-    last ``last_n`` runs. Powers the inline sparkline column on the canary
-    health blocks."""
+    last ``last_n`` runs."""
     getter = METRIC_GETTERS.get(metric)
     if getter is None:
         return []
@@ -2825,21 +506,19 @@ def render_sparkline(
     baseline: float | None,
 ) -> Figure | None:
     """Tiny matplotlib sparkline: line over ``values`` with a horizontal
-    reference line at ``baseline``. Returns ``None`` when there's nothing
-    to draw (≤ 1 valid value) so the caller can render a `—` placeholder."""
+    reference line at ``baseline``. ``None`` when there's nothing to draw."""
     valid = [v for v in values if v is not None]
     if len(valid) < 2:
         return None
     fig = Figure(figsize=(1.6, 0.32), dpi=150)
     ax = fig.add_subplot(111)
-    fig.patch.set_facecolor("#1c1c20")  # bg-surface-2
+    fig.patch.set_facecolor("#1c1c20")
     ax.set_facecolor("#1c1c20")
     xs = list(range(len(values)))
     ys = [v if v is not None else float("nan") for v in values]
     ax.plot(xs, ys, color="#9ca3af", linewidth=1.0)
     if baseline is not None:
-        ax.axhline(baseline, color="#5a5a64", linewidth=0.6,
-                   linestyle="--", alpha=0.9)
+        ax.axhline(baseline, color="#5a5a64", linewidth=0.6, linestyle="--", alpha=0.9)
     for spine in ax.spines.values():
         spine.set_visible(False)
     ax.set_xticks([])
@@ -2848,575 +527,338 @@ def render_sparkline(
     return fig
 
 
-def _autorefresh_banner(messages: list[str | None]) -> str:
-    real = [m for m in messages if m]
-    if not real:
-        return ""
-    inner = "<br>".join(html.escape(m) for m in real)
-    return f"<div class='refresh-banner'>{inner}</div>"
+# ---- Page model -------------------------------------------------------------------
 
 
-# ---- App boot helpers -------------------------------------------------------
+def _iso(ts: str) -> str:
+    return datetime.fromisoformat(ts).astimezone(timezone.utc).isoformat()
 
 
-def _load(reader: LogReader) -> tuple[DashboardModel, datetime]:
-    """Build a DashboardModel from the log + cross-reference contacts.jsonl.
-
-    The cross-referenced session IDs feed `contact_conversion_rate` so the
-    metric reads true conversion (not the broken record-level intersection
-    that always returned 0%; see contact_log.read_provided_session_ids
-    docstring for the writer-order bug)."""
-    provided = frozenset(read_provided_session_ids())
-    return (
-        DashboardModel(reader.read(), provided_session_ids=provided),
-        datetime.now(timezone.utc),
-    )
-
-
-def _all_window_models(model: DashboardModel) -> tuple[list[DashboardModel], list[DashboardModel | None]]:
-    """Return ``(models, priors)`` aligned with ``WINDOWS``."""
-    models = [model.for_window(days=days) for _, days in WINDOWS]
-    priors = [model.for_prior_window(days=days) for _, days in WINDOWS]
-    return models, priors
+def _structured_cell(raw, label: str) -> dict | None:
+    """Latency and distribution cells as structured data; None for scalars."""
+    if raw is None:
+        return {"kind": "text", "text": DASH}
+    if isinstance(raw, dict) and {"p50", "p95"} <= set(raw):
+        share = raw.get("share")
+        return {"kind": "latency", "p50": _fmt_seconds(raw.get("p50")),
+                "p95": _fmt_seconds(raw.get("p95")),
+                "share": DASH if share is None else f"{share * 100:.0f}%"}
+    if isinstance(raw, dict):
+        if not raw:
+            return {"kind": "text", "text": DASH}
+        if "branch" in label.lower():
+            items = sorted(raw.items(), key=lambda kv: -kv[1])
+            return {"kind": "dist", "items": [[str(k).capitalize(), f"{v * 100:.0f}%"] for k, v in items]}
+        return {"kind": "dist", "items": [[f"Attempt {k}", f"{v * 100:.0f}%"] for k, v in raw.items()]}
+    return None
 
 
-def _filter_records(reader: LogReader, window_label: str) -> list[InteractionRecord]:
-    days = dict(WINDOWS).get(window_label)
-    return DashboardModel(reader.read()).for_window(days=days).records
+def _metrics_section(model: DashboardModel) -> tuple[list[dict], list[int]]:
+    models = [model.for_window(days=d) for _, d in WINDOWS]
+    # All time has no earlier window to compare with, so it gets no prior.
+    priors = [model.for_prior_window(days=d) if d is not None else None for _, d in WINDOWS]
+    history_days = _data_history_days(models[-1].records)
+    trend_metrics = {m for ms in THEMATIC_BLOCKS.values() for m in ms}
+    sections = []
+    for name, specs in METRIC_SPECS:
+        rows = []
+        for label, metric, getter, fmt in specs:
+            raws = [getter(m) for m in models]
+            severity = _row_severity(metric, raws, history_days=history_days)
+            cells = []
+            for i, raw in enumerate(raws):
+                cell = _structured_cell(raw, label)
+                if cell is None:
+                    cell = {"kind": "text", "text": fmt(raw) if fmt is not str else str(raw)}
+                cell["status"] = _status_class(metric, raw)
+                prior = getter(priors[i]) if (metric and priors[i] is not None) else None
+                d = wow_delta(metric, raw, prior) if metric else None
+                if d is not None and d.direction != "stable":
+                    mag = (f"{abs(d.delta) * 100:.1f} pp" if d.unit == "pp"
+                           else f"{abs(d.delta) / 1000:.2f} s" if d.unit == "ms"
+                           else f"{abs(d.delta):.2f}")
+                    cell["delta"] = ("+" if d.delta > 0 else "−") + mag
+                cells.append(cell)
+            by_branch = None
+            if metric in trend_metrics:
+                by_branch = []
+                for b in BRANCHES:
+                    values = []
+                    for wm in models:
+                        recs = [r for r in wm.records if r.branch == b]
+                        v = METRIC_GETTERS[metric](
+                            DashboardModel(recs, provided_session_ids=model.provided_session_ids)
+                        ) if recs else None
+                        values.append({"text": _fmt_metric_value(metric, v), "n": len(recs)})
+                    by_branch.append({"branch": b.capitalize(), "values": values})
+            rows.append({"label": label, "severity": severity, "cells": cells,
+                         "about": METRIC_GLOSSARY.get(label, ""), "rule": _mark_rule(metric),
+                         "by_branch": by_branch})
+        rows.sort(key=lambda r: _SEVERITY_RANK.get(r["severity"], 9))
+        sections.append({"name": name, "rows": rows})
+    return sections, [m.total_interactions for m in models]
 
 
-# ---- build_app --------------------------------------------------------------
+def _failures_section(live: list[InteractionRecord]) -> list[dict]:
+    sessions: dict[str, list[InteractionRecord]] = {}
+    for r in live:
+        sessions.setdefault(r.session_id, []).append(r)
+    rows = []
+    for r in live:
+        mode = classify_failure(r)
+        if mode is None:
+            continue
+        turns = sorted(sessions[r.session_id], key=lambda x: (x.turn_index, x.timestamp))
+        rows.append({
+            "ts": _iso(r.timestamp), "branch": r.branch.capitalize(), "mode": mode,
+            "tier": tier_for_mode(mode), "question": r.question,
+            "labels": list(r.classifier_labels or []), "confidence": r.classification_confidence,
+            "event": r.event_type,
+            "attempts": [{"ok": a.get("is_acceptable", True), "answer": a.get("answer", ""),
+                          "feedback": a.get("guardrail_feedback", "")} for a in r.attempts],
+            "chunks": [f"{c.get('source_file', '')} · {c.get('section_heading', '')}" for c in r.retrieved_chunks],
+            "tools": [f"{c.get('name', '')} · {c.get('status', '')}" for c in (r.tool_calls or [])],
+            "latency": {k: r.latency_ms.get(k, 0) for k in STAGES},
+            "session": [{"turn": t.turn_index, "question": t.question,
+                         "mode": classify_failure(t) or "answered", "self": t is r} for t in turns],
+        })
+    # Sentinel's feed order: the worst kind first, newest first within a kind.
+    rows.sort(key=lambda x: x["ts"], reverse=True)
+    rows.sort(key=lambda x: _FEED_RANK.get(x["mode"], 99))
+    return rows
 
 
-def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> gr.Blocks:
-    reader = reader or _default_reader()
-    source = _source_label(reader)
+def _median_total_ms(records: list[InteractionRecord]) -> dict[str, float]:
+    by_q: dict[str, list[float]] = {}
+    for r in records:
+        by_q.setdefault(r.question, []).append(r.latency_ms.get("total", 0))
+    return {q: statistics.median(v) for q, v in by_q.items()}
 
-    refresh_messages: list[str | None] = []
-    if autorefresh:
-        refresh_messages = [ensure_fresh_clusters(), ensure_fresh_summaries()]
 
-    model, loaded_at = _load(reader)
-    models, priors = _all_window_models(model)
-    headline_model = model.for_window(days=HEADLINE_WINDOW_DAYS)
-    initial_failures = select_failures(model.records)
+def _canary_section(
+    all_records: list[InteractionRecord], *, verdicts_dir: Path, baseline_path: Path, corpus_path: Path,
+) -> dict | None:
+    """Every canary run since the frozen baseline, and the latest run's
+    questions with their verdicts, answers and categories."""
+    runs = _canary_runs_grouped(all_records)
+    if not runs:
+        return None
+    canary_only = [r for r in all_records if r.is_canary]
+    baseline_records = resolve_baseline_records(canary_only, baseline_path)
+    base_id = json.loads(Path(baseline_path).read_text())["run_id"] if Path(baseline_path).exists() else None
+    corpus = {q["id"]: q for q in json.loads(Path(corpus_path).read_text())} if Path(corpus_path).exists() else {}
+    ids = [rid for rid, _ in runs]
+    start = ids.index(base_id) if base_id in ids else len(ids) - 1
+    run_rows = []
+    for rid, recs in runs[start:]:
+        m = DashboardModel(recs, include_canary=True, only_canary=True)
+        v = read_run_verdicts(rid, verdicts_dir)
+        per_q = _median_total_ms(recs)
+        run_rows.append({
+            "id": rid, "ts": _iso(min(r.timestamp for r in recs)), "sha": _short_sha(recs[0].git_sha),
+            "records": len(recs), "full": CANARY_FULL_RUN, "baseline": rid == base_id,
+            "q_pass": sum(x.passed for x in v) if v else None, "q_n": len(v) if v else None,
+            "r_pass": sum(rr.passed for x in v for rr in x.replicates) if v else None,
+            "r_n": sum(len(x.replicates) for x in v) if v else None,
+            "median": _fmt_seconds(statistics.median(per_q.values())) if per_q else DASH,
+            "p95": {s: _fmt_seconds(m.latency_percentiles(s).get(95)) for s in STAGES},
+        })
+    latest_id, latest = runs[-1]
+    verdicts = read_run_verdicts(latest_id, verdicts_dir) or []
+    cur_ms, base_ms = _median_total_ms(latest), _median_total_ms(baseline_records)
+    rec_by = {(r.question, r.replicate_index): r for r in latest}
+    questions = []
+    for v in sorted(verdicts, key=lambda v: (v.passed, v.question_id)):
+        cur, base = cur_ms.get(v.question), base_ms.get(v.question)
+        slow = bool(v.passed and cur is not None and base and cur > CANARY_SLOW_MULTIPLIER * base)
+        bad = [r for r in v.replicates if not r.passed]
+        c = corpus.get(v.question_id, {})
+        reps = []
+        for rv in v.replicates:
+            rec = rec_by.get((v.question, rv.replicate_index))
+            reps.append({"i": rv.replicate_index, "passed": rv.passed, "reason": rv.reason, "answer": rv.answer,
+                         "branch": rec.branch.capitalize() if rec else "",
+                         "seconds": f"{rec.latency_ms.get('total', 0) / 1000:.1f} s" if rec else ""})
+        questions.append({
+            "id": v.question_id, "question": v.question,
+            "status": "fail" if not v.passed else ("slow" if slow else "pass"),
+            "judge": bad[0].reason if bad else f"{len(v.replicates)} of {len(v.replicates)} pass",
+            "base": f"{base / 1000:.1f} s" if base else DASH,
+            "now": f"{cur / 1000:.1f} s" if cur is not None else DASH,
+            "category": CANARY_CATEGORY_LABELS.get(c.get("category", ""), c.get("category", "")),
+            "expected": c.get("expected_behaviour", ""), "replicates": reps,
+        })
+    cats: dict[str, dict] = {}
+    for q in questions:
+        d = cats.setdefault(q["category"], {"category": q["category"], "n": 0, "pass": 0, "fail": 0, "slow": 0})
+        d["n"] += 1
+        d[q["status"]] += 1
+    return {"latest": latest_id, "latest_ts": _iso(min(r.timestamp for r in latest)),
+            "latest_sha": _short_sha(latest[0].git_sha), "judged": bool(verdicts),
+            "runs": run_rows, "questions": questions,
+            "categories": sorted(cats.values(), key=lambda d: (-d["fail"], -d["slow"], d["category"]))}
 
-    with gr.Blocks(title="Digital Twin · Sentinel", css=SENTINEL_CSS) as app:
-        # Page header — eyebrow + title + monospace metadata line on one
-        # row; ghost Refresh button anchored top-right.
-        with gr.Row(elem_classes=["page-header"]):
-            with gr.Column(scale=4):
-                gr.Markdown(
-                    "<div class='eyebrow'>Digital Twin</div>"
-                    "<div class='page-title'>Sentinel</div>"
-                )
-                header_md = gr.Markdown(
-                    f"<div class='page-meta'>{format_header(source, loaded_at)}</div>"
-                )
-            with gr.Column(scale=0, elem_classes=["ghost-button"]):
-                refresh_btn = gr.Button("Refresh", size="sm", scale=0)
-        banner_md = gr.Markdown(_autorefresh_banner(refresh_messages))
-        status_md = gr.Markdown(format_status_banner(_status_summary(headline_model)))
 
-        with gr.Tabs() as tabs:
-            # ---- Metrics tab ----------------------------------------------
-            with gr.Tab("Metrics", id=TAB_METRICS):
-                gr.Markdown("<div class='section-header-major'>Flags</div>")
-                # Empty-state markdown shows when no flags fire.
-                initial_flags = _build_flags(model)
-                flags_empty_md = gr.Markdown(
-                    "" if initial_flags else FLAGS_EMPTY_PLACEHOLDER
-                )
-                # Pre-allocated per-flag slots: each slot is a single
-                # full-width gr.Button styled as a card. Clicking anywhere
-                # on the card switches to the target tab. Slots beyond the
-                # active flag count render hidden.
-                flag_btns: list[gr.Button] = []
-                for i in range(MAX_FLAGS_RENDERED):
-                    if i < len(initial_flags):
-                        f = initial_flags[i]
-                        btn_value = f"{f.headline}\n{f.detail}"
-                        slot_visible = True
-                    else:
-                        btn_value = ""
-                        slot_visible = False
-                    flag_btns.append(
-                        gr.Button(
-                            btn_value, visible=slot_visible,
-                            elem_classes=["flag-button"],
-                        )
-                    )
-                # Per-slot target tab state — read by the click handlers to
-                # know where to jump.
-                flag_target_state = gr.State(
-                    [
-                        FLAG_TARGET_TAB.get(initial_flags[i].target, TAB_METRICS)
-                        if i < len(initial_flags) else ""
-                        for i in range(MAX_FLAGS_RENDERED)
-                    ]
-                )
+def _writer_state(reader: LogReader) -> dict | None:
+    """``hf_writer_state.json`` from production, or None for a local log.
+    A failed fetch is reported as the writer's error so it shows red."""
+    primary = _production_reader(reader)
+    if primary is None:
+        return None
+    from hf_log_writer import read_writer_state
 
-                gr.Markdown("<div class='section-header-major'>Health overview</div>")
-                metrics_md = gr.Markdown(
-                    format_metrics_overview(models, priors, DISPLAY_MODE_DEFAULT)
-                )
+    try:
+        state = read_writer_state(primary._api, repo_id=primary._repo_id)
+    except Exception as exc:
+        return {"last_flush_time": None, "buffer_size": None,
+                "last_error": f"could not read the writer state: {type(exc).__name__}: {exc}"}
+    if state is None:
+        return {"last_flush_time": None, "buffer_size": None,
+                "last_error": "no writer state file: the writer has never flushed"}
+    return state
 
-                gr.Markdown(
-                    "<div class='section-header'>Log writer health</div>"
-                )
-                gr.Markdown(format_writer_health(reader))
 
-                with gr.Accordion("Glossary", open=False):
-                    gr.Markdown(format_metrics_glossary())
+def _kb_coverage_entries(records: list[InteractionRecord]) -> list[CoverageEntry]:
+    flat = [chunk for r in records for chunk in r.retrieved_chunks]
+    return compute_coverage(flat, load_sections())
 
-            # ---- Trends tab -----------------------------------------------
-            with gr.Tab("Trends", id=TAB_TRENDS):
-                gr.Markdown("<div class='section-header-major'>Trend Explorer</div>")
 
-                # Shared per-branch legend at the top — one strip serves
-                # every chart on the page (no per-chart legend chrome).
-                gr.Markdown(branch_legend_html())
+def _build_flags(model: DashboardModel) -> list[Flag]:
+    return [
+        *detect_gap_rate_jump(model.records),
+        *detect_new_cluster(
+            read_clusters(CLUSTERS_DEFAULT_PATH),
+            read_cluster_history(CLUSTERS_ARCHIVE_DIR),
+        ),
+        *detect_repeat_failure(model.records),
+    ]
 
-                bar_charts: dict[str, gr.Plot] = {}
-                bar_headers: dict[str, gr.Markdown] = {}
-                # Global 2-per-row cap (Session 53). Pre-#53 only Outcome was
-                # capped at 2; the others jammed every chart onto one row,
-                # which collapsed the per-chart axis space on Engagement (4
-                # metrics post-#48). One rule for all blocks now: at most 2
-                # charts per row, every block. Singletons (Latency =
-                # latency_p95_total) render as a half-width chart.
-                CHARTS_PER_ROW = 2
-                for block_name, block_metrics in THEMATIC_BLOCKS.items():
-                    gr.Markdown(
-                        f"<div class='section-header'>{block_name}</div>"
-                    )
-                    for chunk_start in range(0, len(block_metrics), CHARTS_PER_ROW):
-                        chunk = block_metrics[chunk_start:chunk_start + CHARTS_PER_ROW]
-                        with gr.Row():
-                            for metric in chunk:
-                                with gr.Column(min_width=320, elem_classes=["chart-card"]):
-                                    bar_headers[metric] = gr.Markdown(
-                                        f"<div class='chart-header'>{format_trend_header(metric, model)}</div>"
-                                    )
-                                    bar_charts[metric] = gr.Plot(
-                                        value=render_metric_bars(model, metric),
-                                        show_label=False,
-                                    )
 
-            # ---- Canary tab -----------------------------------------------
-            # Regression test (issue #53): every canary question judged
-            # pass/fail against its expected behaviour. Sentinel never runs
-            # the canary batch; the operator runs `src/canary_runner.py`.
-            with gr.Tab("Canary", id=TAB_CANARY):
-                gr.Markdown("<div class='section-header-major'>Canary</div>")
-                initial_canary = build_canary_view(reader.read())
-                canary_run_state = gr.State(initial_canary.run_id)
-                canary_verdict_md = gr.Markdown(initial_canary.verdict_html)
-                canary_table_md = gr.Markdown(initial_canary.table_html)
-                canary_detail_dd = gr.Dropdown(
-                    choices=initial_canary.question_ids,
-                    value=None,
-                    label="Show a question's answers",
-                )
-                canary_detail_md = gr.Markdown("")
-                canary_latency_md = gr.Markdown(initial_canary.latency_html)
+def build_page(
+    reader: LogReader,
+    *,
+    provided_session_ids: frozenset[str] | None = None,
+    verdicts_dir: Path = DEFAULT_VERDICTS_DIR,
+    baseline_path: Path = DEFAULT_BASELINE_PATH,
+    corpus_path: Path = DEFAULT_CORPUS_PATH,
+    clusters_path: Path = CLUSTERS_DEFAULT_PATH,
+    summaries_dir: Path = DEFAULT_SUMMARIES_DIR,
+    batch_messages: list[str] | None = None,
+) -> dict:
+    """Everything the page shows, as plain data. A failed read gives a page
+    with ``failed`` set and no figures."""
+    read_at = datetime.now(timezone.utc)
+    production = _production_reader(reader) is not None
+    source = {"production": production, "label": "Production log" if production else "Local log",
+              "read_at": read_at.isoformat()}
+    try:
+        all_records = reader.read()
+        if provided_session_ids is None:
+            # Contacts from the same source as the log, so --local never
+            # joins local turns with production submissions.
+            provided_session_ids = frozenset(read_provided_session_ids(
+                reader=make_contact_reader(force_local=not production)))
+    except LogReadError as exc:
+        return {"failed": str(exc), "source": source, "commands": COMMANDS}
+    report = reader.report
+    model = DashboardModel(all_records, provided_session_ids=provided_session_ids)
+    live = model.records
+    source.update({
+        "records": len(live), "files_read": report.files_read,
+        "unreadable_lines": report.unreadable_lines, "duplicates": report.duplicates,
+        "newest": max((_iso(r.timestamp) for r in live), default=None),
+    })
+    sections, totals = _metrics_section(model)
+    coverage = [{"section": e.section_heading, "file": e.source_file, "count": e.retrieval_count,
+                 "off": e.off_canon} for e in _kb_coverage_entries(live)]
+    return {
+        "failed": None, "source": source, "commands": COMMANDS,
+        "writer": _writer_state(reader),
+        "batch_messages": [m for m in (batch_messages or []) if m],
+        "flags": [{"headline": f.headline, "detail": f.detail} for f in _build_flags(model)],
+        "metrics": sections, "window_labels": WINDOW_LABELS, "window_totals": totals,
+        "failures": _failures_section(live),
+        "canary": _canary_section(all_records, verdicts_dir=verdicts_dir,
+                                  baseline_path=baseline_path, corpus_path=corpus_path),
+        # Built from production only; a local page does not show them.
+        "clusters": read_clusters(clusters_path) if production else None,
+        "deflection": read_summary("deflection", summaries_dir) if production else None,
+        "coverage": coverage,
+    }
 
-                # Re-baseline tucked inside a collapsed accordion so accidental
-                # clicks need two deliberate actions (expand + click). Overwriting
-                # the frozen golden reference is silent and irreversible without
-                # a backup, so the friction is load-bearing — see LIMITATIONS::P12.
-                with gr.Accordion(
-                    "Advanced — re-baseline (overwrites the frozen reference)",
-                    open=False,
-                ):
-                    gr.Markdown(
-                        "<div class='canary-rebaseline-warning'>"
-                        "Promotes the <strong>latest canary run</strong> to the "
-                        "new frozen baseline. The baseline is only the latency "
-                        "reference; pass/fail is judged against each question's "
-                        "expected behaviour and does not depend on it.<br><br>"
-                        "<strong>Use this after intentional changes</strong> "
-                        "(model upgrade, retrieval change) that legitimately move "
-                        "latency. Re-baselining on an unintended slowdown hides it."
-                        "</div>"
-                    )
-                    with gr.Row():
-                        gr.Markdown("")  # left spacer pushes button right
-                        rebaseline_btn = gr.Button(
-                            "Re-baseline",
-                            variant="secondary",
-                            size="sm",
-                            scale=0,
-                        )
-                    rebaseline_status_md = gr.Markdown("")
 
-            # ---- Failures tab ---------------------------------------------
-            with gr.Tab("Failures", id=TAB_FAILURES):
-                gr.Markdown(
-                    "<div class='section-header-major'>Failure Feed</div>"
-                )
-                with gr.Row(elem_classes=["filter-bar"]):
-                    branch_dd = gr.Dropdown(
-                        choices=BRANCH_CHOICES, value="All", label="Branch", scale=1
-                    )
-                    mode_dd = gr.Dropdown(
-                        choices=FAILURE_MODE_CHOICES, value="All", label="Failure mode", scale=1
-                    )
-                    window_dd = gr.Dropdown(
-                        choices=[label for label, _ in WINDOWS], value="Global",
-                        label="Window", scale=1,
-                    )
-                    search_in = gr.Textbox(value="", label="Search question", scale=2)
+# ---- Render -------------------------------------------------------------------------
 
-                # Wrap feed area in a column we can hide when the session view
-                # opens — keeps the operator's focus on one thing at a time and
-                # makes "Back to feed" return them to the feed (with
-                # scroll_to_output ensuring the scroll position lands here).
-                with gr.Column(visible=True) as feed_view:
-                    feed_summary_md = gr.Markdown(
-                        format_feed_summary(
-                            initial_failures,
-                            failure_mode_counts(model.records),
-                        )
-                    )
-                    feed_empty_md = gr.Markdown(
-                        "" if initial_failures
-                        else "<div class='feed-empty'>No failures match the current filters.</div>"
-                    )
 
-                    feed_accordions: list[gr.Accordion] = []
-                    feed_drilldowns: list[gr.Markdown] = []
-                    feed_session_btns: list[gr.Button] = []
-                    feed_session_states: list[gr.State] = []
-                    for i in range(MAX_FEED_ROWS):
-                        if i < len(initial_failures):
-                            row = initial_failures[i]
-                            label = _failure_accordion_label(row)
-                            body_md = format_failure_drilldown(row.record)
-                            sid = row.record.session_id
-                            visible = True
-                            mode_class = row.failure_mode
-                        else:
-                            label = ""
-                            body_md = ""
-                            sid = None
-                            visible = False
-                            mode_class = "gap"
-                        with gr.Accordion(
-                            label=label, open=False, visible=visible,
-                            elem_classes=["feed-row", f"sev-{mode_class}"],
-                        ) as acc:
-                            feed_drilldowns.append(gr.Markdown(body_md))
-                            feed_session_btns.append(
-                                gr.Button("View full session", size="sm", variant="secondary")
-                            )
-                        feed_accordions.append(acc)
-                        feed_session_states.append(gr.State(sid))
+def render(page: dict) -> str:
+    """The page as one HTML file. A failed read renders without any data:
+    a red notice, the reason and how to retry."""
+    if page.get("failed"):
+        return _render_failed(page)
+    template = TEMPLATE_PATH.read_text(encoding="utf-8")
+    payload = json.dumps(page, default=str).replace("</", "<\\/")
+    return template.replace("/*__DATA__*/null", payload)
 
-                with gr.Column(visible=False) as session_view:
-                    session_md = gr.Markdown("")
-                    back_btn = gr.Button("← Back to feed", variant="secondary")
 
-                gr.Markdown("<div class='section-header-major'>Gap Clusters</div>")
-                cluster_md = gr.Markdown(
-                    format_cluster_panel(read_clusters(CLUSTERS_DEFAULT_PATH))
-                )
+def _render_failed(page: dict) -> str:
+    import html as _html
 
-                gr.Markdown("<div class='section-header-major'>Deflection summary</div>")
-                deflection_md = gr.Markdown(
-                    format_deflection_panel(read_summary("deflection", DEFAULT_SUMMARIES_DIR))
-                )
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel</title>
+<style>
+body {{ margin:0; background:#FAF9F5; color:#141413; font:15px/1.5 system-ui, 'Segoe UI', Roboto, sans-serif; }}
+.wrap {{ max-width:880px; margin:0 auto; padding:56px 24px; }}
+h1 {{ font:400 34px/1.2 Georgia, serif; margin:0 0 12px; }}
+.status {{ display:inline-flex; align-items:center; gap:8px; }}
+.dot {{ width:8px; height:8px; border-radius:50%; background:#B5483B; }}
+.reason {{ font:13px/1.6 'SF Mono', Monaco, monospace; background:#F5F4ED; border-radius:8px; padding:12px 14px; margin:16px 0; }}
+.muted {{ color:#5E5D59; }}
+</style></head><body><div class="wrap">
+<p class="status"><span class="dot"></span>Log read failed</p>
+<h1>Sentinel could not read the whole log, so it shows no numbers.</h1>
+<p class="muted">{_html.escape(page["source"]["label"])}, tried at {_html.escape(page["source"]["read_at"][:16].replace("T", " "))} UTC. A partial read would undercount every figure.</p>
+<div class="reason">{_html.escape(page["failed"])}</div>
+<p class="muted">Fix the cause, then run <code>{_html.escape(page["commands"]["refresh"])}</code> again.</p>
+</div></body></html>
+"""
 
-            # KB Source Coverage lives on its own tab (post-Session 50). Pre-#50
-            # it was a section under Failures; the move surfaces it as a
-            # first-class operator surface for KB-coverage health rather than
-            # a sub-section read after the failure drilldown.
-            with gr.Tab("KB Coverage", id=TAB_KB_COVERAGE):
-                gr.Markdown("<div class='section-header-major'>KB Source Coverage</div>")
-                kb_coverage_md = gr.Markdown(
-                    format_kb_coverage_panel(_kb_coverage_entries(model.records))
-                )
 
-        # ---- Wiring ---------------------------------------------------------
-
-        def _feed_accordion_updates(rows: list[FailureRow]):
-            """Build (accordion-update, drilldown-update, session-state-value) per slot.
-
-            Note: Gradio's gr.update doesn't support changing elem_classes
-            after construction, so the severity stripe is fixed at build
-            time. The label still updates per-row to reflect the current
-            filter — accepting that the stripe colour may not match the
-            slot's content after a filter change. Acceptable trade-off given
-            how the operator scans (severity-sorted; alerts always at the
-            top in slots that were originally alert-coloured)."""
-            acc_updates, body_updates, state_values = [], [], []
-            for i in range(MAX_FEED_ROWS):
-                if i < len(rows):
-                    row = rows[i]
-                    acc_updates.append(gr.update(
-                        visible=True, label=_failure_accordion_label(row), open=False,
-                    ))
-                    body_updates.append(format_failure_drilldown(row.record))
-                    state_values.append(row.record.session_id)
-                else:
-                    acc_updates.append(gr.update(visible=False, label="", open=False))
-                    body_updates.append("")
-                    state_values.append(None)
-            return acc_updates, body_updates, state_values
-
-        # Refresh: reload disk + re-render every panel + auto-refresh batches
-        def _refresh(branch, mode, window_label, search):
-            cluster_msg = ensure_fresh_clusters() if autorefresh else None
-            summary_msg = ensure_fresh_summaries() if autorefresh else None
-            new_model, new_loaded_at = _load(reader)
-            new_models, new_priors = _all_window_models(new_model)
-            headline = new_model.for_window(days=HEADLINE_WINDOW_DAYS)
-
-            records = new_model.for_window(days=dict(WINDOWS).get(window_label)).records
-            failure_rows = select_failures(
-                records, branch=branch, failure_mode=mode, question_search=search
-            )
-            flags = _build_flags(new_model)
-            acc_updates, body_updates, state_values = _feed_accordion_updates(failure_rows)
-            empty_html = (
-                "" if failure_rows
-                else "<div class='feed-empty'>No failures match the current filters.</div>"
-            )
-            feed_summary_html = format_feed_summary(
-                failure_rows, failure_mode_counts(records),
-            )
-
-            # Per-flag slot updates: row visible only when its slot has a
-            # flag; card markdown holds the card HTML; link button shows
-            # Per-flag slot updates: each slot's button carries the
-            # multi-line label (headline + detail) and the matching tab id is
-            # queued in flag_target_state for the click handler to read.
-            btn_updates: list = []
-            target_state: list[str] = []
-            for i in range(MAX_FLAGS_RENDERED):
-                if i < len(flags):
-                    f = flags[i]
-                    btn_updates.append(gr.update(
-                        visible=True,
-                        value=f"{f.headline}\n{f.detail}",
-                    ))
-                    target_state.append(FLAG_TARGET_TAB.get(f.target, TAB_METRICS))
-                else:
-                    btn_updates.append(gr.update(visible=False, value=""))
-                    target_state.append("")
-
-            flags_empty_html = "" if flags else FLAGS_EMPTY_PLACEHOLDER
-
-            # Canary panel re-render (issue #53). No batch trigger here:
-            # canary runs are operator-driven via the CLI.
-            canary_view = build_canary_view(reader.read())
-
-            return [
-                f"<div class='page-meta'>{format_header(source, new_loaded_at)}</div>",
-                _autorefresh_banner([cluster_msg, summary_msg]),
-                format_status_banner(_status_summary(headline)),
-                flags_empty_html,
-                *btn_updates,
-                target_state,
-                format_metrics_overview(new_models, new_priors, DISPLAY_MODE_DEFAULT),
-                feed_summary_html,
-                empty_html,
-                *acc_updates,
-                *body_updates,
-                *state_values,
-                format_cluster_panel(read_clusters(CLUSTERS_DEFAULT_PATH)),
-                format_deflection_panel(read_summary("deflection", DEFAULT_SUMMARIES_DIR)),
-                format_kb_coverage_panel(_kb_coverage_entries(new_model.records)),
-                canary_view.run_id,
-                canary_view.verdict_html,
-                canary_view.table_html,
-                gr.update(choices=canary_view.question_ids, value=None),
-                "",
-                canary_view.latency_html,
-                # Trends — re-render every chart and its header. Aligned with
-                # `bar_headers` + `bar_charts` dicts which iterate THEMATIC_BLOCKS
-                # in the same order as the build-time pass below.
-                *[
-                    f"<div class='chart-header'>{format_trend_header(metric, new_model)}</div>"
-                    for metrics in THEMATIC_BLOCKS.values() for metric in metrics
-                ],
-                *[
-                    render_metric_bars(new_model, metric)
-                    for metrics in THEMATIC_BLOCKS.values() for metric in metrics
-                ],
-            ]
-
-        refresh_btn.click(
-            fn=_refresh,
-            inputs=[branch_dd, mode_dd, window_dd, search_in],
-            outputs=[
-                header_md, banner_md, status_md,
-                flags_empty_md,
-                *flag_btns,
-                flag_target_state,
-                metrics_md,
-                feed_summary_md,
-                feed_empty_md,
-                *feed_accordions,
-                *feed_drilldowns,
-                *feed_session_states,
-                cluster_md, deflection_md, kb_coverage_md,
-                canary_run_state,
-                canary_verdict_md,
-                canary_table_md,
-                canary_detail_dd,
-                canary_detail_md,
-                canary_latency_md,
-                *[bar_headers[m] for ms in THEMATIC_BLOCKS.values() for m in ms],
-                *[bar_charts[m] for ms in THEMATIC_BLOCKS.values() for m in ms],
-            ],
-        )
-
-        # Canary detail picker: one question's replicate answers + verdicts.
-        canary_detail_dd.change(
-            fn=lambda run_id, qid: format_canary_detail(run_id, qid),
-            inputs=[canary_run_state, canary_detail_dd],
-            outputs=[canary_detail_md],
-        )
-
-        # Re-baseline button — promote the latest canary run to the frozen
-        # golden baseline. No-op (with a status message) when there's no
-        # canary run to promote.
-        def _rebaseline():
-            from canary_baseline import freeze_baseline
-            from pipeline import GIT_SHA
-            runs = _canary_runs_grouped(reader.read())
-            if not runs:
-                return "<div class='canary-empty'>No canary run to promote.</div>"
-            run_id = runs[-1][0]
-            freeze_baseline(run_id, frozen_git_sha=GIT_SHA)
-            return (
-                f"<div class='canary-banner'>"
-                f"Frozen baseline → run <code>{html.escape(run_id)}</code>."
-                "</div>"
-            )
-
-        rebaseline_btn.click(
-            fn=_rebaseline,
-            outputs=[rebaseline_status_md],
-        )
-
-        # Per-flag click → switch to the target tab. The whole card-shaped
-        # button is the click target; each button reads flag_target_state at
-        # its slot index to know which tab to jump to.
-        def _make_flag_click(slot_index: int):
-            def _handler(targets):
-                target = targets[slot_index] if slot_index < len(targets) else ""
-                if not target:
-                    return gr.update()
-                return gr.Tabs(selected=target)
-            return _handler
-
-        for i, btn in enumerate(flag_btns):
-            btn.click(
-                fn=_make_flag_click(i),
-                inputs=[flag_target_state],
-                outputs=[tabs],
-            )
-
-        # Failure feed filter changes → re-populate accordions + summary
-        def _refresh_feed(branch, mode, window_label, search):
-            records = _filter_records(reader, window_label)
-            rows = select_failures(
-                records, branch=branch, failure_mode=mode, question_search=search
-            )
-            acc_updates, body_updates, state_values = _feed_accordion_updates(rows)
-            empty_html = (
-                "" if rows
-                else "<div class='feed-empty'>No failures match the current filters.</div>"
-            )
-            return [
-                format_feed_summary(rows, failure_mode_counts(records)),
-                empty_html,
-                *acc_updates,
-                *body_updates,
-                *state_values,
-            ]
-
-        for control in (branch_dd, mode_dd, window_dd, search_in):
-            control.change(
-                fn=_refresh_feed,
-                inputs=[branch_dd, mode_dd, window_dd, search_in],
-                outputs=[
-                    feed_summary_md,
-                    feed_empty_md,
-                    *feed_accordions,
-                    *feed_drilldowns,
-                    *feed_session_states,
-                ],
-            )
-
-        # View full session (per-row buttons) — hide the feed column, show
-        # session-view column, and use scroll_to_output so the page scrolls
-        # to the session_md (the first output) on click.
-        def _make_session_click(slot_index: int):
-            def _handler(session_id):
-                if not session_id:
-                    return gr.update(), gr.update(), gr.update()
-                sessions = group_by_session(reader.read())
-                match = next((s for s in sessions if s.session_id == session_id), None)
-                if match is None:
-                    return gr.update(), gr.update(), gr.update()
-                return (
-                    format_session_view(match),
-                    gr.update(visible=False),
-                    gr.update(visible=True),
-                )
-            return _handler
-
-        for i, btn in enumerate(feed_session_btns):
-            btn.click(
-                fn=_make_session_click(i),
-                inputs=[feed_session_states[i]],
-                outputs=[session_md, feed_view, session_view],
-                scroll_to_output=True,
-            )
-
-        def _back_to_feed():
-            # Returning feed_view first (truthy update) so scroll_to_output
-            # lands the operator back at the top of the failure feed.
-            return gr.update(visible=True), gr.update(visible=False)
-
-        back_btn.click(
-            fn=_back_to_feed,
-            outputs=[feed_view, session_view],
-            scroll_to_output=True,
-        )
-
-    return app
+def main(argv: list[str] | None = None) -> Path:
+    args = _parse_cli_args(argv)
+    # Production or local is decided by HF_TOKEN; load it explicitly rather
+    # than relying on an import elsewhere having read .env.
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+    reader = _wrap_with_canary_overlay_if_hf(make_log_reader(force_local=args.local))
+    # The caches describe production, so only a production run rebuilds them.
+    # A failed read inside a batch comes back as its message; build_page then
+    # reads again and shows the failed read instead of any figure.
+    messages = [
+        ensure_fresh_clusters(out_path=CLUSTERS_DEFAULT_PATH, archive_dir=CLUSTERS_ARCHIVE_DIR, reader=reader),
+        ensure_fresh_summaries(out_dir=DEFAULT_SUMMARIES_DIR, reader=reader),
+    ] if _production_reader(reader) is not None else []
+    page = build_page(reader, clusters_path=CLUSTERS_DEFAULT_PATH,
+                      summaries_dir=DEFAULT_SUMMARIES_DIR, batch_messages=messages)
+    PAGE_PATH.write_text(render(page), encoding="utf-8")
+    print(f"Sentinel written to {PAGE_PATH}")
+    if not args.no_open:
+        webbrowser.open(PAGE_PATH.resolve().as_uri())
+    return PAGE_PATH
 
 
 def _parse_cli_args(argv: list[str] | None = None):
-    """``--local`` forces ``LocalReader`` even when ``HF_TOKEN`` is in env
-    (operator escape hatch for inspecting dev logs while a prod env is
-    set; #49). Other flags can land here later without churning ``main``.
-    """
+    """``--local`` reads the local log even when production credentials are
+    set; ``--no-open`` writes the page without opening a browser."""
     import argparse
 
-    parser = argparse.ArgumentParser(
-        prog="sentinel",
-        description="Digital Twin Sentinel dashboard.",
-    )
+    parser = argparse.ArgumentParser(prog="sentinel", description="Digital Twin Sentinel page.")
     parser.add_argument(
-        "--local",
-        action="store_true",
-        help=(
-            "Force the LocalReader even when HF_TOKEN + HF_DATASET_REPO are "
-            "set in env. Use to inspect data/logs/interactions.jsonl in a "
-            "shell that also has prod HF creds exported."
-        ),
+        "--local", action="store_true",
+        help="Read data/logs/interactions.jsonl even when HF_TOKEN and HF_DATASET_REPO are set.",
     )
+    parser.add_argument("--no-open", action="store_true", help="Write the page without opening it.")
     return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
-    args = _parse_cli_args()
-    reader = _wrap_with_canary_overlay_if_hf(
-        make_log_reader(force_local=args.local)
-    )
-    build_app(reader=reader).launch(inbrowser=True)
+    main()

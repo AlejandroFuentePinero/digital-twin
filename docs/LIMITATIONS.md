@@ -120,6 +120,16 @@ The soft conciseness rule (`concise_disclosure`, shipped #25) introduces a drill
 
 ---
 
+### P18: Deploy checks count as visitor traffic on Sentinel
+
+**Status:** Observed (#61 audit, 2026-11-20). Ticket: [#63](https://github.com/AlejandroFuentePinero/digital-twin/issues/63).
+
+Every live record in the dataset counts as a visitor turn, including the owner's deploy smoke tests and test stubs. Taking a turn within 60 minutes of the first turn of its deploy (`git_sha`) as a deploy check, 99 of the 167 production records at 2026-11-20 are checks, and 21 of the 22 in the last 7 days. Five records of 2026-05-07 are test stubs (no retrieval, 1 ms stages). Every visitor rate on Sentinel, the turns-per-session figures and the knowledge-base retrieval counts mostly describe smoke tests at current traffic. The rule is a lower bound: about 17 more of the owner's turns fall past the 60 minutes.
+
+**Trip-wire:** a decision taken from a Sentinel visitor rate (a KB change, a routing change) while the 7-day column is mostly deploy checks. Until #63 lands, read the Failures tab's questions before acting on a rate.
+
+---
+
 ## Predicted (architectural, not yet observed in production)
 
 ### P1 — Mid-conversation prompt switching
@@ -363,6 +373,16 @@ These are not "readme content" failures — the content is correct and accessibl
 
 ---
 
+### O11: The HF log writer can overwrite a day's records when its fetch of the day file fails
+
+**Status:** Predicted; reproduced by fault injection in the #61 audit, never observed in production. Ticket: [#65](https://github.com/AlejandroFuentePinero/digital-twin/issues/65).
+
+`HFLogWriter` merges its buffer into the existing day file before uploading. If the download of that file fails, `_fetch_existing` treats it as empty and the upload replaces the day's earlier records with the buffer alone (2 of 5 survived in the injection). A record appended while an upload is in flight can be lost, and when every upload fails the state file cannot be written either, so `hf_writer_state.json` keeps reporting no error.
+
+**Trip-wire:** a day file whose record count drops between two Sentinel runs, or a day file holding only turns from the end of the day. Sentinel shows the newest record's age and the files read on every run.
+
+---
+
 ## Resolved
 
 ### R2 — Citation scope-creep in temporal/publication answers (v4 → v5)
@@ -548,7 +568,7 @@ The data is on disk and recoverable. The risk is the half-finished-feature patte
 
 ### P17 — Producer rule conflates branch identity with outcome label (LOGISTICAL / GAP)
 
-**Status:** **Observed** (Session 55, 2026-05-06 baseline re-freeze; first production instance Session 66, 2026-08-19). **Canary side retired by `#53` (2026-11-20):** the canary no longer reads `event_type`; an LLM judge grades each answer against an expected behaviour, so "Where are you based?" → "Melbourne" passes. `derive_outcome`, `outcome_accuracy` and trip-wires 2 and 3 below went with it. The live-traffic consequence (`gap_rate`, `answered_with_substance_rate` on the Sentinel live tabs) is unchanged and still governed by trip-wire 4.
+**Status:** **Observed** (Session 55, 2026-05-06 baseline re-freeze; first production instance Session 66, 2026-08-19). **Canary side retired by `#53` (2026-11-20):** the canary no longer reads `event_type`; an LLM judge grades each answer against an expected behaviour, so "Where are you based?" → "Melbourne" passes. `derive_outcome`, `outcome_accuracy` and trip-wires 2 and 3 below went with it. The live-traffic consequence (`gap_rate`, `answered_with_substance_rate` on the Sentinel live tabs) is unchanged and still governed by trip-wire 4. The #61 audit measured it on production: 37 of 167 labels misdescribe the answer (32 without borderline cases). Sentinel-side fix (outcome read from the answer, no producer change): [#63](https://github.com/AlejandroFuentePinero/digital-twin/issues/63).
 
 `event_classifier.classify_event_type(branch, final_answer)` (`src/event_classifier.py:25–28`) makes branch identity canonical for two branches:
 
@@ -636,7 +656,7 @@ Each branch's composed system prompt loads only that branch's `profile_sections`
 
 ### O9: Provider model retirement takes the pipeline down with nothing inside the system noticing
 
-**Status:** Observed (production incident, 2026-10-23 to 2026-10-28). Fixed in [#54](https://github.com/AlejandroFuentePinero/digital-twin/issues/54); startup probe built in [#57](https://github.com/AlejandroFuentePinero/digital-twin/issues/57) (2026-10-29); the pipeline moved off the 2027-01-14 shutdown in [#55](https://github.com/AlejandroFuentePinero/digital-twin/issues/55) (2026-11-20), the eval judge included.
+**Status:** Observed (production incident, 2026-10-23 to 2026-10-28). Turns that fail before the retry loop still leave no record: [#64](https://github.com/AlejandroFuentePinero/digital-twin/issues/64). Fixed in [#54](https://github.com/AlejandroFuentePinero/digital-twin/issues/54); startup probe built in [#57](https://github.com/AlejandroFuentePinero/digital-twin/issues/57) (2026-10-29); the pipeline moved off the 2027-01-14 shutdown in [#55](https://github.com/AlejandroFuentePinero/digital-twin/issues/55) (2026-11-20), the eval judge included.
 
 OpenAI retired `gpt-4.1-nano` on 2026-10-23. The classifier called it on every turn from `pipeline.py`, outside the per-attempt retry block, so the 404 `model_not_found` left `Pipeline.run`, was caught by the defence-in-depth handler in `app.py`, and every visitor saw an error message for five days. Nothing in the system noticed. The Sentinel writer-health panel reads log writes, and a turn that fails before the log record is built writes nothing. The monthly canary is operator-driven and had not run since August. The outage was found by accident on 2026-10-28 while re-ingesting a content batch: `ingest.py` enriches chunks with the same model and failed with the same 404.
 

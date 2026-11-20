@@ -385,3 +385,19 @@ def test_run_batch_excludes_canary_records_from_clustering(tmp_path):
         "canary records leaked into cluster batch — operator-facing clusters "
         "would include synthetic canary probes"
     )
+
+
+def test_run_batch_clusters_the_records_of_the_reader_it_is_given(tmp_path):
+    """Sentinel hands over its own reader so the clusters describe the log
+    it shows (production), not the local file (issue #61)."""
+    from cluster_gaps import run_batch
+
+    class _Reader:
+        def read(self, days=None):
+            return [_record(question="Do you know Rust?", event_type="gap")]
+
+    response = json.dumps({"clusters": [{"label": "Rust", "count": 2, "examples": ["Do you know Rust?"]}]})
+    with patch("cluster_gaps.completion", return_value=_completion_returning(response)) as mock:
+        run_batch(days=7, out_path=tmp_path / "c.json", reader=_Reader(), archive_dir=None)
+
+    assert "Do you know Rust?" in mock.call_args.kwargs["messages"][-1]["content"]

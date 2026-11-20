@@ -24,7 +24,7 @@ A conversational agent representing Alejandro de la Fuente professionally — an
 
 - **Maintenance entry point:** [`docs/MAINTENANCE.md`](./docs/MAINTENANCE.md) — operator runbook for observe-mode. Periodic checks (monthly / quarterly / annually), on-demand procedures (after content / code / outage / feedback), trip-wires, and the canonical command reference.
 - **Glossary:** [`CONTEXT.md`](./CONTEXT.md) — every domain term used in this project.
-- **Architectural decisions:** [`docs/adr/`](./docs/adr/) — three ADRs covering the Frame/Substance split (0001), HF Dataset as canonical log store (0002), and classify-then-route orchestration (0003).
+- **Architectural decisions:** [`docs/adr/`](./docs/adr/): four ADRs covering the Frame/Substance split (0001), HF Dataset as canonical log store (0002), classify-then-route orchestration (0003), and Sentinel as a static page built from one full read (0004).
 - **Phase history (closed):** [`docs/TODO.md`](./docs/TODO.md) — the 7-phase rebuild that ran from the 2026-04-29 redesign through Phase 7 close at Session 63.
 - **Project history:** [`docs/DECISIONS.md`](./docs/DECISIONS.md) — session-by-session log including the redesign (Session 12) and Phase 7 close (Session 63).
 - **Testing convention:** [`docs/TESTING.md`](./docs/TESTING.md) — matching `test_<module>.py` rule, mock-at-boundary policy, no-LLM-API-calls in tests, exemption list. Run the local module-health dashboard with `uv run python src/module_health.py`.
@@ -53,7 +53,7 @@ Guardrail (Claude Sonnet 4.6, branch-aware rules)
 Enriched interaction log  ──►  HuggingFace Dataset (prod) / local JSONL (dev)
                                     │
                                     ▼
-                              Sentinel (local Gradio app, on-demand)
+                              Sentinel (local static page, on-demand)
 ```
 
 **Key structural facts:**

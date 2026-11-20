@@ -586,3 +586,86 @@ def test_hf_log_reader_invalidate_cache_re_fetches():
 
     assert api.list_repo_files.call_count == 2, "invalidate forces a re-list"
     assert api.hf_hub_download.call_count == 2, "invalidate forces a re-download"
+
+
+# ---- Issue #61: the read is all or nothing, and leaves a report ------------
+
+
+def test_hf_log_reader_raises_when_the_dataset_listing_fails():
+    """A failed listing (offline, revoked token) must not read as an empty
+    log: Sentinel would show zeros with healthy marks."""
+    from log_reader import LogReadError
+
+    api = _hf_api_for_reader({})
+    api.list_repo_files = MagicMock(side_effect=OSError("network down"))
+
+    with pytest.raises(LogReadError, match="network down"):
+        HFLogReader(repo_id="ignored/test", hf_api=api).read()
+
+
+def test_hf_log_reader_raises_when_a_day_file_fails_to_download():
+    """A skipped day file would drop that day's turns from every total
+    with nothing on the page; the read fails whole instead."""
+    from log_reader import LogReadError
+
+    files = {
+        "logs/2026-05-06.jsonl": [_record(timestamp="2026-05-06T10:00:00+00:00")],
+        "logs/2026-05-07.jsonl": [_record(timestamp="2026-05-07T10:00:00+00:00")],
+    }
+    api = _hf_api_for_reader(files)
+    good = api.hf_hub_download.side_effect
+
+    def flaky(*, repo_id, filename, repo_type):
+        if filename == "logs/2026-05-07.jsonl":
+            raise OSError("502 Bad Gateway")
+        return good(repo_id=repo_id, filename=filename, repo_type=repo_type)
+
+    api.hf_hub_download = MagicMock(side_effect=flaky)
+
+    with pytest.raises(LogReadError, match=r"2026-05-07.*502"):
+        HFLogReader(repo_id="ignored/test", hf_api=api).read()
+
+
+def test_hf_log_reader_reports_files_read_unreadable_lines_and_duplicates(tmp_path):
+    """What used to reach only the terminal (a skipped line, a collapsed
+    replay) is counted so Sentinel can show it on the page."""
+    dup = _record(timestamp="2026-05-07T10:00:00+00:00", turn_index=0)
+    files = {
+        "logs/2026-05-06.jsonl": [_record(timestamp="2026-05-06T10:00:00+00:00")],
+        "logs/2026-05-07.jsonl": [dup, dup],
+    }
+    api = _hf_api_for_reader(files)
+    good = api.hf_hub_download.side_effect
+
+    def with_bad_line(*, repo_id, filename, repo_type):
+        path = good(repo_id=repo_id, filename=filename, repo_type=repo_type)
+        if filename == "logs/2026-05-07.jsonl":
+            with open(path, "a") as f:
+                f.write("{truncated\n")
+        return path
+
+    api.hf_hub_download = MagicMock(side_effect=with_bad_line)
+    reader = HFLogReader(repo_id="ignored/test", hf_api=api)
+
+    out = reader.read()
+
+    assert len(out) == 2
+    assert reader.report.files_read == 2
+    assert reader.report.unreadable_lines == ["logs/2026-05-07.jsonl:3"]
+    assert reader.report.duplicates == 1
+
+
+def test_local_reader_reports_unreadable_lines_and_duplicates(tmp_path):
+    """The local log keeps its records as they are (a repeat still counts
+    twice) but the repeat and the bad line are reported, not silent."""
+    log_path = tmp_path / "interactions.jsonl"
+    row = json.dumps(_record(turn_index=0))
+    log_path.write_text(row + "\n" + row + "\n" + "{not json\n")
+    reader = LocalReader(log_path)
+
+    out = reader.read()
+
+    assert len(out) == 2
+    assert reader.report.files_read == 1
+    assert reader.report.unreadable_lines == [f"{log_path}:3"]
+    assert reader.report.duplicates == 1

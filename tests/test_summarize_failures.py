@@ -350,3 +350,19 @@ def test_run_batch_excludes_canary_records_from_every_group(tmp_path):
         "canary records leaked into summary batch — operator-facing summaries "
         "would mix synthetic canary probes with live failures"
     )
+
+
+def test_run_batch_summarises_the_records_of_the_reader_it_is_given(tmp_path):
+    """Sentinel hands over its own reader so the deflection summary
+    describes production, not the local file (issue #61)."""
+    from summarize_failures import run_batch
+
+    class _Reader:
+        def read(self, days=None):
+            return [_record(question="Tell me a joke", event_type="deflected")]
+
+    with patch("summarize_failures.completion", return_value=_completion_returning("# S\n\nok")) as mock:
+        run_batch(days=7, out_dir=tmp_path, reader=_Reader())
+
+    prompts = " ".join(c.kwargs["messages"][-1]["content"] for c in mock.call_args_list)
+    assert "Tell me a joke" in prompts

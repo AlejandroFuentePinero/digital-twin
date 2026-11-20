@@ -4,6 +4,22 @@
 
 This is the single source of truth for *what each metric means* and *what to do when it fires*. Sentinel itself shows raw numbers; this doc gives them meaning.
 
+## The page (rebuilt in #61)
+
+`uv run python src/sentinel.py` reads the log, writes one static page to `data/logs/sentinel.html` (gitignored: it quotes visitors' questions) and opens it. To refresh, run it again: every run reads the whole log afresh. `--local` reads `data/logs/interactions.jsonl` even when production credentials are set; `--no-open` writes the page without opening it. Production or local is decided by `HF_TOKEN` and `HF_DATASET_REPO`, which Sentinel loads from `.env` itself.
+
+**The read is all or nothing.** If the dataset listing, any day file or the contact submissions fail, the page says "Log read failed" in red with the reason and shows no numbers: a partial read would undercount every figure and look like a quiet week. Lines that cannot be parsed are listed in red under the summary and left out; repeated records are counted there too (production collapses them, the local log counts them as logged). Contact submissions come from the same source as the log. The gap clusters and deflection summary describe production: only a production run rebuilds them (when older than 7 days) or shows them, and a failed rebuild is a red line under the summary.
+
+**Layout,** in the calm dashboard style (light, warm greys, colour only on status dots):
+
+1. **Summary**, above every tab: a one-sentence verdict, then the newest turn's age, the turns in the last 7 days, the day files read and when, the log writer's last flush, and any flags. Four cards follow: canary, metrics on alert, failures in the last 7 days, sections never retrieved. Each opens its tab. The metrics card counts the rows the Metrics table marks, over every window.
+2. **Metrics:** one table, status first, a column per window (7 days, 30 days, 90 days, all time, each with its turn count). Picking a row opens its detail window: what it measures, how it is marked, and the same figure for each branch with the turns behind each value (this replaces the Trends tab).
+3. **Canary:** the verdict, every run since the baseline (questions and answers passing, median per question, p95 total and per stage), the latest run by category, then the questions table with failing rows shaded; picking a question shows its three answers.
+4. **Failures:** counts per kind for the chosen window, filters (window, branch, kind, search), every failing turn worst kind first then newest (no cap), and a detail window with the attempts, guardrail feedback, retrieved sections, tool calls, latency and the whole session. Gap clusters and the deflection summary follow.
+5. **Coverage:** every knowledge-base section with its retrievals, sortable and filterable.
+
+The page model (`sentinel.build_page`) holds every figure as plain data; `scripts/sentinel_recompute.py` reproduces them from the raw day files without importing `src/`.
+
 Companion to:
 - [`ADR-0003`](./adr/0003-classify-then-route.md) — Operational risks section.
 - [`LIMITATIONS.md`](./LIMITATIONS.md) — Trip-wires per limitation entry; runbooks below cross-reference.
@@ -222,7 +238,7 @@ The share column makes architectural drift visible: a per-stage absolute regress
 
 ## Flags
 
-The Flags panel sits above Panel 1 and surfaces three automatically-detected anomalies via the `flag_detector.py` module. Each flag links to the panel where the operator should drill in. **Stable / quiet weeks render no flags by design** — the panel is empty by default.
+Flags are named in the summary line above every tab ("No flags raised" when none fire). Three automatically-detected anomalies come from the `flag_detector.py` module. **Stable or quiet weeks raise no flags by design.**
 
 ### `gap_rate_jump`
 
@@ -291,22 +307,22 @@ The first `cluster_gaps.run_batch` after slice 2 of PRD #41 (`#43`) — combined
 
 A side effect: the *next* `flag_detector.detect_new_cluster` run may fire `new_cluster` flags for clusters that aren't actually new — they're newly-visible because the proxy was undercounting them. **Operator action before the first post-#43 batch run:** archive a fresh "baseline" snapshot under `data/logs/gap_clusters_archive/` so the false `new_cluster` flags clear on the run after that. (Or accept the noise on one run and move on.)
 
-The two LLM-calling batch processors (`cluster_gaps`, `summarize_failures`) read the canonical log directly via `LocalReader().read()` rather than through `DashboardModel`, so they need their own filter. Forcing functions: `tests/test_cluster_gaps.py::test_run_batch_excludes_canary_records_from_clustering` and `tests/test_summarize_failures.py::test_run_batch_excludes_canary_records_from_every_group` — both fail loudly if a future refactor drops the filter.
+The two LLM-calling batch processors (`cluster_gaps`, `summarize_failures`) read the log they are given (Sentinel passes its own reader; their command lines use `make_log_reader()`) rather than going through `DashboardModel`, so they need their own filter. Forcing functions: `tests/test_cluster_gaps.py::test_run_batch_excludes_canary_records_from_clustering` and `tests/test_summarize_failures.py::test_run_batch_excludes_canary_records_from_every_group`: both fail loudly if a future refactor drops the filter.
 
-### Tab layout
+### Tab layout (#61)
 
-1. **Verdict line.** "All 50 questions pass" (green), "N of 50 questions fail: C0xx, ..." (red), or "Latest run is not judged" with the `--judge-run` command (amber). Carries the run date and commit.
-2. **Question table**, failing rows first: status, ID, question, the judge's reason (the first failing replicate's, or "3/3 pass"), latency (baseline median → this run's median). Status is `fail` (red: a visitor gets a wrong answer), `slow` (amber: a passing question whose median latency is over 1.5× the baseline's), or `pass` (green).
-3. **Detail picker.** Choose a question ID to see its three answers with each verdict and reason.
-4. **Latency trajectory.** Stage p95 latency, 5 columns: **Stage | Benchmark | +1 | +2 | +3**, where `+N` is the Nth canary run after the baseline was frozen. Empty slots render as em-dash.
+1. **Verdict line.** "All 50 questions pass", "49 of 50 questions pass" with the failing and slow IDs, or "The latest run is not judged yet" with the `--judge-run` command. Carries the run date, commit and age.
+2. **Runs since the baseline.** One row per canary run from the frozen baseline on: questions passing, answers passing, median time per question, p95 total and per stage. A run stopped part-way says how many of its 150 answers it logged; an unjudged run says so.
+3. **By category, latest run:** questions, pass, fail and slow per corpus category.
+4. **Questions, latest run**, failing rows first and shaded: status, ID, question, the judge's reason (the first failing replicate's, or "3 of 3 pass"), median latency baseline → now. Status is fail (red: a visitor gets a wrong answer), slow (amber: a passing question whose median is over 1.5 times the baseline's), or pass (green). Picking a row shows the expected behaviour and the three answers with each verdict.
 
 ### Baseline: latency only
 
-The frozen baseline (`data/canaries/baseline.json`) is now only the latency reference. Pass/fail does not depend on it: the expectation is the reference. Re-baseline (CLI `--freeze-baseline` or the Advanced accordion's button) after an intentional change that legitimately moves latency, such as a model swap. Re-baselining on an unintended slowdown hides it.
+The frozen baseline (`data/canaries/baseline.json`) is now only the latency reference. Pass/fail does not depend on it: the expectation is the reference. Re-baseline (`uv run python src/canary_runner.py --freeze-baseline`, shown on the Canary tab) after an intentional change that legitimately moves latency, such as a model swap. Re-baselining on an unintended slowdown hides it.
 
 ### Manual-only batch — *do not auto-refresh*
 
-Sentinel does **not** auto-run the canary batch on launch. The `ensure_fresh_canaries` helper exists in `sentinel.py` but `build_app` never calls it. Reasoning:
+Sentinel does **not** auto-run the canary batch on launch. The `ensure_fresh_canaries` helper exists in `sentinel.py` but Sentinel never calls it. Reasoning:
 
 - A full canary run is 50 questions × 3 replicates × full pipeline ≈ **30 min wall-clock**, ~$1.50.
 - The operator decides cadence — typically weekly, or on demand for fix verification.
@@ -347,40 +363,19 @@ If the operator forgets to re-baseline after an intentional change (e.g. a KB re
 
 ---
 
-## Trends tab (Session 41 redesign — grouped bar charts)
+## Trends tab (removed in #61)
 
-Trend charts now compare 5 branches across 4 time windows in one glance. Replaces the Session 40 line/time-series view: at portfolio-scale traffic (~30 records/day, 4-day history at the time of redesign), line charts were rendering 3–4 dots per series — most "trends" were single line segments between two points. Bar charts with 4 × 5 = 20 bars per chart are denser and don't fake temporal smoothness.
-
-Trends remain decoupled from status framing — the Metrics tab is the source of truth for "is this healthy?". Trends carries per-branch decomposition + window comparison only.
-
-### What renders on every chart
-
-- **X-axis:** 4 categorical positions — `7d / 30d / 90d / Global`. Same windows as the Metrics tab columns, identical semantics.
-- **Y-axis:** metric value in chart-axis units (`Gap rate (%)`, `Total latency p95 (s)`, etc.). Auto-scaled per chart with a zero floor.
-- **5 grouped bars per window** — one colour per branch (`GENERIC` blue, `GAP` gray, `TECHNICAL` green, `BEHAVIOURAL` purple, `LOGISTICAL` orange). Fixed palette; same order in every chart.
-- **`—` annotations** at the baseline for branches with no records in a window (or with the metric returning `None`). Distinct from a measured 0% bar (which renders as a small tick at zero); the position is reserved either way so the X-axis grouping stays aligned across windows.
-- **No threshold reference lines and no caption** — Trends is decoupled from healthy/warning semantics by design. Threshold values appear on the Metrics tab + this doc.
-- **No aggregate bar** — operator-driven directive. The visual sum across the 5 branches is implicit; if the operator wants the aggregate scalar, it reads off the chart header (`Gap rate: 8.1%`).
-
-### Shared per-branch legend at the top of the tab
-
-A single `.branch-legend` strip — five colour swatches + branch names — rendered once at the top of the Trends tab. Every chart on the page reads against the same legend; no per-chart matplotlib legend chrome on individual figures. Matches the bar order within each window group.
-
-### No investigate mode
-
-Removed in Session 41. The bar chart already shows all 4 windows; window radio + prior-period overlay + deployment markers don't apply to a categorical x-axis. Clicking a chart does nothing (deliberately).
-
-If deeper investigation is needed for a specific metric, the workflow is: read the bar chart on Trends → drill into the Failure Feed (Failures tab) for per-record forensics → consult the LLM-batched Gap Clusters / Deflection summary for pattern attribution.
+The Trends tab showed the Metrics figures split by branch as bar charts, with no sample sizes. The split now sits in each metric's detail window on the Metrics tab, as a table with the turns behind each value. Per-branch contact conversion counts the contact submissions, like the headline figure (the old charts ignored them and read 0%).
 
 ---
 
 ## KB Coverage tab (Session 40 panel; promoted to its own tab in Session 50)
 
-Dedicated tab between Failures and Canary (post-#50). Pre-#50 the panel sat at the bottom of the Failures tab below Deflection summary; it was promoted to a first-class tab because KB-coverage health is operator-actionable independent of failure drilldown — the operator opens the tab to ask "is the KB well-utilised?" not "what failed?". Surfaces three buckets of `(source_file, section_heading)` pairs:
+One table of every `(source_file, section_heading)` pair with its retrieval count over all live records, sortable by status, section, file or retrievals, with a filter by status and file and a section search (#61). The status column has three values:
 
-- **Never retrieved** (count = 0, alert ribbon) — sections in the canonical KB that have not appeared in any retrieval over the loaded window. Pruning candidates or content-rewrite candidates if they look load-bearing.
-- **Retrieved** (count > 0, healthy ribbon) — sections that show up in `retrieved_chunks`, sorted ascending by frequency so the rarely-used sections sit at the top of the bucket.
-- **Off-canon** (warning ribbon) — sections that appear in retrievals but do **not** match any current canonical `(source_file, section_heading)` pair from the KB files. These are stale embeddings the operator forgot to clean up after a KB rewrite. Action: re-run `uv run python src/ingest.py` to refresh ChromaDB.
+- **Never retrieved** (count = 0, amber: something to look at): sections in the canonical KB that have not appeared in any retrieval over the loaded window. Pruning candidates or content-rewrite candidates if they look load-bearing.
+- **Retrieved** (count > 0, green): sections that show up in `retrieved_chunks`.
+- **No longer in the KB** (off-canon, grey): sections that appear in retrievals but do **not** match any current canonical `(source_file, section_heading)` pair from the KB files. These are stale embeddings the operator forgot to clean up after a KB rewrite. Action: re-run `uv run python src/ingest.py` to refresh ChromaDB.
 
 ### How it's computed
 
@@ -395,11 +390,11 @@ Dedicated tab between Failures and Canary (post-#50). Pre-#50 the panel sat at t
 
 ---
 
-## Metrics tab — Glossary (Session 40)
+## Metrics detail window (replaces the Glossary, #61)
 
-A collapsed `gr.Accordion` at the bottom of the Metrics tab listing every row in the metric grid with a one-sentence description, grouped by the same Outcome / Routing / Engagement / Tool use / Latency sections. Forcing function: `tests/test_sentinel.py::test_metric_glossary_keys_match_metric_specs_labels` pins the glossary keys to `METRIC_SPECS` labels — adding a new row without a glossary entry fails CI.
+Picking a Metrics row opens its detail window: **What it measures** (one plain sentence from `METRIC_GLOSSARY`), **How it is marked** (the row's rule, generated from `metric_status`: the value band, the shift band, or not marked), and **By branch**. Forcing function: `tests/test_sentinel.py::test_metric_glossary_keys_match_metric_specs_labels` pins the glossary keys to the `METRIC_SPECS` labels.
 
-Defaults closed so the at-a-glance scan stays clean; click to expand when learning the metric vocabulary or onboarding a new operator.
+The "vs prior" line under a value (metrics judged on their value only) compares with the window of the same length just before it. All time has no earlier window, so it carries none.
 
 ---
 
@@ -472,9 +467,9 @@ Use the *combination*; no single metric tells the whole story.
 
 ## Operational caveats
 
-### Hot reads on every refresh
+### Full read on every run
 
-Sentinel reads the full JSONL on every Refresh click. At portfolio traffic (~30 records/day) this is fine. **Revisit when the log exceeds ~5,000 records**: at that point either materialise daily aggregates to a side file, or migrate to the HF Dataset path in #28's `HFReader` stub (Phase 6).
+Each run downloads every day file (30 files, a few seconds today). **Revisit when the log exceeds ~5,000 records**: at that point materialise daily aggregates to a side file.
 
 ### No alerting
 
@@ -487,7 +482,7 @@ Several headline metrics are proxies (see per-metric caveats above). The dashboa
 1. **Failure Feed** (#31) — read the actual questions and feedback.
 2. **Replay** (#38) — re-run failed turns through current code to confirm a fix worked.
 3. **Trend Explorer** (#30) — watch the metric over time, anchored to commit markers from `git_sha` (#37).
-4. **Gap Clusters** (#32) and **Deflection summary** (#33) — weekly LLM-batched aggregations of the gap and deflection records, cached to `data/logs/gap_clusters.json` and `data/logs/summaries/deflection_*.md`. Run `uv run python src/cluster_gaps.py` and `uv run python src/summarize_failures.py` to refresh.
+4. **Gap Clusters** (#32) and **Deflection summary** (#33): weekly LLM-batched aggregations of the gap and deflection records, cached to `data/logs/gap_clusters.json` and `data/logs/summaries/deflection_*.md`. Sentinel rebuilds them from the log it reads (production when credentials are set; before #61 they always read the local file) when older than 7 days. Run `uv run python src/cluster_gaps.py` and `uv run python src/summarize_failures.py` to refresh by hand.
 
 The dashboard tells you "something looks off." The other affordances tell you "what."
 

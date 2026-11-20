@@ -228,6 +228,7 @@ graph LR
   generator --> openai_params
   guardrail --> rules
   hf_contact_log --> contact_log
+  hf_contact_log --> log_reader
   hf_contact_log --> hf_log_writer
   ingest --> openai_params
   log_reader --> interaction_log
@@ -246,11 +247,11 @@ graph LR
   pipeline --> tools
   retrieval --> openai_params
   schema_migrations --> interaction_log
-  sentinel --> branches
   sentinel --> cluster_gaps
   sentinel --> canary_runner
   sentinel --> summarize_failures
   sentinel --> canary_baseline
+  sentinel --> canary_corpus
   sentinel --> canary_verdicts
   sentinel --> contact_log
   sentinel --> dashboard_model
@@ -286,7 +287,6 @@ graph LR
   retrieval --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   retrieval --> ext_OpenAI_API
   sample_chunks --> ext_ChromaDB
-  sentinel --> ext_Gradio__UI_
   startup_probe --> ext_OpenAI_API
   startup_probe --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   summarize_failures --> ext_OpenAI___Anthropic_API__via_LiteLLM_
@@ -339,7 +339,7 @@ graph LR
 | `rules.py` | Shared rule fragments composed into generator and guardrail system prompts. |
 | `sample_chunks.py` | Sample and inspect chunks from the ChromaDB knowledge base. |
 | `schema_migrations.py` | Read-time schema migration for the canonical interaction log (issue #48). |
-| `sentinel.py` | Local Gradio dashboard over the canonical interaction log (Phase 4). |
+| `sentinel.py` | Sentinel: the operator's page over the interaction log (issue #61 rebuild). |
 | `session_state.py` | Per-session state for #16's contact-flow. |
 | `startup_probe.py` | Startup model probe (#57): fail the Space build loudly when a configured model is gone. |
 | `summarize_failures.py` | Failure-summarisation batch (issue #33). |

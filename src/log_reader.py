@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Protocol
@@ -27,18 +28,42 @@ from schema_migrations import SchemaVersionHandler
 _log = logging.getLogger(__name__)
 
 
+class LogReadError(RuntimeError):
+    """The log could not be read in full (a failed listing or day-file
+    download). Raised instead of returning a partial list, so a reader of
+    the log never mistakes missing data for a quiet period (issue #61)."""
+
+
+@dataclass
+class ReadReport:
+    """What the last ``read`` saw besides the records: the files it read,
+    each line it could not parse (``source:line``), and how many records
+    repeated another's identity key."""
+    files_read: int = 0
+    unreadable_lines: list[str] = field(default_factory=list)
+    duplicates: int = 0
+
+
 class LogReader(Protocol):
+    report: ReadReport
+
     def read(self, days: int | None = None) -> list[InteractionRecord]: ...
 
 
 class LocalReader:
     def __init__(self, path: Path = DEFAULT_LOG_PATH):
         self._path = Path(path)
+        self.report = ReadReport()
 
     def read(self, days: int | None = None) -> list[InteractionRecord]:
+        self.report = ReadReport()
         if not self._path.exists():
             return []
-        records = _parse_jsonl_to_records(self._path, source=str(self._path))
+        records, bad = _parse_jsonl_to_records(self._path, source=str(self._path))
+        self.report = ReadReport(
+            files_read=1, unreadable_lines=bad,
+            duplicates=len(records) - len(_dedupe_by_identity_key(records)),
+        )
         if days is not None:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
             records = [r for r in records if r.timestamp >= cutoff]
@@ -107,8 +132,9 @@ class HFLogReader:
         # On-disk caching is delegated to ``huggingface_hub`` itself —
         # ``hf_hub_download`` already writes to ``~/.cache/huggingface/``
         # and short-circuits on revision match.
-        self._file_cache: dict[str, list[InteractionRecord]] = {}
+        self._file_cache: dict[str, tuple[list[InteractionRecord], list[str]]] = {}
         self._files_listed: list[str] | None = None
+        self.report = ReadReport()
 
     def read(self, days: int | None = None) -> list[InteractionRecord]:
         if self._files_listed is None:
@@ -116,12 +142,10 @@ class HFLogReader:
                 self._files_listed = self._api.list_repo_files(
                     repo_id=self._repo_id, repo_type="dataset"
                 )
-            except Exception:
-                _log.exception(
-                    "HFLogReader could not list repo %s", self._repo_id
-                )
-                self._files_listed = []
-                return []
+            except Exception as exc:
+                raise LogReadError(
+                    f"could not list {self._repo_id}: {type(exc).__name__}: {exc}"
+                ) from exc
 
         cutoff_date = None
         if days is not None:
@@ -138,12 +162,19 @@ class HFLogReader:
             targets.append(f)
 
         records: list[InteractionRecord] = []
+        bad: list[str] = []
         for filename in targets:
             if filename not in self._file_cache:
                 self._file_cache[filename] = self._download_and_parse(filename)
-            records.extend(self._file_cache[filename])
+            file_records, file_bad = self._file_cache[filename]
+            records.extend(file_records)
+            bad.extend(file_bad)
 
         deduped = _dedupe_by_identity_key(records)
+        self.report = ReadReport(
+            files_read=len(targets), unreadable_lines=bad,
+            duplicates=len(records) - len(deduped),
+        )
 
         if days is not None:
             cutoff_iso = (
@@ -162,18 +193,19 @@ class HFLogReader:
         self._file_cache.clear()
         self._files_listed = None
 
-    def _download_and_parse(self, filename: str) -> list[InteractionRecord]:
+    def _download_and_parse(self, filename: str) -> tuple[list[InteractionRecord], list[str]]:
         try:
             local = self._api.hf_hub_download(
                 repo_id=self._repo_id, filename=filename, repo_type="dataset"
             )
         except Exception as exc:
-            _log.warning("HFLogReader skipping %s (%s)", filename, exc)
-            return []
+            raise LogReadError(
+                f"could not download {filename}: {type(exc).__name__}: {exc}"
+            ) from exc
         return _parse_jsonl_to_records(Path(local), source=filename)
 
 
-def _parse_jsonl_to_records(path: Path, *, source: str) -> list[InteractionRecord]:
+def _parse_jsonl_to_records(path: Path, *, source: str) -> tuple[list[InteractionRecord], list[str]]:
     """Shared parse path for both `LocalReader` and `HFLogReader`.
 
     Each line is JSON-decoded → run through ``SchemaVersionHandler`` to
@@ -183,9 +215,11 @@ def _parse_jsonl_to_records(path: Path, *, source: str) -> list[InteractionRecor
     surfacing. Any of those steps can raise; ``ValueError`` (which
     ``MissingRequiredFieldError`` subclasses) and ``JSONDecodeError``
     are caught here and become a skip-with-warning so one bad line
-    can't take down a read.
+    can't take down a read. Each skipped line is returned as ``source:line``
+    so the caller can report it.
     """
     out: list[InteractionRecord] = []
+    bad: list[str] = []
     with path.open("r", encoding="utf-8") as f:
         for lineno, line in enumerate(f, start=1):
             if not line.strip():
@@ -196,9 +230,10 @@ def _parse_jsonl_to_records(path: Path, *, source: str) -> list[InteractionRecor
                 record = InteractionRecord.model_validate(migrated)
             except (json.JSONDecodeError, ValueError) as exc:
                 _log.warning("Skipping malformed log line %s:%d (%s)", source, lineno, exc)
+                bad.append(f"{source}:{lineno}")
                 continue
             out.append(_smart_normalize_event_type(record))
-    return out
+    return out, bad
 
 
 def _dedupe_by_identity_key(

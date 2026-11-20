@@ -10,15 +10,15 @@ This file is the entry point when re-engaging. Read this before opening any othe
 
 ### Monthly
 
-- [ ] **Run the canary.** It judges itself and prints the pass count. Read every failing question's three answers (Sentinel Canary tab, detail picker): a real regression gets a ticket; a stale or wrong `expected_behaviour` gets fixed in `data/canaries/corpus.json` and the run re-judged with `--judge-run <run_id>`.
+- [ ] **Run the canary.** It judges itself and prints the pass count. Read every failing question's three answers (Sentinel Canary tab: pick the question): a real regression gets a ticket; a stale or wrong `expected_behaviour` gets fixed in `data/canaries/corpus.json` and the run re-judged with `--judge-run <run_id>`.
   ```bash
   uv run python src/canary_runner.py --replicates 3
   ```
 - [ ] **Open Sentinel against production logs.** Review:
-  - **Flags panel** — any new `gap_rate_jump`, `new_cluster`, `repeat_failure` flags fired this month?
-  - **Failure Feed** — scan recent `event_type=refused` + `event_type=deflected` sessions; spot any patterns (same question shape recurring, contact-form ask going unsubmitted).
-  - **Writer-health panel** — `last_flush_time` recent, `last_error` blank, `buffer_size` bounded.
-  - **Trends tab** — gap rate / deflection rate / latency stable WoW.
+  - **Summary** (top of every tab): the newest turn's age, the log writer's last flush with no error, any flags, and no red notes (unreadable log lines, failed cache refresh). A red "Log read failed" page means the read did not complete: fix the cause and run it again.
+  - **Failures tab**: scan recent refused and deflected turns; spot any patterns (same question shape recurring, contact-form ask going unsubmitted).
+  - **Metrics tab**: rows marked alert or warning; pick a row for its split by branch. At today's traffic most marks rest on a handful of turns: read them in context.
+  - **Coverage tab**: sections never retrieved that a recruiter would ask about.
   ```bash
   uv run python src/sentinel.py
   ```
@@ -79,7 +79,7 @@ This file is the entry point when re-engaging. Read this before opening any othe
 
 ### After a provider outage / Space restart
 
-1. Open Sentinel; check writer-health panel (`last_error` should clear within minutes of recovery).
+1. Run Sentinel; the summary line shows the writer's last flush and any error (`last_error` should clear within minutes of recovery).
 2. Check `contacts/*.jsonl` and `logs/*.jsonl` for the day — confirm records are landing again.
 3. If the buffer file `data/logs/.hf_buffer.jsonl` exists locally, the writer's crash-recovery path will flush on next start; verify it did via the writer-state file.
 
@@ -100,7 +100,7 @@ This file is the entry point when re-engaging. Read this before opening any othe
 | Confident-failure rate jumps >5pp WoW on Sentinel | `flag_detector::detect_gap_rate_jump` | Investigate via Failure Feed |
 | New gap cluster appears in cluster_gaps weekly batch | `flag_detector::detect_new_cluster` | Read cluster summary, decide content update |
 | Same question repeats with refused→answered shape | `flag_detector::detect_repeat_failure` | Open Failure Feed session view, identify what changed |
-| Any canary question fails | Sentinel Canary tab / runner report | Read its answers in the detail picker; ticket a real regression, fix a stale expectation |
+| Any canary question fails | Sentinel Canary tab / runner report | Pick the question on the Canary tab to read its answers; ticket a real regression, fix a stale expectation |
 | API key expiring in <14 days | Manual reminder | Rotate in `.env` + Space secrets |
 
 ---
@@ -112,8 +112,9 @@ This file is the entry point when re-engaging. Read this before opening any othe
 uv sync                                        # install deps
 uv run pytest -q                               # run suite
 uv run python src/ingest.py                    # re-ingest KB
-uv run python src/sentinel.py --local          # Sentinel against local JSONL only
-uv run python src/sentinel.py                  # Sentinel against prod (HF env required)
+uv run python src/sentinel.py --local          # Sentinel page from the local JSONL only
+uv run python src/sentinel.py                  # Sentinel page from prod (HF_TOKEN + HF_DATASET_REPO in .env); run again to refresh
+uv run python scripts/sentinel_recompute.py    # every Sentinel figure rebuilt from the raw day files, independently of src/
 uv run python src/canary_runner.py --replicates 3                     # canary run, judged, prints pass/fail
 uv run python src/canary_runner.py --judge-run <run_id>               # (re-)judge a logged run
 uv run python src/canary_runner.py --replicates 3 --freeze-baseline   # promote latest run to latency baseline (operator decision)

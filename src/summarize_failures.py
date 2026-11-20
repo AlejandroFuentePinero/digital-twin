@@ -14,13 +14,16 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from litellm import completion
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from failure_feed import classify_failure
 from interaction_log import InteractionRecord
+
+if TYPE_CHECKING:
+    from log_reader import LogReader
 from openai_params import REASONING_OFF
 
 
@@ -196,6 +199,7 @@ def run_batch(
     days: int,
     out_dir: Path,
     log_path: Path | None = None,
+    reader: LogReader | None = None,
 ) -> list[Path]:
     """Read the interaction log, slice it three ways, summarise each group via
     the LLM, and write one date-stamped Markdown file per group. Returns the
@@ -203,10 +207,13 @@ def run_batch(
 
     Empty groups skip the LLM and write the no-records placeholder; the file
     is always created so a downstream consumer can rely on three-files-per-run.
+    `reader`, when given, is read instead of `log_path` (Sentinel passes its
+    own, so the summaries describe the log it shows).
     """
     from log_reader import LocalReader
 
-    reader = LocalReader(log_path) if log_path is not None else LocalReader()
+    if reader is None:
+        reader = LocalReader(log_path) if log_path is not None else LocalReader()
     # Canary records share interactions.jsonl with live records (#39). Summarise
     # only live failures — synthetic canary refusal / gap / deflection probes
     # would otherwise pollute the operator-facing summary reports.
@@ -241,7 +248,10 @@ def main() -> None:
         help=f"Output directory (default {DEFAULT_SUMMARIES_DIR}).",
     )
     args = parser.parse_args()
-    paths = run_batch(days=args.days, out_dir=args.out_dir)
+    from log_reader import make_log_reader
+
+    # The log Sentinel shows: production when HF_TOKEN is set, else local.
+    paths = run_batch(days=args.days, out_dir=args.out_dir, reader=make_log_reader())
     for path in paths:
         print(f"Wrote {path}")
 

@@ -5,6 +5,36 @@
 
 ---
 
+## Session 75 (2026-11-20): Sentinel audited blind, then rebuilt as a calm static page with an all-or-nothing read (#61).
+
+**Status:** implemented test-first, both spec-review axes triaged. Suite at **598 passing, 1 skipped**: 80 Sentinel tests replaced by 41 (19 kept verbatim, 22 new at the page-model seam; the other 61 tested the removed Gradio formatters, charts and panels, their surviving behaviours re-tested on the page model), plus 8 new reader, contact-reader and batch tests. The owner picked the calm light prototype and signed off its style. Follow-ups filed: #63 (visitors apart from deploy checks, outcomes read from the answer), #64 (log turns that fail before the retry loop), #65 (writer overwrite on a failed fetch).
+
+### Audit (phase 1)
+
+A new script, `scripts/sentinel_recompute.py`, rebuilds every figure from the raw day files without importing `src/`. Every finding went to a second agent whose only job was to disprove it: none refuted, 8 corrected. Accurate: the arithmetic matches (the first pass missed two bugs, found on the second pass against the prototype page: contact conversion by branch ignored the contact submissions and read 0%, and the all-time "change vs prior" compared against an empty window). Faithful: no, outcome labels follow the branch (37 of 167 wrong when read) and deploy checks count as visitors (21 of the last 22 turns). Robust: no, a failed listing or download showed zeros with healthy marks, Refresh never re-read, the writer panel was blank in production, the banner judged 7 days only, nothing showed the record age, and the gap clusters and deflection summary read the local file. Full report: `docs/audits/sentinel-trust-audit.md` (gitignored like the other audits).
+
+### Prototypes (phase 3)
+
+The first three prototypes rebuilt the layout around five control-room questions; the owner rejected them: the structure, data and aggregation of the existing tabs were right, only the presentation was wrong. A second prototype kept the tabs and figures and restyled them in the calm dashboard style (tables, colour only on status dots, a detail window beside each table, Trends folded into Metrics as a per-branch table). Light and dark variants; the owner chose light. Prototypes kept on the branch `prototype/61-sentinel`. Small-sample alerts stay as they are by the owner's ruling: he reads them in context.
+
+### What changed
+
+- **Sentinel is a static page** (ADR-0004): `src/sentinel.py` builds a page model (`build_page`) and writes `data/logs/sentinel.html` from `src/sentinel_page.html`. Refresh is running it again. The Gradio UI, charts and HTML formatters are gone.
+- **The read is all or nothing:** `HFLogReader` and `HFContactReader` raise `LogReadError` on a failed listing or download (they used to return nothing or skip the file, so conversion could read a quiet 0%); the page then shows only "Log read failed" and the reason. Both log readers report files read, unreadable lines and repeated records, shown under the summary. Contacts come from the same source as the log, so `--local` no longer joins local turns with production submissions.
+- **Fixed figures:** all time carries no "change vs prior"; per-branch contact conversion counts the contact submissions.
+- **Gap clusters and the deflection summary read the log Sentinel reads** (production with credentials): both batches take a reader, Sentinel passes its own, their command lines use `make_log_reader()`. Only a production run rebuilds or shows them; a `--local` page says they are built from production. A failed batch shows its real cause, not tenacity's `RetryError` wrapper. The cluster command had its `__main__` block above functions it calls and crashed when run as a script; moved to the end.
+- **Visible on every run:** the source, files read and newest record's age; the writer's last flush and any error (red); failed cache refreshes (red); flags.
+- Sentinel loads `.env` itself instead of relying on another module's import.
+- Gap, deflection and answered-with-substance carry a "not yet trustworthy" note (#63) in their detail windows and on the Failures tab.
+
+### Verification
+
+- **Independent check of the page:** every figure on the built production page (1,041: metrics, marks, changes, the 280 per-branch values and their turn counts, failure counts, coverage, canary runs, questions and categories, summary) compared with `sentinel_recompute.py` at the same read time: 0 mismatches.
+- **Injection tests at the page seam:** listing failure, failed day download, missing token, malformed line, duplicate record, writer that stopped writing, writer error. Each fix was checked by putting the old behaviour back and watching its test fail.
+- **Caches rebuilt from production:** the deflection summary now covers the 6 production deflections of the week (it said none before), the clusters show AWS and on-call.
+
+---
+
 ## Session 74 (2026-11-20): projects the KB only mentions in passing fetch their README (#62); C026 and C027 fetch on the first attempt.
 
 **Status:** implemented test-first (commit `6f4f2be`), both spec-review axes triaged, one judged canary run on the final code plus a full pre-check run. Suite at **629 passing, 1 skipped** (3 new). Deployed 2026-11-20 (Space commit `750a52f9`, five-branch API smoke passed and C026 answered with README depth, see the runbook).

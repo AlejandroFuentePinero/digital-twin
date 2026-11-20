@@ -115,14 +115,14 @@ Run these in one fresh browser session against the standalone Space URL. Capture
 | 1 | Open Space in a fresh tab. **Time the cold start** (wall-clock from URL submit to chat input visible). | < 30 s on free tier; record the actual number. |
 | 2 | Send `Why hire Alejandro?` (GENERIC). **Time turn-1 latency.** | Coherent narrative answer; no fabrication. Record p50 baseline. |
 | 3 | Send `Do you have AWS experience?` (GAP). | Gap-aware response: named platforms (GCP / on-prem) + active learning + acknowledgement. |
-| 4 | Send `How does the chunking work in the Expert Knowledge Worker project?` (TECHNICAL). | Tool fires (`fetch_project_readme` visible in Sentinel); answer carries depth from the README. |
+| 4 | Send `How does the chunking work in the Expert Knowledge Worker project?` (TECHNICAL). | Tool fires (`fetch_project_readme` visible in the turn's Sentinel detail); answer carries depth from the README. |
 | 5 | Send `Tell me about a time you failed.` (BEHAVIOURAL). | Graceful deflection or a `personal_stories` story; not a generic AI-sounding answer. |
 | 6 | Send `What's your salary expectation?` (LOGISTICAL). | Polite redirect to email contact. |
 | 7 | Look at the page after turn 3. | Contact form Accordion appears under the chat with the initial invitation copy ("Want a follow-up?"). |
 | 8 | Submit the contact form (test name + email + note). | Form swaps for the success message ("Thanks — Alejandro will be in touch."). **First production write to the contacts/ path** — see "Watch-item" below. |
 | 9 | Click **New conversation**. | Chat clears, contact form hides, contact-status hides, form input fields clear, fresh session_id. |
-| 10 | Run Sentinel locally with prod creds: `HF_TOKEN=… HF_DATASET_REPO=Alejandrofupi/digital-twin-logs uv run python src/sentinel.py` | All 9 turns from the smoke test appear in the Failures / Trends tabs; the contact submission joins to its session via `contact_conversion_rate`. |
-| 11 | Inspect the Sentinel "Log writer health" panel (Metrics tab). | `last_flush_time` is within the last few minutes of the smoke test; `last_error` is blank. |
+| 10 | Run Sentinel locally with prod creds: `HF_TOKEN=… HF_DATASET_REPO=Alejandrofupi/digital-twin-logs uv run python src/sentinel.py` | The summary's newest turn is the last smoke-test turn and its 7-day count includes all 9; the contact submission joins to its session via `contact_conversion_rate`. |
+| 11 | Read the Sentinel summary line. | The log writer's last flush is within minutes of the smoke test, with no error. |
 
 Steps to capture in the close-out write-up: cold-start latency (step 1), turn-1 latency (step 2), p50 across turns 2–6, p95 across turns 2–6.
 

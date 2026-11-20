@@ -1,0 +1,503 @@
+<!doctype html>
+<!-- Sentinel page template: src/sentinel.py fills in the page data and writes data/logs/sentinel.html -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono&family=Newsreader:opsz,wght@6..72,300..500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#FAF9F5; --surface:#FFFFFF; --surface-muted:#F5F4ED; --hover:rgba(115,114,108,.10); --sel:rgba(115,114,108,.13);
+  --text:#141413; --text-2:#3D3D3A; --text-muted:#5E5D59;
+  --border:rgba(31,30,29,.15); --border-strong:rgba(31,30,29,.30);
+  --accent:#D97757; --fail:#B5483B; --warn:#D97757; --ok:#788C5D; --neutral:#B0AEA5;
+  --fail-wash:rgba(181,72,59,.07); --btn-bg:#141413; --btn-fg:#FAF9F5;
+}
+:root {
+  --serif:'Newsreader', Georgia, 'Times New Roman', serif;
+  --sans:'Inter', system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --mono:'JetBrains Mono', 'SF Mono', Monaco, monospace;
+  --r-card:12px; --r-inner:8px; --hair:1px;
+}
+* { box-sizing:border-box; }
+html { background:var(--bg); }
+body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 var(--sans); font-variant-numeric:tabular-nums; -webkit-font-smoothing:antialiased; }
+.wrap { max-width:1320px; margin:0 auto; padding:28px 40px 120px; }
+@media (max-width:700px){ .wrap { padding:20px 16px 120px; } }
+
+/* header */
+.top { display:flex; align-items:center; gap:24px; flex-wrap:wrap; margin-bottom:36px; }
+.brand { display:flex; align-items:center; gap:10px; font:400 22px/1 var(--serif); }
+.brand svg { width:20px; height:20px; color:var(--accent); }
+nav.tabs { display:flex; gap:4px; flex:1; justify-content:center; flex-wrap:wrap; }
+nav.tabs a { color:var(--text-muted); text-decoration:none; font-size:14px; padding:10px 14px; border-radius:8px; cursor:pointer; }
+nav.tabs a:hover { color:var(--text); }
+nav.tabs a.on { color:var(--text); background:var(--hover); }
+.meta { font-size:13px; color:var(--text-muted); display:flex; align-items:center; gap:12px; }
+.btn2 { font:14px var(--sans); background:var(--surface); color:var(--text); border:var(--hair) solid var(--border-strong); border-radius:8px; padding:8px 14px; cursor:pointer; }
+.cmd { font:12px var(--mono); color:var(--text-muted); background:var(--surface-muted); border-radius:6px; padding:6px 10px; }
+.notes { margin:-12px 0 24px; padding:0; list-style:none; font-size:14px; }
+.notes li { margin:4px 0; color:var(--text-2); }
+.notes li.bad { color:var(--fail); }
+
+/* summary */
+h1.head { font:350 36px/1.2 var(--serif); margin:0 0 8px; letter-spacing:0; }
+.sub { color:var(--text-muted); margin:0 0 24px; font-size:15px; }
+.kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; margin-bottom:40px; }
+@media (max-width:980px){ .kpis { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+.kpi { text-align:left; font:inherit; color:inherit; background:var(--surface); border:var(--hair) solid var(--border); border-radius:var(--r-card); padding:18px 20px; cursor:pointer; }
+.kpi:hover { border-color:var(--border-strong); }
+.kpi .lab { font-size:14px; color:var(--text-2); }
+.kpi .big { font:400 36px/1.1 var(--serif); margin:10px 0 6px; }
+.kpi .big small { font:400 18px var(--serif); color:var(--text-muted); }
+.kpi .ctx { font-size:13px; color:var(--text-muted); }
+
+/* cards and layout */
+.card { background:var(--surface); border:var(--hair) solid var(--border); border-radius:var(--r-card); padding:22px 24px; min-width:0; }
+.card + .card, .stack > * + * { margin-top:16px; }
+.card > h2, .detail h2 { font:500 21px/1.3 var(--serif); margin:0 0 6px; }
+.card .subtitle { font-size:13px; color:var(--text-muted); margin:0 0 16px; max-width:80ch; }
+.split { display:grid; grid-template-columns:minmax(0,1fr) 440px; gap:16px; align-items:start; }
+.split > .detail { position:sticky; top:16px; max-height:calc(100vh - 32px); overflow:auto; }
+@media (max-width:1100px){ .split { grid-template-columns:minmax(0,1fr); } .split > .detail { position:static; max-height:none; } }
+.pair { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px; }
+@media (max-width:900px){ .pair { grid-template-columns:1fr; } }
+.lead { margin:0 0 20px; }
+.lead h2 { font:400 28px/1.2 var(--serif); margin:0 0 6px; }
+.lead p { margin:0; color:var(--text-muted); }
+
+/* tables */
+.tw { overflow-x:auto; }
+table.t { width:100%; border-collapse:collapse; font-size:14px; }
+.t th { text-align:left; font-size:12px; font-weight:500; color:var(--text-muted); padding:10px 12px; border-bottom:var(--hair) solid var(--border-strong); vertical-align:bottom; white-space:nowrap; }
+.t th small { display:block; font-weight:400; }
+.t td { padding:12px 12px; border-bottom:var(--hair) solid var(--border); color:var(--text-2); vertical-align:top; }
+.t tr:last-child td { border-bottom:0; }
+.t td:first-child, .t th:first-child { padding-left:0; }
+.t td:last-child, .t th:last-child { padding-right:0; }
+.t tbody tr.pick { cursor:pointer; }
+.t tbody tr.pick:hover td { background:var(--hover); }
+.t tbody tr.on td { background:var(--sel); }
+.t tbody tr.row-fail td { background:var(--fail-wash); }
+.t tbody tr.row-fail.on td { background:var(--sel); }
+.t .name { color:var(--text); font-weight:500; }
+.t .muted, .muted { color:var(--text-muted); }
+.t .num { text-align:right; white-space:nowrap; }
+.t th.num { text-align:right; }
+.t tr.sect td { padding:22px 0 8px; font:500 13px var(--sans); color:var(--text); border-bottom:var(--hair) solid var(--border-strong); background:none !important; cursor:default; }
+.t tr.sect:first-child td { padding-top:6px; }
+.t th.sort { cursor:pointer; user-select:none; }
+.t th.sort:hover { color:var(--text); }
+.t th .arr { font-size:10px; margin-left:4px; }
+.d { display:block; font-size:12px; color:var(--text-muted); margin-top:2px; }
+.dist { display:grid; grid-template-columns:auto auto; justify-content:end; column-gap:10px; font-size:12.5px; line-height:1.45; }
+.dist span:nth-child(odd) { color:var(--text-muted); text-align:right; }
+.w1 { width:1%; white-space:nowrap; }
+.t.tight { font-size:12.5px; }
+.t.tight td, .t.tight th { padding:9px 5px; }
+.clip { max-width:520px; }
+
+/* status */
+.status { display:inline-flex; align-items:center; gap:8px; white-space:nowrap; color:var(--text); }
+.dot { width:8px; height:8px; border-radius:50%; flex:none; display:inline-block; }
+.dot.fail { background:var(--fail); } .dot.warn { background:var(--warn); } .dot.ok { background:var(--ok); } .dot.neutral { background:var(--neutral); }
+.vdot { display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:7px; vertical-align:2px; }
+.tag { display:inline-block; font-size:11px; line-height:1; padding:4px 6px; border:var(--hair) solid var(--border-strong); border-radius:4px; color:var(--text-muted); vertical-align:1px; }
+.id { font:12px var(--mono); color:var(--text-muted); }
+
+/* tiles, filters */
+.tiles { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; }
+@media (max-width:900px){ .tiles { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+.tile { background:var(--surface-muted); border-radius:var(--r-inner); padding:12px 14px; }
+.tile .lab { font-size:13px; color:var(--text-2); }
+.tile .big { font:400 28px/1.15 var(--serif); margin:6px 0 2px; }
+.tile .ctx { font-size:12px; color:var(--text-muted); }
+.tilegroup { font-size:12px; color:var(--text-muted); margin:0 0 8px; }
+.filters { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:18px 0 6px; }
+.seg { display:inline-flex; background:var(--surface-muted); border-radius:8px; padding:3px; }
+.seg button { font:13px var(--sans); color:var(--text-muted); background:none; border:0; padding:6px 12px; border-radius:6px; cursor:pointer; }
+.seg button.on { background:var(--surface); color:var(--text); box-shadow:0 0 0 var(--hair) var(--border); }
+select, input[type=search] { font:13px var(--sans); color:var(--text); background:var(--surface); border:var(--hair) solid var(--border-strong); border-radius:8px; padding:7px 10px; }
+input[type=search] { min-width:220px; }
+.count { font-size:13px; color:var(--text-muted); margin:10px 0 0; }
+
+/* detail window */
+.detail .eyebrow { font-size:12px; color:var(--text-muted); margin-bottom:6px; }
+.detail .q { font:400 19px/1.35 var(--serif); margin:0 0 12px; }
+.detail h3 { font:500 13px var(--sans); margin:20px 0 8px; color:var(--text); }
+.detail p { margin:0 0 10px; color:var(--text-2); font-size:14px; }
+.kv { display:grid; grid-template-columns:auto 1fr; gap:4px 14px; font-size:13px; }
+.kv dt { color:var(--text-muted); } .kv dd { margin:0; color:var(--text-2); }
+.ans b { font-weight:500; color:var(--text); }
+.ans { background:var(--surface-muted); border-radius:var(--r-inner); padding:12px 14px; font-size:13.5px; line-height:1.55; color:var(--text-2); white-space:pre-wrap; margin:6px 0 14px; }
+.anshead { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:13px; }
+.anshead .muted { font-size:12px; }
+.mono { font:12px/1.6 var(--mono); color:var(--text-2); }
+ul.plain { list-style:none; margin:0; padding:0; }
+ul.plain li { padding:6px 0; border-bottom:var(--hair) solid var(--border); font-size:13px; color:var(--text-2); }
+ul.plain li:last-child { border-bottom:0; }
+ul.plain li.self { color:var(--text); font-weight:500; }
+.empty { color:var(--text-muted); font-size:14px; padding:8px 0; }
+.md h3 { font:500 15px var(--sans); margin:0 0 8px; }
+.md p, .md li { font-size:14px; color:var(--text-2); }
+
+[hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3"/><path d="M12 1.8v3.4M12 18.8v3.4M1.8 12h3.4M18.8 12h3.4"/></svg>Sentinel</div>
+    <nav class="tabs" id="nav"></nav>
+    <div class="meta"><span id="source"></span><span class="cmd" id="refresh" title="Run this to refresh the page"></span></div>
+  </header>
+
+  <section id="summary"></section>
+
+  <main>
+    <section data-tab="metrics" id="t-metrics"></section>
+    <section data-tab="canary" id="t-canary" hidden></section>
+    <section data-tab="failures" id="t-failures" hidden></section>
+    <section data-tab="coverage" id="t-coverage" hidden></section>
+  </main>
+</div>
+
+
+<script>
+const D = /*__DATA__*/null;
+const READ = new Date(D.source.read_at);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const WORDS = ['no','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve'];
+const word = n => n < WORDS.length ? WORDS[n] : String(n);
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+const plural = (n, a, b) => n === 1 ? a : (b || a + 's');
+function ago(ts) {
+  const m = (READ - new Date(ts)) / 60000;
+  if (m < 60) return Math.max(1, Math.round(m)) + ' min';
+  const h = m / 60; if (h < 24) return Math.round(h) + ' h';
+  const d = Math.floor(h / 24); return d === 1 ? '1 day' : d + ' days';
+}
+function ageDays(ts) { const d = Math.floor((READ - new Date(ts)) / 864e5); return d === 0 ? 'Today' : d === 1 ? '1 day' : d + ' days'; }
+const when = ts => new Date(ts).toLocaleString('en-AU', {day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Australia/Melbourne'});
+const ansMd = t => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '$1');
+const dot = (k, label) => `<span class="status"><span class="dot ${k}"></span>${esc(label)}</span>`;
+const SEV = {alert:['fail','Alert'], warning:['warn','Warning'], healthy:['ok','Healthy']};
+const MODE_DOT = {'refused':'fail', 'retry-exhausted':'fail', 'rejected-then-recovered':'warn', 'gap':'neutral', 'deflected':'neutral', 'answered':'ok'};
+const MODE_LABEL = {'refused':'Refused', 'retry-exhausted':'Retry exhausted', 'rejected-then-recovered':'Rejected then recovered', 'gap':'Gap', 'deflected':'Deflected', 'answered':'Answered'};
+const Q_DOT = {fail:['fail','Fail'], slow:['warn','Slow'], pass:['ok','Pass']};
+
+/* ---------- tabs ---------- */
+const params = new URLSearchParams(location.search);
+const TABS = [['metrics','Metrics'], ['canary','Canary'], ['failures','Failures'], ['coverage','Coverage']];
+function go(tab) {
+  document.querySelectorAll('main > section').forEach(s => s.hidden = s.dataset.tab !== tab);
+  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
+  const p = new URLSearchParams(location.search); p.set('tab', tab); history.replaceState(null, '', '?' + p);
+}
+document.getElementById('nav').innerHTML = TABS.map(([k, l]) => `<a data-tab="${k}">${l}</a>`).join('');
+document.getElementById('nav').onclick = e => { const a = e.target.closest('a'); if (a) go(a.dataset.tab); };
+
+/* ---------- source line + summary ---------- */
+const metricRows = D.metrics.flatMap(s => s.rows);
+const C = D.canary;
+document.getElementById('source').textContent = `${D.source.label}, ${D.source.records} turns${D.source.newest ? `, newest ${ago(D.source.newest)} ago` : ''}`;
+document.getElementById('refresh').textContent = D.commands.refresh;
+
+function renderSummary() {
+  const al = metricRows.filter(r => r.severity === 'alert'), wa = metricRows.filter(r => r.severity === 'warning'), ok = metricRows.filter(r => r.severity === 'healthy');
+  const qs = C ? C.questions : [];
+  const fails = qs.filter(q => q.status === 'fail'), slows = qs.filter(q => q.status === 'slow');
+  const wk = D.failures.filter(f => READ - new Date(f.ts) <= 7 * 864e5);
+  const wkFail = wk.filter(f => f.tier === 'failure'), wkOut = wk.filter(f => f.tier === 'outcome');
+  const canon = D.coverage.filter(e => !e.off), never = canon.filter(e => e.count === 0);
+
+  const p1 = fails.length ? `${cap(word(fails.length))} canary ${plural(fails.length, 'question')} ${fails.length === 1 ? 'fails' : 'fail'}` : 'The canary passes';
+  const p2 = al.length ? `${word(al.length)} ${plural(al.length, 'metric')} ${al.length === 1 ? 'is' : 'are'} on alert`
+           : wa.length ? `${word(wa.length)} ${plural(wa.length, 'metric')} to watch` : 'every metric is in its band';
+  const w = D.writer;
+  const writer = !w ? 'Writer state applies to the production log only.'
+    : w.last_error ? '' : `The log writer last flushed ${ago(w.last_flush_time)} ago with no error.`;
+  const S = D.source, notes = [];
+  if (w && w.last_error) notes.push(['bad', `The log writer reports an error: ${w.last_error}`]);
+  if (S.unreadable_lines.length) notes.push(['bad', `${S.unreadable_lines.length} log ${plural(S.unreadable_lines.length, 'line')} could not be read and ${S.unreadable_lines.length === 1 ? 'is' : 'are'} left out: ${S.unreadable_lines.join(', ')}`]);
+  if (S.duplicates) notes.push(['', `${S.duplicates} repeated ${plural(S.duplicates, 'record')} in the log${S.production ? ', counted once' : ', counted as logged'}.`]);
+  D.batch_messages.forEach(m => notes.push(['bad', m]));
+  const outBits = ['gap', 'deflected', 'rejected-then-recovered'].map(m => [m, wkOut.filter(f => f.mode === m).length]).filter(x => x[1]).map(([m, n]) => `${n} ${MODE_LABEL[m].toLowerCase()}`);
+
+  document.getElementById('summary').innerHTML = `
+    <h1 class="head">${p1} and ${p2}.</h1>
+    <p class="sub">${S.newest ? `Newest turn ${ago(S.newest)} ago` : 'No turns logged yet'}, ${D.window_totals[0]} ${plural(D.window_totals[0], 'turn')} in the last 7 days, read from ${S.files_read} ${plural(S.files_read, S.production ? 'day file' : 'file')} at ${when(S.read_at)}. ${writer}${D.flags.length ? ` Flags: ${D.flags.map(f => esc(f.headline)).join('; ')}.` : ' No flags raised.'}</p>
+    ${notes.length ? `<ul class="notes">${notes.map(([c, t]) => `<li class="${c}">${c === 'bad' ? '<span class="vdot dot fail"></span>' : ''}${esc(t)}</li>`).join('')}</ul>` : ''}
+    <div class="kpis">
+      <button class="kpi" data-go="canary">
+        <div class="lab">${dot(fails.length ? 'fail' : (slows.length || (C && !C.judged)) ? 'warn' : 'ok', 'Canary')}</div>
+        <div class="big">${C && C.judged ? `${qs.length - fails.length}<small> of ${qs.length}</small>` : '&ndash;'}</div>
+        <div class="ctx">${C && !C.judged ? 'latest run not judged yet' : C ? `questions pass${fails.length ? `, ${fails.map(q => q.id).join(', ')} ${plural(fails.length, 'fails', 'fail')}` : ''}${slows.length ? `, ${slows.length} slow` : ''}` : 'no canary run yet'}</div>
+      </button>
+      <button class="kpi" data-go="metrics">
+        <div class="lab">${dot(al.length ? 'fail' : wa.length ? 'warn' : 'ok', 'Metrics')}</div>
+        <div class="big">${al.length}<small> on alert</small></div>
+        <div class="ctx">${wa.length} warning, ${ok.length} healthy, of ${al.length + wa.length + ok.length} with a status</div>
+      </button>
+      <button class="kpi" data-go="failures">
+        <div class="lab">${dot(wkFail.length ? 'fail' : 'ok', 'Failures, last 7 days')}</div>
+        <div class="big">${wkFail.length}<small> refused or exhausted</small></div>
+        <div class="ctx">${outBits.length ? 'Also ' + outBits.join(', ') : 'No gaps or deflections'}</div>
+      </button>
+      <button class="kpi" data-go="coverage">
+        <div class="lab">${dot(never.length ? 'warn' : 'ok', 'Knowledge base')}</div>
+        <div class="big">${never.length}<small> of ${canon.length}</small></div>
+        <div class="ctx">sections never retrieved</div>
+      </button>
+    </div>`;
+  document.querySelectorAll('.kpi').forEach(b => b.onclick = () => go(b.dataset.go));
+}
+
+/* ---------- metrics ---------- */
+let mSel = null;
+function cellHTML(c) {
+  const v = c.status && c.status !== 'healthy' ? `<span class="vdot dot ${SEV[c.status][0]}"></span>` : '';
+  const delta = c.delta ? `<span class="d">${esc(c.delta)} vs prior</span>` : '';
+  if (c.kind === 'dist') return `<td class="num"><div class="dist">${c.items.map(([k, x]) => `<span>${esc(k)}</span><span>${esc(x)}</span>`).join('')}</div></td>`;
+  if (c.kind === 'latency') return `<td class="num"><span class="name">${esc(c.p95)}</span><span class="d">p50 ${esc(c.p50)}, ${esc(c.share)}</span></td>`;
+  return `<td class="num">${v}${esc(c.text)}${delta}</td>`;
+}
+function renderMetrics() {
+  const heads = D.window_labels.map((l, i) => `<th class="num">${l}<small>${D.window_totals[i]} turns</small></th>`).join('');
+  let body = '';
+  D.metrics.forEach((s, si) => {
+    body += `<tr class="sect"><td colspan="6">${esc(s.name)}${s.name === 'Latency' ? ' <span class="muted" style="font-weight:400">p95, with p50 and share of total p95 below</span>' : ''}</td></tr>`;
+    s.rows.forEach((r, ri) => {
+      const st = SEV[r.severity] ? dot(...SEV[r.severity]) : '';
+      body += `<tr class="pick" data-k="${si}.${ri}"><td class="w1">${st}</td><td class="name">${esc(cap(r.label))}</td>${r.cells.map(cellHTML).join('')}</tr>`;
+    });
+  });
+  document.getElementById('t-metrics').innerHTML = `
+    <div class="split">
+      <div class="card">
+        <h2>Health overview</h2>
+        <p class="subtitle">Each window rolls back from now. Refusals, retries, tool calls and total latency are judged on their value; the other rates on how far they moved between windows. Pick a row for what it measures and its split by branch.</p>
+        <div class="tw"><table class="t" id="mtable"><thead><tr><th>Status</th><th>Metric</th>${heads}</tr></thead><tbody>${body}</tbody></table></div>
+      </div>
+      <aside class="card detail" id="mdetail"></aside>
+    </div>`;
+  document.getElementById('mtable').onclick = e => { const tr = e.target.closest('tr.pick'); if (tr) pickMetric(tr.dataset.k); };
+  pickMetric('0.0');
+}
+function pickMetric(k) {
+  mSel = k;
+  document.querySelectorAll('#mtable tr.pick').forEach(tr => tr.classList.toggle('on', tr.dataset.k === k));
+  const [si, ri] = k.split('.').map(Number); const r = D.metrics[si].rows[ri];
+  const st = SEV[r.severity] ? dot(...SEV[r.severity]) : '<span class="muted">No status, for orientation</span>';
+  let branch = '';
+  if (r.by_branch) {
+    branch = `<h3>By branch</h3><p class="muted" style="font-size:13px">The same figure for each branch, with the turns behind it.</p>
+      <div class="tw"><table class="t tight"><thead><tr><th>Branch</th>${['7d','30d','90d','All'].map(x => `<th class="num">${x}</th>`).join('')}</tr></thead><tbody>
+      ${r.by_branch.map(b => `<tr><td class="name">${esc(b.branch)}</td>${b.values.map(v => `<td class="num">${esc(v.text)}<span class="d">${v.n} ${plural(v.n, 'turn')}</span></td>`).join('')}</tr>`).join('')}
+      </tbody></table></div>`;
+  }
+  document.getElementById('mdetail').innerHTML = `
+    <div class="eyebrow">${esc(D.metrics[si].name)}</div>
+    <h2>${esc(cap(r.label))}</h2>
+    <p>${st}</p>
+    <h3>What it measures</h3><p>${esc(r.about)}</p><h3>How it is marked</h3><p>${esc(r.rule)}</p>${branch}`;
+}
+
+/* ---------- canary ---------- */
+let cSel = null;
+function renderCanary() {
+  const el = document.getElementById('t-canary');
+  if (!C) { el.innerHTML = '<div class="card"><p class="empty">No canary runs yet.</p></div>'; return; }
+  const qs = C.questions, fails = qs.filter(q => q.status === 'fail'), slows = qs.filter(q => q.status === 'slow');
+  const base = C.runs.find(r => r.baseline);
+  const runRows = C.runs.map(r => {
+    const latest = r.id === C.latest;
+    const tags = (r.baseline ? ' <span class="tag">baseline</span>' : '') + (latest ? ' <span class="tag">latest</span>' : '');
+    const judged = r.q_n != null;
+    const partial = r.records < r.full;
+    const pass = judged ? `${r.q_pass} of ${r.q_n}` : `<span class="muted">${partial ? `Stopped at ${r.records} of ${r.full} answers` : 'Not judged'}</span>`;
+    return `<tr><td class="name" style="white-space:nowrap">${when(r.ts)}${tags}<span class="d id">${esc(r.sha)}</span></td>
+      <td class="num">${pass}</td><td class="num">${judged ? `${r.r_pass} of ${r.r_n}` : ''}</td>
+      <td class="num">${esc(r.median)}</td>${['total','classifier','retrieval','generation','guardrail'].map(s => `<td class="num">${esc(r.p95[s])}</td>`).join('')}</tr>`;
+  }).join('');
+  const cats = C.categories.map(c => `<tr><td class="name">${esc(c.category)}</td><td class="num">${c.n}</td><td class="num">${c.pass}</td><td class="num">${c.fail ? `<span class="vdot dot fail"></span>${c.fail}` : '0'}</td><td class="num">${c.slow ? `<span class="vdot dot warn"></span>${c.slow}` : '0'}</td></tr>`).join('');
+  const qrows = qs.map((q, i) => `<tr class="pick${q.status === 'fail' ? ' row-fail' : ''}" data-i="${i}"><td class="w1">${dot(...Q_DOT[q.status])}</td><td class="w1 id">${esc(q.id)}</td><td class="name">${esc(q.question)}</td><td class="${q.status === 'fail' ? '' : 'muted'}">${esc(q.judge)}</td><td class="num">${esc(q.base)} <span class="muted">&rarr;</span> ${esc(q.now)}</td></tr>`).join('');
+  const lead = !C.judged ? 'The latest run is not judged yet' : fails.length ? `${qs.length - fails.length} of ${qs.length} questions pass` : `All ${qs.length} questions pass`;
+  const leadSub = [fails.length ? `${fails.map(q => q.id).join(', ')} ${plural(fails.length, 'fails', 'fail')}` : '', slows.length ? `${slows.map(q => q.id).join(', ')} ${plural(slows.length, 'is', 'are')} slow (median over 1.5 times its baseline)` : ''].filter(Boolean).join('; ');
+  el.innerHTML = `
+    <div class="lead"><h2>${lead}</h2><p>${!C.judged ? `Judge it with <span class="cmd">uv run python src/canary_runner.py --judge-run ${esc(C.latest)}</span>. ` : ''}${leadSub ? esc(leadSub) + '. ' : ''}Latest run ${when(C.latest_ts)} on <span class="id">${esc(C.latest_sha)}</span>, ${ago(C.latest_ts)} ago, judged by gpt-6.2-sol. Baseline frozen ${base ? when(base.ts) : 'never'}.</p></div>
+    <div class="card">
+      <h2>Runs since the baseline</h2>
+      <p class="subtitle">The same 50 questions, three answers each. Median is the typical question's time; the p95 columns are the slowest twentieth of answers, total and by stage.</p>
+      <div class="tw"><table class="t"><thead><tr><th>Run</th><th class="num">Questions passing</th><th class="num">Answers passing</th><th class="num">Median per question</th><th class="num">p95 total</th><th class="num">Classifier</th><th class="num">Retrieval</th><th class="num">Generation</th><th class="num">Guardrail</th></tr></thead><tbody>${runRows}</tbody></table></div>
+    </div>
+    <div class="card">
+      <h2>By category, latest run</h2>
+      <div class="tw"><table class="t" style="max-width:760px"><thead><tr><th>Category</th><th class="num">Questions</th><th class="num">Pass</th><th class="num">Fail</th><th class="num">Slow</th></tr></thead><tbody>${cats}</tbody></table></div>
+    </div>
+    <div class="split" style="margin-top:16px">
+      <div class="stack">
+        <div class="card">
+          <h2>Questions, latest run</h2>
+          <p class="subtitle">A question fails when any of its three answers fails. Pick a row to read the answers.</p>
+          <div class="tw"><table class="t" id="ctable"><thead><tr><th>Status</th><th>ID</th><th>Question</th><th>Judge</th><th class="num">Median, baseline &rarr; now</th></tr></thead><tbody>${qrows}</tbody></table></div>
+        </div>
+        <div class="card">
+          <h2>Re-baseline</h2>
+          <p class="subtitle" style="margin-bottom:12px">Run the canary with this command to freeze its run as the new latency reference. It overwrites the frozen baseline.</p>
+          <span class="cmd">${esc(D.commands.rebaseline)}</span>
+        </div>
+      </div>
+      <aside class="card detail" id="cdetail"></aside>
+    </div>`;
+  document.getElementById('ctable').onclick = e => { const tr = e.target.closest('tr.pick'); if (tr) pickQuestion(+tr.dataset.i); };
+  pickQuestion(0);
+}
+function pickQuestion(i) {
+  cSel = i;
+  document.querySelectorAll('#ctable tr.pick').forEach(tr => tr.classList.toggle('on', +tr.dataset.i === i));
+  const q = C.questions[i];
+  document.getElementById('cdetail').innerHTML = `
+    <div class="eyebrow"><span class="id">${esc(q.id)}</span> &middot; ${esc(q.category)}</div>
+    <p class="q">${esc(q.question)}</p>
+    <p>${dot(...Q_DOT[q.status])} <span class="muted" style="margin-left:8px">median ${esc(q.base)} &rarr; ${esc(q.now)}</span></p>
+    <h3>Expected</h3><p>${esc(q.expected)}</p>
+    ${q.replicates.map(r => `<h3 class="anshead">${dot(r.passed ? 'ok' : 'fail', `Answer ${r.i + 1}, ${r.passed ? 'pass' : 'fail'}`)}<span class="muted">${esc(r.branch)}, ${esc(r.seconds)}</span></h3>
+      <p class="muted" style="font-size:13px">${esc(r.reason)}</p><div class="ans">${ansMd(r.answer)}</div>`).join('')}`;
+}
+
+/* ---------- failures ---------- */
+const F = {win:null, branch:'All', mode:'All', q:''};
+let fSel = null;
+const MODES = ['refused', 'retry-exhausted', 'rejected-then-recovered', 'gap', 'deflected'];
+function fBase() {
+  return D.failures.filter(f => (F.win == null || READ - new Date(f.ts) <= F.win * 864e5)
+    && (F.branch === 'All' || f.branch === F.branch)
+    && (!F.q || f.question.toLowerCase().includes(F.q.toLowerCase())));
+}
+function renderFailures() {
+  const branches = [...new Set(D.failures.map(f => f.branch))].sort();
+  document.getElementById('t-failures').innerHTML = `
+    <div class="card">
+      <h2>Failures and outcomes</h2>
+      <p class="subtitle">Failures are turns where the twin gave nothing usable. Outcomes are answers worth scanning for patterns, not defects. Gap and Deflected follow the branch that answered, not the answer itself, so some of them are real answers (#63).</p>
+      <div class="filters">
+        <div class="seg" id="fwin">${[[7,'7 days'],[30,'30 days'],[90,'90 days'],[null,'All time']].map(([d, l]) => `<button data-d="${d}">${l}</button>`).join('')}</div>
+        <select id="fbranch"><option value="All">All branches</option>${branches.map(b => `<option>${esc(b)}</option>`).join('')}</select>
+        <select id="fmode"><option value="All">All kinds</option>${MODES.map(m => `<option value="${m}">${MODE_LABEL[m]}</option>`).join('')}</select>
+        <input type="search" id="fq" placeholder="Search questions">
+      </div>
+      <div id="ftiles" style="margin-top:16px"></div>
+    </div>
+    <div class="split" style="margin-top:16px">
+      <div class="card"><div class="tw"><table class="t" id="ftable"></table></div><p class="count" id="fcount"></p></div>
+      <aside class="card detail" id="fdetail"></aside>
+    </div>
+    <div class="pair">
+      <div class="card"><h2>Gap clusters</h2><div id="clusters"></div></div>
+      <div class="card"><h2>Deflection summary</h2><div id="deflection" class="md"></div></div>
+    </div>`;
+  document.getElementById('fwin').onclick = e => { const b = e.target.closest('button'); if (!b) return; F.win = b.dataset.d === 'null' ? null : +b.dataset.d; drawFailures(); };
+  document.getElementById('fbranch').onchange = e => { F.branch = e.target.value; drawFailures(); };
+  document.getElementById('fmode').onchange = e => { F.mode = e.target.value; drawFailures(); };
+  document.getElementById('fq').oninput = e => { F.q = e.target.value; drawFailures(); };
+  document.getElementById('ftable').onclick = e => { const tr = e.target.closest('tr.pick'); if (tr) pickFailure(+tr.dataset.i); };
+  const cl = D.clusters;
+  const localNote = '<p class="empty">Built from the production log; run Sentinel without --local to see it.</p>';
+  document.getElementById('clusters').innerHTML = !D.source.production ? localNote : !cl ? '<p class="empty">No cached gap clusters yet.</p>'
+    : `<p class="subtitle">Generated ${when(cl.generated_at)}, over the last ${cl.period_days} days.</p>` + (cl.clusters.length
+      ? `<table class="t"><thead><tr><th>Cluster</th><th class="num">Turns</th></tr></thead><tbody>${cl.clusters.map(c => `<tr><td><span class="name">${esc(c.label)}</span>${(c.examples || []).map(x => `<span class="d">${esc(x)}</span>`).join('')}</td><td class="num">${c.count}</td></tr>`).join('')}</tbody></table>`
+      : `<p class="empty">No clusters in the last ${cl.period_days} days.</p>`);
+  document.getElementById('deflection').innerHTML = !D.source.production ? localNote : D.deflection ? md(D.deflection) : '<p class="empty">No cached deflection summary yet.</p>';
+  drawFailures();
+}
+function md(s) {
+  return s.split('\n').map(l => {
+    l = esc(l).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|\s)_(.+?)_(?=\s|$|[.,])/g, '$1$2');
+    if (/^#{1,3} /.test(l)) return `<h3>${l.replace(/^#+ /, '')}</h3>`;
+    if (/^[-*] /.test(l)) return `<li>${l.slice(2)}</li>`;
+    return l.trim() ? `<p>${l}</p>` : '';
+  }).join('');
+}
+function drawFailures() {
+  document.querySelectorAll('#fwin button').forEach(b => b.classList.toggle('on', String(F.win) === b.dataset.d));
+  const base = fBase();
+  const tot = F.win == null ? D.window_totals[3] : D.window_totals[{7:0, 30:1, 90:2}[F.win]];
+  const tile = m => { const n = base.filter(f => f.mode === m).length; return `<div class="tile"><div class="lab">${dot(MODE_DOT[m], MODE_LABEL[m])}</div><div class="big">${n}</div><div class="ctx">${F.branch === 'All' && !F.q ? `of ${tot} turns` : 'matching the filters'}</div></div>`; };
+  document.getElementById('ftiles').innerHTML = `<div class="tiles">${MODES.map(tile).join('')}</div>`;
+  const rows = base.filter(f => F.mode === 'All' || f.mode === F.mode);
+  window._frows = rows;
+  document.getElementById('ftable').innerHTML = `<thead><tr><th>Age</th><th>Kind</th><th>Branch</th><th>Question</th></tr></thead><tbody>${
+    rows.map((f, i) => `<tr class="pick${f.tier === 'failure' ? ' row-fail' : ''}" data-i="${i}"><td class="w1 muted">${ageDays(f.ts)}</td><td class="w1">${dot(MODE_DOT[f.mode], MODE_LABEL[f.mode])}</td><td class="w1">${esc(f.branch)}</td><td class="name">${esc(f.question)}</td></tr>`).join('')
+  }</tbody>`;
+  document.getElementById('fcount').textContent = `${rows.length} ${plural(rows.length, 'turn')} shown.`;
+  if (rows.length) pickFailure(0); else document.getElementById('fdetail').innerHTML = '<p class="empty">No turns match the filters.</p>';
+}
+function pickFailure(i) {
+  document.querySelectorAll('#ftable tr.pick').forEach(tr => tr.classList.toggle('on', +tr.dataset.i === i));
+  const f = window._frows[i]; const L = f.latency;
+  document.getElementById('fdetail').innerHTML = `
+    <div class="eyebrow">${when(f.ts)}, ${ageDays(f.ts).toLowerCase()}${/\d/.test(ageDays(f.ts)) ? ' ago' : ''}</div>
+    <p class="q">${esc(f.question)}</p>
+    <p>${dot(MODE_DOT[f.mode], MODE_LABEL[f.mode])}</p>
+    <dl class="kv"><dt>Branch</dt><dd>${esc(f.branch)}</dd><dt>Classifier labels</dt><dd>${esc(f.labels.join(', ') || 'none')}</dd><dt>Confidence</dt><dd>${f.confidence.toFixed(2)}</dd><dt>Logged as</dt><dd>${esc(f.event)}</dd></dl>
+    <h3>Attempts</h3>
+    ${f.attempts.map((a, j) => `<div class="anshead">${dot(a.ok ? 'ok' : 'fail', `Attempt ${j + 1}, ${a.ok ? 'accepted' : 'rejected'}`)}</div>${a.feedback ? `<p class="muted" style="font-size:13px;margin-top:4px">${esc(a.feedback)}</p>` : ''}<div class="ans">${ansMd(a.answer)}</div>`).join('')}
+    <h3>Retrieved sections</h3>${f.chunks.length ? `<ul class="plain">${f.chunks.map(c => `<li class="mono">${esc(c)}</li>`).join('')}</ul>` : '<p class="empty">None</p>'}
+    <h3>Tool calls</h3>${f.tools.length ? `<ul class="plain">${f.tools.map(c => `<li class="mono">${esc(c)}</li>`).join('')}</ul>` : '<p class="empty">None</p>'}
+    <h3>Latency</h3><p class="mono">total ${(L.total / 1000).toFixed(1)} s: classifier ${(L.classifier / 1000).toFixed(1)}, retrieval ${(L.retrieval / 1000).toFixed(1)}, generation ${(L.generation / 1000).toFixed(1)}, guardrail ${(L.guardrail / 1000).toFixed(1)}</p>
+    <h3>Session, ${f.session.length} ${plural(f.session.length, 'turn')}</h3>
+    <ul class="plain">${f.session.map(t => `<li class="${t.self ? 'self' : ''}">${dot(MODE_DOT[t.mode] || 'neutral', `Turn ${t.turn}`)} <span style="margin-left:6px">${esc(t.question)}</span></li>`).join('')}</ul>`;
+}
+
+/* ---------- coverage ---------- */
+const K = {show:'all', file:'All', q:'', sort:'count', dir:1};
+function kStatus(e) { return e.off ? ['neutral', 'No longer in the KB'] : e.count === 0 ? ['warn', 'Never retrieved'] : ['ok', 'Retrieved']; }
+function renderCoverage() {
+  const canon = D.coverage.filter(e => !e.off), never = canon.filter(e => e.count === 0), off = D.coverage.filter(e => e.off);
+  const total = canon.reduce((a, e) => a + e.count, 0);
+  const files = [...new Set(D.coverage.map(e => e.file))].sort();
+  document.getElementById('t-coverage').innerHTML = `
+    <div class="card">
+      <h2>Knowledge base coverage</h2>
+      <p class="subtitle">How often retrieval returned each section, across all ${D.source.records} ${D.source.production ? 'production' : 'local'} turns (${total} retrievals). Sort by any column.</p>
+      <div class="tiles" style="grid-template-columns:repeat(3,minmax(0,1fr));max-width:720px">
+        <div class="tile"><div class="lab">${dot('warn', 'Never retrieved')}</div><div class="big">${never.length}</div><div class="ctx">of ${canon.length} sections</div></div>
+        <div class="tile"><div class="lab">${dot('ok', 'Retrieved')}</div><div class="big">${canon.length - never.length}</div><div class="ctx">at least once</div></div>
+        <div class="tile"><div class="lab">${dot('neutral', 'No longer in the KB')}</div><div class="big">${off.length}</div><div class="ctx">retrieved, since removed</div></div>
+      </div>
+      <div class="filters">
+        <div class="seg" id="kshow">${[['all','All'],['never','Never retrieved'],['ret','Retrieved'],['off','No longer in the KB']].map(([k, l]) => `<button data-k="${k}">${l}</button>`).join('')}</div>
+        <select id="kfile"><option value="All">All files</option>${files.map(f => `<option>${esc(f)}</option>`).join('')}</select>
+        <input type="search" id="kq" placeholder="Search sections">
+      </div>
+      <div class="tw"><table class="t" id="ktable"></table></div><p class="count" id="kcount"></p>
+    </div>`;
+  document.getElementById('kshow').onclick = e => { const b = e.target.closest('button'); if (b) { K.show = b.dataset.k; drawCoverage(); } };
+  document.getElementById('kfile').onchange = e => { K.file = e.target.value; drawCoverage(); };
+  document.getElementById('kq').oninput = e => { K.q = e.target.value; drawCoverage(); };
+  document.getElementById('ktable').onclick = e => { const th = e.target.closest('th.sort'); if (!th) return; const s = th.dataset.s; K.dir = K.sort === s ? -K.dir : (s === 'count' ? 1 : 1); K.sort = s; drawCoverage(); };
+  drawCoverage();
+}
+function drawCoverage() {
+  document.querySelectorAll('#kshow button').forEach(b => b.classList.toggle('on', b.dataset.k === K.show));
+  let rows = D.coverage.filter(e => (K.show === 'all' || (K.show === 'never' && !e.off && e.count === 0) || (K.show === 'ret' && !e.off && e.count > 0) || (K.show === 'off' && e.off))
+    && (K.file === 'All' || e.file === K.file) && (!K.q || e.section.toLowerCase().includes(K.q.toLowerCase())));
+  const key = { count: e => e.count, section: e => e.section.toLowerCase(), file: e => e.file + '\u0000' + e.section.toLowerCase(), status: e => (e.off ? 2 : e.count === 0 ? 0 : 1) };
+  const f = key[K.sort];
+  rows = rows.slice().sort((a, b) => { const x = f(a), y = f(b); return (x < y ? -1 : x > y ? 1 : a.file.localeCompare(b.file) || a.section.localeCompare(b.section)) * K.dir; });
+  const th = (s, label, cls = '') => `<th class="sort ${cls}" data-s="${s}">${label}${K.sort === s ? `<span class="arr">${K.dir > 0 ? '&#9650;' : '&#9660;'}</span>` : ''}</th>`;
+  document.getElementById('ktable').innerHTML = `<thead><tr>${th('status', 'Status')}${th('section', 'Section')}${th('file', 'File')}${th('count', 'Retrievals', 'num')}</tr></thead><tbody>${
+    rows.map(e => `<tr><td class="w1">${dot(...kStatus(e))}</td><td class="name">${esc(e.section)}</td><td class="muted id">${esc(e.file)}</td><td class="num">${e.count}</td></tr>`).join('')}</tbody>`;
+  document.getElementById('kcount').textContent = `${rows.length} ${plural(rows.length, 'section')} shown.`;
+}
+
+/* ---------- boot ---------- */
+renderSummary(); renderMetrics(); renderCanary(); renderFailures(); renderCoverage();
+go(TABS.some(t => t[0] === params.get('tab')) ? params.get('tab') : 'metrics');
+</script>
+</body>
+</html>

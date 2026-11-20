@@ -473,3 +473,30 @@ def test_install_sigterm_handler_no_writer_with_stop_returns_false(monkeypatch):
 
     installed = install_sigterm_handler(local_log, local_contact)
     assert installed is False
+
+
+# ---- Issue #61: a failed contacts read is loud, like the log read ----------
+
+
+def test_hf_contact_reader_raises_when_the_listing_fails():
+    """An empty contact list from a failed listing would read as 0%
+    conversion on Sentinel; the read fails instead."""
+    from hf_contact_log import HFContactReader
+    from log_reader import LogReadError
+
+    api = _hf_api_for_reader({})
+    api.list_repo_files = MagicMock(side_effect=OSError("network down"))
+
+    with pytest.raises(LogReadError, match="network down"):
+        HFContactReader(repo_id="ignored/test", hf_api=api).read_all()
+
+
+def test_hf_contact_reader_raises_when_a_contact_file_fails_to_download():
+    from hf_contact_log import HFContactReader
+    from log_reader import LogReadError
+
+    api = _hf_api_for_reader({"contacts/2026-11-20.jsonl": []})
+    api.hf_hub_download = MagicMock(side_effect=OSError("502 Bad Gateway"))
+
+    with pytest.raises(LogReadError, match=r"contacts/2026-11-20.*502"):
+        HFContactReader(repo_id="ignored/test", hf_api=api).read_all()
