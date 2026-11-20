@@ -21,10 +21,12 @@ from pydantic import BaseModel, Field
 DEFAULT_LOG_PATH = Path(__file__).parent.parent / "data" / "logs" / "interactions.jsonl"
 
 # Single source of truth for the on-disk schema. Bumped to v4 in #42 when the
-# producer started emitting all four EventType values via event_classifier.
+# producer started emitting all four EventType values via event_classifier,
+# and to v5 in #64 when a turn that fails before the retry loop started
+# logging a record with `failed_stage`, `error_type` and `error_message`.
 # Both the pipeline writer and LogReader's smart-normalize key off this — a
 # future bump is a one-line change here.
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 
 EventType = Literal["answered", "gap", "deflected", "refused"]
 
@@ -67,6 +69,12 @@ class InteractionRecord(BaseModel):
     is_canary: bool = False
     replicate_index: int | None = None
     run_id: str | None = None
+    # Pre-loop failure fields (issue #64, schema v5). Set only when the
+    # classifier, retrieval or composer raised before the retry loop; such a
+    # turn is logged as `refused` with no attempts. None on every other turn.
+    failed_stage: Literal["classifier", "retrieval", "composer"] | None = None
+    error_type: str | None = None
+    error_message: str | None = None
 
 
 class LogWriter:

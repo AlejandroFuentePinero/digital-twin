@@ -15,7 +15,7 @@ This is the single source of truth for *what each metric means* and *what to do 
 1. **Summary**, above every tab: a one-sentence verdict, then the newest turn's age, the turns in the last 7 days, the day files read and when, the log writer's last flush, and any flags. Four cards follow: canary, metrics on alert, failures in the last 7 days, sections never retrieved. Each opens its tab. The metrics card counts the rows the Metrics table marks, over every window.
 2. **Metrics:** one table, status first, a column per window (7 days, 30 days, 90 days, all time, each with its turn count). Picking a row opens its detail window: what it measures, how it is marked, and the same figure for each branch with the turns behind each value (this replaces the Trends tab).
 3. **Canary:** the verdict, every run since the baseline (questions and answers passing, median per question, p95 total and per stage), the latest run by category, then the questions table with failing rows shaded; picking a question shows its three answers.
-4. **Failures:** counts per kind for the chosen window, filters (window, branch, kind, search), every failing turn worst kind first then newest (no cap), and a detail window with the attempts, guardrail feedback, retrieved sections, tool calls, latency and the whole session. Gap clusters and the deflection summary follow.
+4. **Failures:** counts per kind for the chosen window, filters (window, branch, kind, search), every failing turn worst kind first then newest (no cap), and a detail window with the attempts, guardrail feedback, retrieved sections, tool calls, latency and the whole session. A turn that failed before the retry loop (#64) shows as refused with no attempts and a "Failed before the attempts" line naming the stage and the error. Gap clusters and the deflection summary follow.
 5. **Coverage:** every knowledge-base section with its retrievals, sortable and filterable.
 
 The page model (`sentinel.build_page`) holds every figure as plain data; `scripts/sentinel_recompute.py` reproduces them from the raw day files without importing `src/`.
@@ -78,7 +78,7 @@ When a Tier A metric goes red OR a Tier B metric fires a shift alert, the matchi
 
 - **Definition:** `count(event_type == "refused") / total`.
 - **What it measures:** the share of turns that bottomed out into the canned refusal ("Please reach out to Alejandro directly...").
-- **What it proxies:** guardrail-loop exhaustion. The system tried `MAX_ATTEMPTS=3` times and the guardrail rejected every attempt.
+- **What it proxies:** guardrail-loop exhaustion (the system tried `MAX_ATTEMPTS=3` times and the guardrail rejected every attempt), or since #64 a pre-loop failure: the classifier, retrieval or composer raised before the first attempt. The record's `failed_stage` tells them apart; a run of pre-loop failures is an outage (LIMITATIONS::O9), not a guardrail shift.
 - **Proxy caveats:** a refusal can be the right outcome (genuine adversarial probe). Don't treat all refusals as failures — open Failure Feed and read the question. But: refusal *rate* climbing across many turns IS a system event worth alerting on, even if individual refusals are correct.
 - **Thresholds:** healthy ≤ 1%, warning ≤ 3%, alert above. *Source:* live baseline (1.2% → just above healthy).
 - **Confidence:** moderate; this is an explicit signal, not a proxy.
@@ -96,7 +96,7 @@ When a Tier A metric goes red OR a Tier B metric fires a shift alert, the matchi
 - **Definition:** `count(records where len(attempts) >= MAX_ATTEMPTS) / total`. (`MAX_ATTEMPTS = 3`.)
 - **What it measures:** the share of turns that consumed all 3 generation attempts. Includes both refused outcomes AND eventually-accepted-on-attempt-3 outcomes.
 - **What it proxies:** guardrail-loop bottom-out. Distinct from `refusal_rate` because some "exhausted" turns squeak through on attempt 3.
-- **Proxy caveats:** `retry_exhausted_rate >= refusal_rate` always; the gap between them is the count of "barely-accepted" turns, themselves worth investigating.
+- **Proxy caveats:** `retry_exhausted_rate >= refusal_rate` except for pre-loop failures (#64), which are refused with no attempts; otherwise the gap between them is the count of "barely-accepted" turns, themselves worth investigating.
 - **Thresholds:** healthy ≤ 3%, warning ≤ 5%, alert above. *Source:* live baseline (2.4%).
 - **Confidence:** moderate; explicit signal.
 
@@ -495,5 +495,7 @@ The dashboard tells you "something looks off." The other affordances tell you "w
 All thresholds live in `src/metric_status.py::THRESHOLDS`. Tune by editing the dict — Sentinel re-imports on next launch. Any change should be recorded in `docs/DECISIONS.md` with a rationale (which baseline informed the new value).
 
 ### Schema versioning
+
+Schema v5 (#64) adds `failed_stage`, `error_type` and `error_message`, set only on a pre-loop failure; older records read with all three `None`. A pre-loop failure also moves a few other figures, all at the size of the failures themselves: a classifier failure is logged with branch `UNROUTED` and confidence 0.0, so it shows as an UNROUTED share of the branch distribution and lowers the mean confidence; its zero attempts land in the one-attempt bucket of the attempts distribution; and its 0 ms generation and guardrail times enter those latency percentiles.
 
 Records pre-#37 carry `schema_version="1"` (no `git_sha` / `model_id` / `prompt_hash` / `temperature`). `LocalReader` parses them with `None` defaults — these records still aggregate correctly into Sentinel metrics, they just can't anchor a deployment marker on the Trend Explorer (#30) or be replayed (#38) under their original conditions.

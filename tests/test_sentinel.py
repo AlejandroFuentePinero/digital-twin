@@ -579,6 +579,27 @@ def test_a_failure_row_carries_its_attempts_sections_tools_latency_and_session(t
     assert [(t["turn"], t["self"]) for t in row["session"]] == [(0, False), (1, True)]
 
 
+def test_a_turn_that_failed_before_the_retry_loop_is_a_refusal_with_its_stage_and_error(tmp_path):
+    """An answered turn plus one whose classifier raised (#64) give a 50% 7-day refusal rate, the failed turn heading the Failures tab with its stage and error."""
+    failed = InteractionRecord.model_validate({
+        "schema_version": "5", "timestamp": (NOW - timedelta(days=1)).isoformat(),
+        "session_id": "f", "turn_index": 0, "question": "Where does he live?",
+        "event_type": "refused", "branch": "UNROUTED", "classifier_labels": [],
+        "classification_confidence": 0.0, "attempts": [], "retrieved_chunks": [],
+        "latency_ms": {"classifier": 1200, "retrieval": 0, "generation": 0, "guardrail": 0, "total": 1201},
+        "knew_answer": False, "failed_stage": "classifier", "error_type": "NotFoundError",
+        "error_message": "model_not_found",
+    })
+    page = _page(_Reader([_live(days_ago=2, session_id="a"), failed]), tmp_path)
+
+    assert _row(page, "Refusal rate")["cells"][0]["text"] == "50.0%"
+    row = page["failures"][0]
+    assert row["question"] == "Where does he live?"
+    assert row["mode"] == "refused" and row["tier"] == "failure"
+    assert row["error"] == "classifier: NotFoundError: model_not_found"
+    assert row["attempts"] == []
+
+
 def _canary_rec(question: str, run_id: str, rep: int, *, total_ms: int = 1000,
                 days_ago: int = 0, answer: str = "ok"):
     return InteractionRecord.model_validate({

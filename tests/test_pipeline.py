@@ -145,9 +145,8 @@ def _build_pipeline(
     )
 
 
-def test_pipeline_writes_schema_version_4(real_composer, fake_chunks, tmp_path):
-    """The producer-fix slice (#42) bumps the on-disk schema to v4. Every new
-    record carries the bumped version regardless of branch / outcome."""
+def test_pipeline_writes_schema_version_5(real_composer, fake_chunks, tmp_path):
+    """Every new record carries the current schema version (v5 since #64) regardless of branch / outcome."""
     log_path = tmp_path / "interactions.jsonl"
     classifier = FakeClassifier(ClassifierResult(labels=["GENERIC"], confidence=1.0))
     generator = FakeGenerator(answers=["healthy answer"])
@@ -158,7 +157,7 @@ def test_pipeline_writes_schema_version_4(real_composer, fake_chunks, tmp_path):
         pipeline.run("q?", history=[], session_id="s1", turn_index=0)
 
     record = LogReader(log_path).read_all()[0]
-    assert record["schema_version"] == "4"
+    assert record["schema_version"] == "5"
 
 
 def test_pipeline_emits_event_type_gap_when_classifier_routes_to_gap_branch(
@@ -664,7 +663,7 @@ def test_pipeline_populates_reproducibility_fields_in_log_record(real_composer, 
         pipeline.run("q", history=[], session_id="s1", turn_index=0)
 
     record = LogReader(log_path).read_all()[0]
-    assert record["schema_version"] == "4"
+    assert record["schema_version"] == "5"
     # git_sha cached at import — must be a 40-char hex string (or 7+ short SHA, depending on rev-parse)
     assert isinstance(record["git_sha"], str) and len(record["git_sha"]) >= 7
     assert record["model_id"] == generator.MODEL
@@ -725,7 +724,7 @@ def test_log_record_carries_full_schema_with_branch_classification_chunks_and_la
 
     record = LogReader(log_path).read_all()[0]
     # Identity / addressing fields
-    assert record["schema_version"] == "4"
+    assert record["schema_version"] == "5"
     assert record["session_id"] == "sess-xyz"
     assert record["turn_index"] == 4
     assert record["question"] == "the question"
@@ -739,11 +738,86 @@ def test_log_record_carries_full_schema_with_branch_classification_chunks_and_la
         {"source_file": "identity.md", "section_heading": "identity"},
         {"source_file": "experience.md", "section_heading": "Bolivia"},
     ]
-    # Tool calls + contact flags default-empty
+    # Tool calls + contact flags default-empty; no pre-loop failure fields
     assert record["tool_calls"] == []
+    assert record["failed_stage"] is None and record["error_type"] is None
     assert record["contact_offered"] is False
     assert record["contact_provided"] is False
     # Latency block carries all five keys
     assert set(record["latency_ms"].keys()) == {"classifier", "retrieval", "generation", "guardrail", "total"}
     for k, v in record["latency_ms"].items():
         assert isinstance(v, int) and v >= 0, f"latency_ms[{k}] should be a non-negative int"
+
+
+class RaisingClassifier:
+    def classify(self, question, history):
+        raise RuntimeError("classifier down")
+
+
+def test_classifier_failure_writes_one_refused_record_and_reraises(real_composer, tmp_path):
+    """A classifier error before the retry loop logs one refused record naming the stage and error, then reaches the caller."""
+    log_path = tmp_path / "interactions.jsonl"
+    pipeline = _build_pipeline(
+        real_composer, RaisingClassifier(), FakeGenerator(answers=[]), FakeGuardrail(evaluations=[]), log_path
+    )
+    with pytest.raises(RuntimeError, match="classifier down"):
+        pipeline.run("Where does he live?", history=[], session_id="s1", turn_index=2)
+
+    records = LogReader(log_path).read_all()
+    assert len(records) == 1
+    record = records[0]
+    assert record["question"] == "Where does he live?"
+    assert record["session_id"] == "s1" and record["turn_index"] == 2
+    assert record["event_type"] == "refused"
+    assert record["failed_stage"] == "classifier"
+    assert record["error_type"] == "RuntimeError"
+    assert record["error_message"] == "classifier down"
+    assert record["attempts"] == []
+    assert record["retrieved_chunks"] == []
+    assert record["latency_ms"]["retrieval"] == 0
+    assert record["latency_ms"]["generation"] == 0
+
+
+def test_retrieval_failure_writes_one_refused_record_with_the_routed_branch(real_composer, tmp_path):
+    """A retrieval error logs one refused record with the branch and labels the classifier already chose."""
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["TECHNICAL"], confidence=0.9))
+    pipeline = _build_pipeline(
+        real_composer, classifier, FakeGenerator(answers=[]), FakeGuardrail(evaluations=[]), log_path
+    )
+    with patch("pipeline.fetch_context", side_effect=TimeoutError("chroma timed out")):
+        with pytest.raises(TimeoutError):
+            pipeline.run("q", history=[], session_id="s1", turn_index=0)
+
+    [record] = LogReader(log_path).read_all()
+    assert record["event_type"] == "refused"
+    assert record["failed_stage"] == "retrieval"
+    assert record["error_type"] == "TimeoutError"
+    assert record["error_message"] == "chroma timed out"
+    assert record["branch"] == "TECHNICAL"
+    assert record["classifier_labels"] == ["TECHNICAL"]
+    assert record["classification_confidence"] == 0.9
+
+
+def test_composer_failure_writes_one_refused_record_with_the_retrieved_sections(fake_chunks, tmp_path):
+    """A composer error logs one refused record that keeps the sections retrieval already returned."""
+
+    profile = tmp_path / "profile.md"
+    profile.write_text("## identity\nIDENTITY body.\n")  # GENERIC needs sections this profile lacks
+    composer = PromptComposer(ProfileLoader(profile), REGISTRY)
+    log_path = tmp_path / "interactions.jsonl"
+    classifier = FakeClassifier(ClassifierResult(labels=["GENERIC"], confidence=1.0))
+    pipeline = _build_pipeline(
+        composer, classifier, FakeGenerator(answers=[]), FakeGuardrail(evaluations=[]), log_path
+    )
+    with patch("pipeline.fetch_context", return_value=fake_chunks):
+        with pytest.raises(KeyError):
+            pipeline.run("q", history=[], session_id="s1", turn_index=0)
+
+    [record] = LogReader(log_path).read_all()
+    assert record["failed_stage"] == "composer"
+    assert record["error_type"] == "KeyError"
+    assert record["retrieved_chunks"] == [
+        {"source_file": "identity.md", "section_heading": "identity"},
+        {"source_file": "experience.md", "section_heading": "Bolivia"},
+    ]

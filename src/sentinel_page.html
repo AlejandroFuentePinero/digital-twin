@@ -443,9 +443,9 @@ function pickFailure(i) {
     <div class="eyebrow">${when(f.ts)}, ${ageDays(f.ts).toLowerCase()}${/\d/.test(ageDays(f.ts)) ? ' ago' : ''}</div>
     <p class="q">${esc(f.question)}</p>
     <p>${dot(MODE_DOT[f.mode], MODE_LABEL[f.mode])}</p>
-    <dl class="kv"><dt>Branch</dt><dd>${esc(f.branch)}</dd><dt>Classifier labels</dt><dd>${esc(f.labels.join(', ') || 'none')}</dd><dt>Confidence</dt><dd>${f.confidence.toFixed(2)}</dd><dt>Logged as</dt><dd>${esc(f.event)}</dd></dl>
+    <dl class="kv"><dt>Branch</dt><dd>${esc(f.branch)}</dd><dt>Classifier labels</dt><dd>${esc(f.labels.join(', ') || 'none')}</dd><dt>Confidence</dt><dd>${f.confidence.toFixed(2)}</dd><dt>Logged as</dt><dd>${esc(f.event)}</dd>${f.error ? `<dt>Failed before the attempts</dt><dd class="mono">${esc(f.error)}</dd>` : ''}</dl>
     <h3>Attempts</h3>
-    ${f.attempts.map((a, j) => `<div class="anshead">${dot(a.ok ? 'ok' : 'fail', `Attempt ${j + 1}, ${a.ok ? 'accepted' : 'rejected'}`)}</div>${a.feedback ? `<p class="muted" style="font-size:13px;margin-top:4px">${esc(a.feedback)}</p>` : ''}<div class="ans">${ansMd(a.answer)}</div>`).join('')}
+    ${f.attempts.length ? f.attempts.map((a, j) => `<div class="anshead">${dot(a.ok ? 'ok' : 'fail', `Attempt ${j + 1}, ${a.ok ? 'accepted' : 'rejected'}`)}</div>${a.feedback ? `<p class="muted" style="font-size:13px;margin-top:4px">${esc(a.feedback)}</p>` : ''}<div class="ans">${ansMd(a.answer)}</div>`).join('') : '<p class="empty">None</p>'}
     <h3>Retrieved sections</h3>${f.chunks.length ? `<ul class="plain">${f.chunks.map(c => `<li class="mono">${esc(c)}</li>`).join('')}</ul>` : '<p class="empty">None</p>'}
     <h3>Tool calls</h3>${f.tools.length ? `<ul class="plain">${f.tools.map(c => `<li class="mono">${esc(c)}</li>`).join('')}</ul>` : '<p class="empty">None</p>'}
     <h3>Latency</h3><p class="mono">total ${(L.total / 1000).toFixed(1)} s: classifier ${(L.classifier / 1000).toFixed(1)}, retrieval ${(L.retrieval / 1000).toFixed(1)}, generation ${(L.generation / 1000).toFixed(1)}, guardrail ${(L.guardrail / 1000).toFixed(1)}</p>

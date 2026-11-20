@@ -15,7 +15,7 @@ import logging
 
 import pytest
 
-from interaction_log import SCHEMA_VERSION
+from interaction_log import SCHEMA_VERSION, InteractionRecord
 from schema_migrations import (
     MissingRequiredFieldError,
     SchemaVersionHandler,
@@ -100,15 +100,30 @@ def test_v2_record_migrates_with_canary_fields_filled():
     assert out["model_id"] == "gpt-4.1"
 
 
-def test_v3_full_record_is_idempotent():
-    """A record already at v3 with every optional populated must round-trip
-    unchanged — no spurious overwrites."""
-    v3 = _v3_full_record()
-    snapshot = dict(v3)
+def test_current_full_record_is_idempotent():
+    """A record at the current version with every optional populated round-trips unchanged."""
+    full = _v3_full_record() | {
+        "schema_version": "5", "failed_stage": "retrieval",
+        "error_type": "TimeoutError", "error_message": "timed out",
+    }
+    snapshot = dict(full)
 
-    out = SchemaVersionHandler(v3)
+    out = SchemaVersionHandler(full)
 
-    assert out == snapshot, "fully-populated v3 record must not be mutated"
+    assert out == snapshot, "fully-populated current record must not be mutated"
+
+
+def test_v4_record_migrates_with_pre_loop_failure_fields_none_and_reads_unchanged():
+    """A v4 record (pre-#64) gains None failure fields and every field it carried reads back unchanged."""
+    v4 = _v3_full_record() | {"schema_version": "4"}
+
+    out = SchemaVersionHandler(v4)
+    record = InteractionRecord.model_validate(out)
+
+    assert out["failed_stage"] is None
+    assert out["error_type"] is None
+    assert out["error_message"] is None
+    assert record.model_dump(include=set(v4)) == v4
 
 
 def test_missing_required_field_raises_with_field_session_and_turn():
@@ -142,7 +157,7 @@ def test_future_schema_version_passes_through_unchanged_with_warning(caplog):
     must not crash the dashboard. The handler logs a warning and returns
     the record byte-identical so pydantic decides whether the extra/missing
     fields validate."""
-    future = _v3_full_record() | {"schema_version": "5", "future_field": "ignored"}
+    future = _v3_full_record() | {"schema_version": "6", "future_field": "ignored"}
     snapshot = dict(future)
 
     with caplog.at_level(logging.WARNING, logger="schema_migrations"):
@@ -150,7 +165,7 @@ def test_future_schema_version_passes_through_unchanged_with_warning(caplog):
 
     assert out == snapshot, "future-version records pass through unchanged"
     assert any(
-        "schema_version" in rec.message and "5" in rec.message
+        "schema_version" in rec.message and "6" in rec.message
         for rec in caplog.records
     ), "a warning must name the unrecognised schema_version"
 

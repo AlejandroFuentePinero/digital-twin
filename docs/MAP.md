@@ -50,10 +50,18 @@ flowchart TD
   TOOL -.->|"tool-fetched content<br/>recomposed into judge prompt<br/>so guardrail sees what model grounded in<br/>(LIMITATIONS::R1)"| JUDGE
   GEN --> JUDGE["Guardrail — Claude Sonnet 4.6<br/>same composed prompt + answer<br/>distinct model family"]:::llm
   JUDGE --> ACCEPT{"is_acceptable?"}:::decision
-  ACCEPT -->|yes| LOG["InteractionLog append (JSONL, schema v4)<br/>branch, classifier_labels, classification_confidence,<br/>event_type, attempts, retrieved_chunks,<br/>tool_calls (with attempt_index), latency_ms, knew_answer,<br/>contact_offered, contact_provided,<br/>git_sha, model_id, temperature, prompt_hash,<br/>is_canary, run_id, replicate_index"]:::sideEffect
+  ACCEPT -->|yes| LOG["InteractionLog append (JSONL, schema v5)<br/>branch, classifier_labels, classification_confidence,<br/>event_type, attempts, retrieved_chunks,<br/>tool_calls (with attempt_index), latency_ms, knew_answer,<br/>contact_offered, contact_provided,<br/>git_sha, model_id, temperature, prompt_hash,<br/>is_canary, run_id, replicate_index,<br/>failed_stage, error_type, error_message"]:::sideEffect
   ACCEPT -->|"no — rejection feedback<br/>wraps into next system prompt"| RETRY{"attempts &lt; MAX_ATTEMPTS = 3?"}:::decision
   RETRY -->|yes| GEN
   RETRY -->|no| REFUSE["CANNED_REFUSAL<br/>polite decline + contact email"]:::refusal
+  %% Pre-loop failure (#64): an exception in the classifier, retrieval or composer
+  %% logs one refused record (no attempts) and re-raises; app.py shows CANNED_REFUSAL.
+  CLASSIFY -.->|"raises"| PRELOOP
+  RETR -.->|"raises"| PRELOOP
+  COMP -.->|"raises"| PRELOOP
+  PRELOOP["Pre-loop failure (#64)<br/>event_type = refused, attempts = []<br/>failed_stage, error_type, error_message,<br/>latency so far; then re-raise"]:::refusal
+  PRELOOP --> LOG
+  PRELOOP -.->|"app.py catches,<br/>shows CANNED_REFUSAL"| RESP
   REFUSE --> LOG
   LOG --> RESP([Response to user]):::io
 

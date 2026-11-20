@@ -5,6 +5,22 @@
 
 ---
 
+## Session 77 (2026-11-20): turns that fail before the retry loop leave a record (#64).
+
+**Status:** implemented test-first, both spec-review axes triaged. Suite at **602 passing, 2 skipped** (5 new tests: one per failing stage, the v4 read-back, the Sentinel page model). Not yet deployed; the smoke test is the owner's.
+
+**What changed.** A classifier, retrieval or composer error used to leave `Pipeline.run` before the log record was built, so Sentinel never saw it (LIMITATIONS::O9: the October outage ran five days with an empty log). `Pipeline.run` now wraps those three stages, writes one record and re-raises. The record has `event_type='refused'`, no attempts, the question, `failed_stage`, `error_type`, `error_message`, and the latency so far (the failing stage's own time plus the total). `app.py` is unchanged, so the visitor sees the same canned refusal and the Space log keeps its print line. Schema v5 adds the three fields. The read-time migration fills them with `None` on older records.
+
+**Decisions.**
+- **`refused`, not a new event type.** The visitor got exactly the canned refusal, which is what `refusal_rate` already defines. A new value would have meant a fifth outcome bucket across the dashboard model, the failure feed, the flags and the page, all of them also being reworked in #63. `failed_stage` separates the two kinds of refusal on the Failures tab. Revisit if #63's answer-read outcomes make an `error` label natural.
+- **Written in `Pipeline.run`, re-raised.** The pipeline holds the question, the timings and the writer, and re-raising leaves the visitor's error path in `app.py` untouched. A failing log write still leaves nothing (O9 trip-wire 3).
+- **Branch `UNROUTED`** when the classifier itself failed, with confidence 0.0. The side effects are documented in SENTINEL.md (Schema versioning) at their real size: one per failed turn.
+- **Bug found by the bump:** `LogReader`'s gap smart-normalize skipped only records stamped with the current version, so v4 records would have been relabelled under v5. It now normalizes only v1 to v3. Checked on the local log: all 2168 records read identically before and after the change.
+
+**Review triage.** Standards: the duplicated record fields between the two writes now come from one `turn_fields` dict; the composer test uses a real composer over a profile missing sections instead of a fake; two docstrings shortened to one line; the stale `TODO(v5)` on the `knew_answer` write is now `TODO(v6)`, because dropping it was out of scope. Spec: no findings. Its four observable side effects are now documented, and the empty Attempts heading in the detail window reads "None".
+
+---
+
 ## Session 76 (2026-11-20): the HF log writer never overwrites a day file it could not read (#65).
 
 **Status:** implemented test-first, both spec-review axes triaged. Suite at **600 passing, 2 skipped**. Not yet deployed; the deploy and smoke test are the owner's.

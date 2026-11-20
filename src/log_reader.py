@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Protocol
 
-from interaction_log import DEFAULT_LOG_PATH, SCHEMA_VERSION, InteractionRecord
+from interaction_log import DEFAULT_LOG_PATH, InteractionRecord
 from rules import GAP_PHRASE
 from schema_migrations import SchemaVersionHandler
 
@@ -71,6 +71,12 @@ class LocalReader:
         return records
 
 
+# The producer emits every EventType from v4 on (#42); only older records
+# need the gap upgrade. A set, not "== SCHEMA_VERSION", so a later bump
+# (v5 in #64) leaves v4 records untouched.
+_PRE_V4_VERSIONS = frozenset({"1", "2", "3"})
+
+
 def _smart_normalize_event_type(record: InteractionRecord) -> InteractionRecord:
     """Read-time upgrade of pre-v4 records carrying the canonical gap phrase.
 
@@ -87,7 +93,7 @@ def _smart_normalize_event_type(record: InteractionRecord) -> InteractionRecord:
 
     On-disk records are never mutated. The normalize is read-side only.
     """
-    if record.schema_version == SCHEMA_VERSION:
+    if record.schema_version not in _PRE_V4_VERSIONS:
         return record
     last = record.attempts[-1] if record.attempts else None
     if last is None or not last.get("is_acceptable", True):

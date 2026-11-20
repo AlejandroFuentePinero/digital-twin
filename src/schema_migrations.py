@@ -74,6 +74,9 @@ REQUIRED_FIELDS: frozenset[str] = frozenset(
 # - v3 (#39): adds canary (`is_canary`, `replicate_index`, `run_id`).
 # - v4 (#42): producer-side fix — emits all four `EventType` values via
 #   `event_classifier`. Field-identical to v3.
+# - v5 (#64): adds pre-loop failure (`failed_stage`, `error_type`,
+#   `error_message`), set only on a turn whose classifier, retrieval or
+#   composer raised before the retry loop.
 
 _V1_OPTIONAL_DEFAULTS: dict[str, Any] = {
     "classifier_labels": [],
@@ -92,12 +95,21 @@ _CANARY_OPTIONAL_DEFAULTS: dict[str, Any] = {
     "replicate_index": None,
     "run_id": None,
 }
+_FAILURE_OPTIONAL_DEFAULTS: dict[str, Any] = {
+    "failed_stage": None,
+    "error_type": None,
+    "error_message": None,
+}
 
 OPTIONAL_DEFAULTS_BY_VERSION: dict[str, dict[str, Any]] = {
     "1": dict(_V1_OPTIONAL_DEFAULTS),
     "2": {**_V1_OPTIONAL_DEFAULTS, **_REPRO_OPTIONAL_DEFAULTS},
     "3": {**_V1_OPTIONAL_DEFAULTS, **_REPRO_OPTIONAL_DEFAULTS, **_CANARY_OPTIONAL_DEFAULTS},
     "4": {**_V1_OPTIONAL_DEFAULTS, **_REPRO_OPTIONAL_DEFAULTS, **_CANARY_OPTIONAL_DEFAULTS},
+    "5": {
+        **_V1_OPTIONAL_DEFAULTS, **_REPRO_OPTIONAL_DEFAULTS,
+        **_CANARY_OPTIONAL_DEFAULTS, **_FAILURE_OPTIONAL_DEFAULTS,
+    },
 }
 
 
@@ -161,7 +173,7 @@ def SchemaVersionHandler(
 
 def _version_gt(a: str, b: str) -> bool:
     """Compare schema versions as ints when both parse, else lexically.
-    Schema versions are int-shaped today ("1".."4"); the lexical fallback
+    Schema versions are int-shaped today ("1".."5"); the lexical fallback
     keeps the handler well-defined if a future producer ships a non-int
     stamp before the reader catches up."""
     try:

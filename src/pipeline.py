@@ -61,6 +61,17 @@ def _resolve_git_sha() -> str | None:
 GIT_SHA: str | None = _resolve_git_sha()
 
 
+def _chunk_refs(chunks: list) -> list[dict]:
+    """Retrieved chunks as log references (file and heading), not content."""
+    return [
+        {
+            "source_file": c.metadata.get("source_file", "?"),
+            "section_heading": c.metadata.get("section_heading", "?"),
+        }
+        for c in chunks
+    ]
+
+
 class Pipeline:
     def __init__(
         self,
@@ -94,35 +105,89 @@ class Pipeline:
         t_total = time.perf_counter()
         _trace(f"run start | session={session_id[:8]} turn={turn_index} q={question[:60]!r}")
 
-        # 1. Classify — filter unknown labels (e.g. TECHNICAL before #18 lands) so a
-        # classifier ahead of the registry can't crash routing. Empty after filter →
-        # safe fallback to GENERIC. Raw classifier output logged separately for the
-        # Sentinel to surface misroute patterns.
-        _trace("classify start")
-        t = time.perf_counter()
-        cls_result = self._classifier.classify(question, history)
-        classifier_ms = int((time.perf_counter() - t) * 1000)
-        _trace(f"classify done | {classifier_ms}ms | labels={cls_result.labels} confidence={cls_result.confidence:.2f}")
-        branches = [b for b in cls_result.labels[:2] if b in self._registry] or ["GENERIC"]
-        branch_name = branches[0]
-        branch_spec = self._registry[branch_name]
+        # Fields every record of this turn carries, whichever way it ends.
+        turn_fields = {
+            "schema_version": SCHEMA_VERSION,
+            "session_id": session_id,
+            "turn_index": turn_index,
+            "question": question,
+            "contact_offered": contact_offered,
+            "contact_provided": contact_provided,
+            "git_sha": GIT_SHA,
+            "model_id": getattr(self._generator, "MODEL", None),
+            "temperature": getattr(self._generator, "TEMPERATURE", None),
+        }
 
-        # 2. Retrieve (once per turn — chunks constant across retries)
-        _trace(f"retrieve start | branch={branch_name}")
-        t = time.perf_counter()
-        chunks = fetch_context(question, history)[: branch_spec.final_k]
-        context = format_context(chunks)
-        retrieval_ms = int((time.perf_counter() - t) * 1000)
-        _trace(f"retrieve done | {retrieval_ms}ms | {len(chunks)} chunks")
+        # Stages 1 to 3 run outside the retry loop, so an error here would leave
+        # no record (LIMITATIONS::O9, #64). Log one refused record naming the
+        # stage, then re-raise so app.py shows the visitor the canned refusal.
+        stage = "classifier"
+        classifier_ms = retrieval_ms = 0
+        t = t_total
+        cls_result = None
+        branch_name = None
+        chunks = []
+        try:
+            # 1. Classify — filter unknown labels (e.g. TECHNICAL before #18 lands) so a
+            # classifier ahead of the registry can't crash routing. Empty after filter →
+            # safe fallback to GENERIC. Raw classifier output logged separately for the
+            # Sentinel to surface misroute patterns.
+            _trace("classify start")
+            t = time.perf_counter()
+            cls_result = self._classifier.classify(question, history)
+            classifier_ms = int((time.perf_counter() - t) * 1000)
+            _trace(f"classify done | {classifier_ms}ms | labels={cls_result.labels} confidence={cls_result.confidence:.2f}")
+            branches = [b for b in cls_result.labels[:2] if b in self._registry] or ["GENERIC"]
+            branch_name = branches[0]
+            branch_spec = self._registry[branch_name]
 
-        # 3. Compose system prompts (one per role, both branch-aware)
-        sys_prompt_gen = self._composer.compose(branches, "generator", retrieved_context=context)
-        sys_prompt_judge = self._composer.compose(branches, "guardrail", retrieved_context=context)
+            # 2. Retrieve (once per turn — chunks constant across retries)
+            stage = "retrieval"
+            _trace(f"retrieve start | branch={branch_name}")
+            t = time.perf_counter()
+            chunks = fetch_context(question, history)[: branch_spec.final_k]
+            context = format_context(chunks)
+            retrieval_ms = int((time.perf_counter() - t) * 1000)
+            _trace(f"retrieve done | {retrieval_ms}ms | {len(chunks)} chunks")
 
-        # Fingerprint the first-attempt prompt — retries reuse the same
-        # structural prompt with feedback appended, so hashing once captures
-        # the "this was the question + rules + chunks" identity (issue #37).
-        prompt_hash = compute_prompt_hash(sys_prompt_gen, question)
+            # 3. Compose system prompts (one per role, both branch-aware)
+            stage = "composer"
+            sys_prompt_gen = self._composer.compose(branches, "generator", retrieved_context=context)
+            sys_prompt_judge = self._composer.compose(branches, "guardrail", retrieved_context=context)
+
+            # Fingerprint the first-attempt prompt — retries reuse the same
+            # structural prompt with feedback appended, so hashing once captures
+            # the "this was the question + rules + chunks" identity (issue #37).
+            prompt_hash = compute_prompt_hash(sys_prompt_gen, question)
+        except Exception as e:
+            # The failing stage's own time, so a slow failure shows where it hung.
+            stage_ms = int((time.perf_counter() - t) * 1000)
+            if stage == "classifier":
+                classifier_ms = stage_ms
+            elif stage == "retrieval":
+                retrieval_ms = stage_ms
+            self._log_writer.append({
+                **turn_fields,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "event_type": "refused",
+                "branch": branch_name or "UNROUTED",
+                "classifier_labels": list(cls_result.labels) if cls_result else [],
+                "classification_confidence": cls_result.confidence if cls_result else 0.0,
+                "attempts": [],
+                "retrieved_chunks": _chunk_refs(chunks),
+                "latency_ms": {
+                    "classifier": classifier_ms,
+                    "retrieval": retrieval_ms,
+                    "generation": 0,
+                    "guardrail": 0,
+                    "total": int((time.perf_counter() - t_total) * 1000),
+                },
+                "knew_answer": False,
+                "failed_stage": stage,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+            })
+            raise
 
         # 4. Generate + evaluate, retry loop
         # For branches with tools (today: TECHNICAL), generation goes through ToolLoop
@@ -255,27 +320,18 @@ class Pipeline:
         # migration is complete (PRD #41 slice 3 — no consumer in src/ reads
         # this field; failure_feed / cluster_gaps / summarize_failures /
         # flag_detector / dashboard_model all read `event_type` directly).
-        # TODO(v5): drop this write in the next schema bump.
+        # TODO(v6): drop this write in the next schema bump (v5, #64, kept it).
         knew_answer = bool(last_answer) and (GAP_PHRASE not in last_answer)
 
         self._log_writer.append({
-            "schema_version": SCHEMA_VERSION,
+            **turn_fields,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "session_id": session_id,
-            "turn_index": turn_index,
-            "question": question,
             "event_type": event_type,
             "branch": branch_name,
             "classifier_labels": list(cls_result.labels),
             "classification_confidence": cls_result.confidence,
             "attempts": attempts,
-            "retrieved_chunks": [
-                {
-                    "source_file": c.metadata.get("source_file", "?"),
-                    "section_heading": c.metadata.get("section_heading", "?"),
-                }
-                for c in chunks
-            ],
+            "retrieved_chunks": _chunk_refs(chunks),
             "tool_calls": tool_calls_log,
             "latency_ms": {
                 "classifier": classifier_ms,
@@ -285,11 +341,6 @@ class Pipeline:
                 "total": total_ms,
             },
             "knew_answer": knew_answer,
-            "contact_offered": contact_offered,
-            "contact_provided": contact_provided,
-            "git_sha": GIT_SHA,
-            "model_id": getattr(self._generator, "MODEL", None),
-            "temperature": getattr(self._generator, "TEMPERATURE", None),
             "prompt_hash": prompt_hash,
         })
 
