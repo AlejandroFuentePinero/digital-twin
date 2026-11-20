@@ -7,7 +7,7 @@
 
 ## Session 73 (2026-11-20): industry-preference questions route to LOGISTICAL (#60); C049 passes.
 
-**Status:** implemented test-first, both spec-review axes triaged, one judged canary run on the final code. Suite at **626 passing, 1 skipped** (1 new). Not deployed (batched).
+**Status:** implemented test-first, both spec-review axes triaged, one judged canary run on the final code. Suite at **626 passing, 1 skipped** (1 new). Deployed 2026-11-20 (Space commit `b0d1dc0c`, five-branch API smoke passed with gambling and advertising answered correctly on LOGISTICAL, see the runbook).
 
 ### What changed
 
