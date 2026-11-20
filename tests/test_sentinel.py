@@ -1204,9 +1204,6 @@ def test_format_canary_health_blocks_renders_four_column_trajectory():
     html = format_canary_health_blocks(
         latest_run_records=plus1,
         baseline_records=baseline,
-        all_records=baseline + plus1,
-        corpus=[],
-        flags=[],
         post_baseline_runs=[plus1],
     )
 
@@ -1227,9 +1224,6 @@ def test_format_canary_health_blocks_returns_empty_when_no_records():
     html = format_canary_health_blocks(
         latest_run_records=[],
         baseline_records=[],
-        all_records=[],
-        corpus=[],
-        flags=[],
         post_baseline_runs=[],
     )
     assert html == ""
@@ -1507,3 +1501,121 @@ def test_source_label_reflects_dual_source(monkeypatch):
     assert "canary overlay" in _source_label(dual).lower()
     assert _source_label(plain_hf) == "HF Dataset"
     assert _source_label(plain_local) == "Local JSONL"
+
+
+# ----- canary regression view (issue #53) -----------------------------------
+
+
+def _canary_rec(question: str, run_id: str, rep: int, *, total_ms: int = 1000,
+                days_ago: int = 0, answer: str = "ok"):
+    from datetime import timedelta
+    return InteractionRecord.model_validate({
+        "timestamp": (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat(),
+        "session_id": "canary", "turn_index": rep, "question": question,
+        "event_type": "answered", "branch": "GENERIC",
+        "classification_confidence": 0.9,
+        "attempts": [{"answer": answer, "is_acceptable": True}],
+        "retrieved_chunks": [], "tool_calls": [],
+        "latency_ms": {"total": total_ms}, "knew_answer": True,
+        "is_canary": True, "run_id": run_id, "replicate_index": rep,
+        "git_sha": "abcdef1234",
+    })
+
+
+def _write_verdicts(verdicts_dir, run_id, rows):
+    from canary_verdicts import ReplicateVerdict, write_run_verdicts
+    write_run_verdicts(run_id, [
+        ReplicateVerdict(question_id=qid, question=q, replicate_index=rep,
+                         passed=ok, reason=reason, answer=f"answer {qid} {rep}")
+        for qid, q, rep, ok, reason in rows
+    ], verdicts_dir)
+
+
+def test_canary_view_leads_with_the_verdict_and_lists_failing_questions_first(tmp_path):
+    """The verdict names the failing questions, and failing rows sort first."""
+    from sentinel import build_canary_view
+
+    run = "run-20261120-010000-aaaaaa"
+    records = [_canary_rec(q, run, i) for q in ("q1", "q2") for i in range(2)]
+    _write_verdicts(tmp_path, run, [
+        ("C001", "q1", 0, True, "fine"), ("C001", "q1", 1, True, "fine"),
+        ("C002", "q2", 0, True, "fine"), ("C002", "q2", 1, False, "Says it has no information."),
+    ])
+
+    view = build_canary_view(records, baseline_path=tmp_path / "none.json",
+                             verdicts_dir=tmp_path)
+
+    assert "1 of 2 questions fail" in view.verdict_html
+    assert "C002" in view.verdict_html
+    assert view.question_ids == ["C002", "C001"]
+    assert view.table_html.index("C002") < view.table_html.index("C001")
+    assert "Says it has no information." in view.table_html
+    assert "status-fail" in view.table_html and "status-pass" in view.table_html
+
+
+def test_canary_view_says_all_pass_when_every_replicate_passes(tmp_path):
+    """A run where every replicate passes gets the green all-pass verdict."""
+    from sentinel import build_canary_view
+
+    run = "run-20261120-010000-aaaaaa"
+    _write_verdicts(tmp_path, run, [("C001", "q1", 0, True, "fine")])
+    view = build_canary_view([_canary_rec("q1", run, 0)],
+                             baseline_path=tmp_path / "none.json", verdicts_dir=tmp_path)
+    assert "All 1 questions pass" in view.verdict_html
+
+
+def test_canary_view_flags_an_unjudged_latest_run_with_the_command_to_judge_it(tmp_path):
+    """An unjudged latest run gets an amber verdict with the --judge-run command."""
+    from sentinel import build_canary_view
+
+    run = "run-20261120-010000-aaaaaa"
+    view = build_canary_view([_canary_rec("q1", run, 0)],
+                             baseline_path=tmp_path / "none.json", verdicts_dir=tmp_path)
+    assert "not judged" in view.verdict_html
+    assert f"--judge-run {run}" in view.verdict_html
+
+
+def test_canary_view_marks_a_passing_question_slow_when_latency_exceeds_baseline(tmp_path):
+    """Over 1.5x baseline median latency marks a passing row slow and turns the verdict amber."""
+    from canary_baseline import freeze_baseline
+    from sentinel import build_canary_view
+
+    base, latest = "run-20261001-010000-bbbbbb", "run-20261120-010000-aaaaaa"
+    baseline_path = tmp_path / "baseline.json"
+    freeze_baseline(base, frozen_git_sha="abc", path=baseline_path)
+    records = [
+        _canary_rec("q1", base, 0, total_ms=1000, days_ago=30),
+        _canary_rec("q1", latest, 0, total_ms=2000),
+    ]
+    _write_verdicts(tmp_path, latest, [("C001", "q1", 0, True, "fine")])
+
+    view = build_canary_view(records, baseline_path=baseline_path, verdicts_dir=tmp_path)
+
+    assert "status-slow" in view.table_html
+    assert "1.0s → 2.0s" in view.table_html
+    assert "canary-verdict-amber" in view.verdict_html
+    assert "1 slow: C001" in view.verdict_html
+
+
+def test_canary_view_with_no_runs_says_how_to_start(tmp_path):
+    """With no canary runs the tab says how to start one."""
+    from sentinel import build_canary_view
+
+    view = build_canary_view([], baseline_path=tmp_path / "none.json", verdicts_dir=tmp_path)
+    assert "No canary runs yet" in view.verdict_html
+    assert view.question_ids == []
+
+
+def test_canary_detail_shows_each_replicate_answer_with_its_verdict(tmp_path):
+    """The detail shows every replicate's answer, verdict and reason, HTML-escaped."""
+    from sentinel import format_canary_detail
+
+    run = "run-20261120-010000-aaaaaa"
+    _write_verdicts(tmp_path, run, [
+        ("C002", "q2 <b>", 0, True, "fine"),
+        ("C002", "q2 <b>", 1, False, "Says it has no information."),
+    ])
+    html_out = format_canary_detail(run, "C002", verdicts_dir=tmp_path)
+    assert "answer C002 0" in html_out and "answer C002 1" in html_out
+    assert "Says it has no information." in html_out
+    assert "q2 &lt;b&gt;" in html_out

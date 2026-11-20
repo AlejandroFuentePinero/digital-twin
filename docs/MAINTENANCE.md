@@ -10,7 +10,7 @@ This file is the entry point when re-engaging. Read this before opening any othe
 
 ### Monthly
 
-- [ ] **Run the canary** as a `+N` trajectory point against the current frozen baseline. Triage drift; classify as expected variance vs new signal.
+- [ ] **Run the canary.** It judges itself and prints the pass count. Read every failing question's three answers (Sentinel Canary tab, detail picker): a real regression gets a ticket; a stale or wrong `expected_behaviour` gets fixed in `data/canaries/corpus.json` and the run re-judged with `--judge-run <run_id>`.
   ```bash
   uv run python src/canary_runner.py --replicates 3
   ```
@@ -100,7 +100,7 @@ This file is the entry point when re-engaging. Read this before opening any othe
 | Confident-failure rate jumps >5pp WoW on Sentinel | `flag_detector::detect_gap_rate_jump` | Investigate via Failure Feed |
 | New gap cluster appears in cluster_gaps weekly batch | `flag_detector::detect_new_cluster` | Read cluster summary, decide content update |
 | Same question repeats with refused→answered shape | `flag_detector::detect_repeat_failure` | Open Failure Feed session view, identify what changed |
-| Canary drift: any major flag on a question that wasn't drifting last run | Sentinel Canary tab | Triage per Session 55 / 62 partition pattern |
+| Any canary question fails | Sentinel Canary tab / runner report | Read its answers in the detail picker; ticket a real regression, fix a stale expectation |
 | API key expiring in <14 days | Manual reminder | Rotate in `.env` + Space secrets |
 
 ---
@@ -114,8 +114,9 @@ uv run pytest -q                               # run suite
 uv run python src/ingest.py                    # re-ingest KB
 uv run python src/sentinel.py --local          # Sentinel against local JSONL only
 uv run python src/sentinel.py                  # Sentinel against prod (HF env required)
-uv run python src/canary_runner.py --replicates 3                     # +N trajectory run
-uv run python src/canary_runner.py --replicates 3 --freeze-baseline   # promote latest run to baseline (operator decision)
+uv run python src/canary_runner.py --replicates 3                     # canary run, judged, prints pass/fail
+uv run python src/canary_runner.py --judge-run <run_id>               # (re-)judge a logged run
+uv run python src/canary_runner.py --replicates 3 --freeze-baseline   # promote latest run to latency baseline (operator decision)
 uv run python eval/run_eval.py --tag <tag>     # full eval
 uv run python src/startup_probe.py             # one call per configured model; the same check runs at Space start (#57)
 
@@ -130,9 +131,7 @@ uv run python scripts/deploy_to_space.py       # uploads working tree incl. data
 
 These are observation-driven — they convert to active work only if observe-mode signal justifies them.
 
-- **Drop fuzzy off-topic canary questions** ("favourite colour", "breakfast") that have no defensible correct branch.
-- **Tighten `branch_changed` to unanimous-vote** (3/3 required across replicates) to stop single-record flips swinging majorities.
-- **Per-question canary stability scoring** — downweight chronically-unstable questions in the drift count.
+- ~~**Drop fuzzy off-topic canary questions**, **tighten `branch_changed` to unanimous-vote**, **per-question canary stability scoring**~~ Superseded by #53 (2026-11-20): the canary judges each answer pass/fail against an expected behaviour, branch no longer counts, and the off-topic questions have a clear expectation (decline politely, invent nothing).
 - **Ecography title retrieval miss** (Session 70). `fetch_context` returns no Ecography chunk for "What is the title of Alejandro's 2021 paper in Ecography?"; only the README tool recovers it. Fix in retrieval, not KB copy.
 - ~~**Pin `requirements.txt` to exact `uv.lock` versions**~~ Done in #59 (2026-10-29) after the 2026-10-28 redeploy rebuilt the dependency layer and the new LiteLLM broke every tool-enabled branch (`LIMITATIONS::O10`). Bumping a dependency now means `uv lock`, then copy the version into `requirements.txt`.
 

@@ -75,7 +75,7 @@ flowchart TD
   %% _CanaryLogWriter wraps LogWriter to inject is_canary/run_id/replicate_index.
   %% Records land in the same interactions.jsonl as live records; DashboardModel
   %% filters them out by default (include_canary=False) so live tabs are unaffected.
-  CANARY[/"canary_runner.py CLI<br/>50 questions × 3 replicates<br/>--freeze-baseline → baseline.json"/]:::io
+  CANARY[/"canary_runner.py CLI<br/>50 questions × 3 replicates<br/>then gpt-6.2-sol judges each answer<br/>vs expected_behaviour → verdicts/run_id.jsonl<br/>--freeze-baseline → baseline.json (latency)"/]:::io
   CANARY -.->|"each replicate calls<br/>pipeline.run() through<br/>_CanaryLogWriter wrapper"| GEN
   CANARY -.->|"is_canary=True,<br/>shared run_id, replicate_index"| LOG
 
@@ -163,9 +163,9 @@ graph LR
     direction TB
     canary_baseline["canary_baseline.py"]:::tooling
     canary_corpus["canary_corpus.py"]:::tooling
-    canary_drift["canary_drift.py"]:::tooling
-    canary_outcome["canary_outcome.py"]:::tooling
+    canary_judge["canary_judge.py"]:::tooling
     canary_runner["canary_runner.py"]:::tooling
+    canary_verdicts["canary_verdicts.py"]:::tooling
     cluster_gaps["cluster_gaps.py"]:::tooling
     dashboard_model["dashboard_model.py"]:::tooling
     failure_feed["failure_feed.py"]:::tooling
@@ -202,14 +202,15 @@ graph LR
   app --> startup_probe
   app --> tools
   canary_baseline --> interaction_log
-  canary_corpus --> canary_outcome
-  canary_drift --> canary_corpus
-  canary_drift --> canary_outcome
-  canary_drift --> interaction_log
-  canary_outcome --> interaction_log
+  canary_judge --> canary_corpus
+  canary_judge --> interaction_log
+  canary_judge --> pipeline
   canary_runner --> canary_baseline
   canary_runner --> canary_corpus
+  canary_runner --> canary_judge
+  canary_runner --> canary_verdicts
   canary_runner --> interaction_log
+  canary_runner --> log_reader
   classifier --> openai_params
   cluster_gaps --> failure_feed
   cluster_gaps --> interaction_log
@@ -250,8 +251,7 @@ graph LR
   sentinel --> canary_runner
   sentinel --> summarize_failures
   sentinel --> canary_baseline
-  sentinel --> canary_corpus
-  sentinel --> canary_drift
+  sentinel --> canary_verdicts
   sentinel --> contact_log
   sentinel --> dashboard_model
   sentinel --> flag_detector
@@ -272,6 +272,7 @@ graph LR
   tools --> openai_params
   tools --> tool_loop
   app --> ext_Gradio__UI_
+  canary_judge --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   classifier --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   cluster_gaps --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   generator --> ext_OpenAI___Anthropic_API__via_LiteLLM_
@@ -309,10 +310,10 @@ graph LR
 | `app.py` | Gradio chat interface for the digital twin. |
 | `branches.py` | Branch registry for classify-then-route orchestration (ADR-0003). |
 | `canary_baseline.py` | Canary baseline pointer — frozen golden run_id (issue #39). |
-| `canary_corpus.py` | Canary corpus — pure data inventory (issue #39, recalibrated in PRD #41 / #45). |
-| `canary_drift.py` | Canary drift detector — pure functions over canary records (issue #39, |
-| `canary_outcome.py` | Canary outcome derivation — pure functions over (record, corpus question). |
+| `canary_corpus.py` | Canary corpus: pure data inventory (issue #39, recalibrated in #45 and #53). |
+| `canary_judge.py` | Canary judge (issue #53): grades one canary answer against its question's |
 | `canary_runner.py` | Canary runner — replays the corpus through the current Pipeline (issue #39). |
+| `canary_verdicts.py` | Canary verdict store (issue #53): one JSONL file per run under |
 | `classifier.py` | Branch classifier (ADR-0003). |
 | `cluster_gaps.py` | Gap-clustering batch (issue #32). |
 | `composer.py` | Prompt composer — assembles per-branch system prompts (ADR-0003). |

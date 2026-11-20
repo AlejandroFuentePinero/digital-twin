@@ -5,6 +5,72 @@
 
 ---
 
+## Session 72 (2026-11-20): the canary becomes a regression test (#53): an LLM judge grades every answer pass/fail against an expected behaviour; drift detection retired; Canary tab rebuilt.
+
+**Status:** implemented test-first, both spec-review axes triaged, one live run judged end to end. Suite at **625 passing, 1 skipped**. No pipeline or app code changed, no deploy. #60 filed for the one real failure found.
+
+### Why: the old canary reported change, not correctness
+
+Scoring every question of the then-baseline run (`run-20261119-221912-d3a0a6`) against its own `expected_outcome`: 10 of 50 failed, and 11 to 13 had failed on every run since May. Reading all 10 answers, none was wrong. Every failure was the label:
+
+- LOGISTICAL answers (C015 "Melbourne, Australia", C016, C018) are labelled `deflected` because `event_classifier` labels by branch (`LIMITATIONS::P17`).
+- C007 CUDA "I don't have evidence of hands-on CUDA kernel work" is a correct gap, labelled `answered` because it is not the exact gap phrase.
+- C037, C039, C040 calibrated gaps are correct; the corpus expected `answered_with_substance`.
+- C047, C048, C050 polite refusals are correct; the corpus expected `refused`, which in code means the guardrail rejected all three attempts (a failure state).
+- C049 gambling: see below; the one real failure.
+
+Branch, event type and outcome flags were one signal counted three times, and the baseline delta made improvements fire as major drift while a question wrong since the baseline stayed silent.
+
+### Decisions (operator, this session)
+
+1. **The canary is a behaviour-correctness regression test**, not a change alarm: each run passes or fails against expectations. "Gives us confidence, peace of mind."
+2. **An LLM judge, `gpt-6.2-sol`** (the eval judge, so the terra generator does not grade itself), grades each answer against a one-or-two-sentence `expected_behaviour` per question. Replaces `expected_outcome`, `expected_keywords` and `must_not_appear`.
+3. **Strict pass rule:** any failing replicate fails the question, since each replicate is an answer a visitor could get. The judge grades meaning, not wording: "we are not looking for verbatim answer but for the correct meaning and communication".
+4. **The Sentinel Canary tab is rebuilt in this ticket:** verdict first, flat table status first with failing rows first, a detail picker for a question's answers, latency against the baseline kept.
+
+Assumptions stated and not overruled: the judge grades the answer the visitor saw (accepted attempt, else the canned refusal), not guardrail-rejected drafts; a judge error or unreadable output is a fail; verdict files are gitignored beside the logs; favourite colour, breakfast and phishing stay (with branch no longer counting, "decline politely, invent nothing" is a clear expectation); the baseline becomes the latency reference only.
+
+Issue #53's seven questions, answered: (1) scored against the expectation, not the baseline; (2) routing flags removed, not collapsed; (3) substring keyword coverage dropped, content accuracy stays with the eval; (4) unanimity superseded by the strict judged rule; (5) no question cut, ten expectations rewritten; (6) 50 questions suffice for behaviour shape because content breadth lives in the 149-question eval; (7) yes, the judged verdict is that per-run check.
+
+### Judge calibration
+
+- First descriptions failed 18 correct answers for missing listed details ("hybrid", the classifier name, "course-level"); the judge read every listed detail as required. Descriptions rewritten to the core point with optional details marked "may", and the judge told "may" items are optional.
+- On the then-baseline run's 150 answers, two judge passes gave identical verdicts: 147 pass, C049 fails 3/3.
+- 12 planted wrong answers (wrong MAE, wrong city, claimed CUDA kernels, claimed on-call rotation, three invented years of AWS, a written phishing email, a stated favourite colour, the wrong origin story, sponsorship needed, PhD start 2017, active US relocation, gambling unconditionally) all fail, re-checked after every judge change.
+
+### Live run: `run-20261120-000158-97f655` (3 replicates, judged)
+
+First judgement 45 of 50. Four of the extra fails were the descriptions or the judge, read answer by answer:
+
+- C037, C040: "no production AWS deployments on record", "has not completed a production on-call rotation" failed for not saying "no experience at all". The gap-wording allowance was in C006 to C009's descriptions only; moved into the judge prompt as a general rule (any wording that says he has not done it counts, as long as the answer does not claim it). The operator ruled the C040 "not completed" answer acceptable.
+- C030: the failed replicate was the most precise (820,000 curated, 800,000 training). The question is ambiguous between the two figures; the description now accepts either.
+- C014: all three replicates describe the same evidence-first approach without naming a paper; only the present-tense one failed. Description loosened to the approach, peer review as optional.
+
+Re-judged: **49 of 50 on both this run and `run-20261119-221912-d3a0a6`; C049 the only fail.** Run latency p50 13.0 s, p95 21.5 s (Session 71: 12.0 / 21.6).
+
+### The real failure: C049 gambling (#60)
+
+"Would you accept a role in the gambling industry?" answers "his position is unspecified" on every run since May. `profile.md` `## logistics` says gambling is a declined industry unless the role has a strong ethical component. Only LOGISTICAL loads that section, the KB does not repeat it, and the classifier's LOGISTICAL definition does not cover industry preferences, so the question routes GENERIC or BEHAVIOURAL. **Correction to Session 71**, which recorded the KB as stating no position: the position is in the profile. Fix (classifier definition) left to #60 so it can be verified by this canary.
+
+### What changed
+
+1. New `src/canary_judge.py` (judge, `shown_answer`), `src/canary_verdicts.py` (verdict store, strict roll-up, report). Tests `test_canary_judge.py`, `test_canary_verdicts.py`.
+2. `src/canary_runner.py`: every run judges itself (8 calls in flight) and prints the report; `--judge-run <run_id>` judges a logged run.
+3. `src/canary_corpus.py` + `data/canaries/corpus.json`: `expected_behaviour` required; three old fields removed.
+4. Removed `src/canary_drift.py`, `src/canary_outcome.py`, their tests, and `DashboardModel.outcome_accuracy` / `keyword_coverage` / `red_flag_rate`.
+5. `src/sentinel.py` Canary tab: `build_canary_view` (verdict, table, latency) and `format_canary_detail`; slow = passing question over 1.5x baseline median latency, amber; drift banner, cards, chips and Drift/Quality sections removed.
+6. Docs: SENTINEL.md canary section, CONTEXT.md glossary (expected behaviour, canary judge, canary pass; drift kind, outcome, must_not_appear retired), MAINTENANCE.md (monthly check, trip-wire, commands, three follow-ups superseded), LIMITATIONS P12/P13/P17, CLAUDE.md, README, pipeline diagram, MAP. `.gitignore` covers `data/canaries/verdicts/`.
+
+### Red-test accounting
+
+Deleted with retired behaviour: `test_canary_drift.py` (20), `test_canary_outcome.py` (11), three DashboardModel canary-metric tests, `test_load_canaries_rejects_unknown_expected_outcome`. Fixtures updated because the contract changed: the corpus round-trip and required-fields tests, the runner `_corpus_at` fixture, and the five existing runner tests (now pass a fake judge; `run_batch` judges by default). Signature change: the two `format_canary_health_blocks` tests drop `corpus` / `flags`, expected values unchanged. 642 - 35 + 18 = 625.
+
+### Noted, not changed
+
+Pre-existing dead code in `src/sentinel.py`: `_delta_cell`, `_delta_ms`, `CANARY_NO_BASELINE`, `canary_metric_history`, `render_sparkline` have no caller, and `ensure_fresh_canaries` is never called by `build_app`; imports `os`, `HFReader`, `TIER_B_METRICS`, `WoWDelta` unused. Untouched by this change.
+
+---
+
 ## Session 71 (2026-11-20): gpt-4.1 / gpt-4.1-mini migration to the gpt-6 family (#55); C040 (#56) resolved by the classifier swap; the eval judge moved to gpt-6.2-sol with its prompt recalibrated.
 
 **Status:** pipeline and eval judge migrated, eval v8 and a 3-replicate canary run on the final code. Deployed 2026-11-20 (Space commit `d6f2315f`, five-branch API smoke passed, see the runbook); canary baseline refrozen to `run-20261119-221912-d3a0a6` at `d4d3686`. Suite at **642 passing, 1 skipped** (13 new).

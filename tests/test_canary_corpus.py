@@ -1,4 +1,4 @@
-"""Tests for the canary corpus loader (issue #39, recalibrated in #45)."""
+"""Tests for the canary corpus loader (issue #39, recalibrated in #45 and #53)."""
 
 from __future__ import annotations
 
@@ -18,40 +18,14 @@ def test_load_canaries_returns_fifty_entries_against_real_corpus():
 
 
 def test_load_canaries_populates_every_required_field_for_every_entry():
-    """Every entry has id, question, expected_outcome, expected_keywords,
-    must_not_appear, category. Smoke that the loader doesn't silently skip
-    fields after the #45 corpus relabel."""
-    valid_outcomes = {
-        "answered_with_substance", "gap_acknowledged",
-        "out_of_scope_redirect", "refused",
-    }
+    """Every entry has id, question, expected_behaviour, category. Smoke that
+    the loader doesn't silently skip fields after the #53 corpus rewrite."""
     for q in load_canaries():
         assert q.id
         assert q.question
-        assert q.expected_outcome in valid_outcomes
-        assert isinstance(q.expected_keywords, list)
-        assert isinstance(q.must_not_appear, list)
+        assert q.expected_behaviour
+        assert isinstance(q.expected_chunk_sources, list)
         assert q.category
-
-
-def test_load_canaries_rejects_unknown_expected_outcome(tmp_path: Path):
-    """Forcing function: a typo in `expected_outcome` (or a removed bucket)
-    fails at load time, before any replay starts. The drift detector relies
-    on the outcome comparing equal to one of the four canonical buckets."""
-    bad = tmp_path / "corpus.json"
-    bad.write_text(json.dumps([
-        {
-            "id": "C001",
-            "question": "q",
-            "expected_outcome": "MADE_UP_BUCKET",
-            "expected_keywords": [],
-            "must_not_appear": [],
-            "expected_chunk_sources": [],
-            "category": "x",
-        }
-    ]))
-    with pytest.raises(ValueError, match="MADE_UP_BUCKET"):
-        load_canaries(bad)
 
 
 def test_load_canaries_round_trips_a_minimal_entry(tmp_path: Path):
@@ -62,9 +36,7 @@ def test_load_canaries_round_trips_a_minimal_entry(tmp_path: Path):
         {
             "id": "C999",
             "question": "smoke",
-            "expected_outcome": "answered_with_substance",
-            "expected_keywords": ["alpha"],
-            "must_not_appear": ["beta"],
+            "expected_behaviour": "Says smoke.",
             "expected_chunk_sources": ["profile.md"],
             "category": "smoke",
         }
@@ -73,9 +45,30 @@ def test_load_canaries_round_trips_a_minimal_entry(tmp_path: Path):
     assert q == CanaryQuestion(
         id="C999",
         question="smoke",
-        expected_outcome="answered_with_substance",
-        expected_keywords=["alpha"],
-        must_not_appear=["beta"],
+        expected_behaviour="Says smoke.",
         expected_chunk_sources=["profile.md"],
         category="smoke",
     )
+
+
+def test_every_real_corpus_entry_describes_its_expected_behaviour():
+    """Issue #53: the judge grades each answer against this description, so
+    an entry without one cannot be judged."""
+    for q in load_canaries():
+        assert q.expected_behaviour.strip(), q.id
+
+
+def test_load_canaries_rejects_an_entry_without_expected_behaviour(tmp_path: Path):
+    """A blank expected_behaviour fails at load time, naming the entry."""
+    bad = tmp_path / "corpus.json"
+    bad.write_text(json.dumps([
+        {
+            "id": "C001",
+            "question": "q",
+            "expected_behaviour": "  ",
+            "expected_chunk_sources": [],
+            "category": "x",
+        }
+    ]))
+    with pytest.raises(ValueError, match="C001"):
+        load_canaries(bad)

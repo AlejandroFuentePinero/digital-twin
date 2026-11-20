@@ -30,6 +30,7 @@ docs/MAP.html
 # --- Vector store + interaction logs (regenerable / privacy) --------------
 data/preprocessed_db/
 data/logs/
+data/canaries/verdicts/
 
 # --- Personal raw drafts (not for public repo) ----------------------------
 data/raw_me/

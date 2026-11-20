@@ -62,7 +62,7 @@ flowchart TD
   %% _CanaryLogWriter wraps LogWriter to inject is_canary/run_id/replicate_index.
   %% Records land in the same interactions.jsonl as live records; DashboardModel
   %% filters them out by default (include_canary=False) so live tabs are unaffected.
-  CANARY[/"canary_runner.py CLI<br/>50 questions × 3 replicates<br/>--freeze-baseline → baseline.json"/]:::io
+  CANARY[/"canary_runner.py CLI<br/>50 questions × 3 replicates<br/>then gpt-6.2-sol judges each answer<br/>vs expected_behaviour → verdicts/run_id.jsonl<br/>--freeze-baseline → baseline.json (latency)"/]:::io
   CANARY -.->|"each replicate calls<br/>pipeline.run() through<br/>_CanaryLogWriter wrapper"| GEN
   CANARY -.->|"is_canary=True,<br/>shared run_id, replicate_index"| LOG
 

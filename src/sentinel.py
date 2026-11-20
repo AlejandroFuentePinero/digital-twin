@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import html
 import os
+import statistics
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -49,17 +50,10 @@ import canary_runner
 import summarize_failures
 from canary_baseline import (
     DEFAULT_BASELINE_PATH,
-    read_baseline,
     resolve_baseline_records,
     runs_after_baseline,
 )
-from canary_corpus import DEFAULT_CORPUS_PATH, load_canaries
-from canary_drift import (
-    CanaryDriftFlag,
-    aggregate_question,
-    detect_drift,
-    stratified_summary,
-)
+from canary_verdicts import DEFAULT_VERDICTS_DIR, QuestionVerdict, read_run_verdicts
 from contact_log import read_provided_session_ids
 from dashboard_model import METRIC_GETTERS, DashboardModel
 from flag_detector import (
@@ -690,27 +684,6 @@ body, .gradio-container {
     text-align: center;
     font-size: 0.92em;
 }
-.canary-drift-card {
-    padding: 12px 14px;
-    margin: 6px 0;
-    border-radius: 4px;
-    border-left: 3px solid var(--alert);
-    background: var(--alert-tint);
-}
-.canary-drift-card.sev-warning {
-    border-left-color: var(--warning);
-    background: var(--warning-tint);
-}
-.canary-drift-headline {
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: 4px;
-}
-.canary-drift-detail {
-    font-size: 0.88em;
-    color: var(--text-secondary);
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
 .canary-table {
     width: 100%;
     border-collapse: collapse;
@@ -729,9 +702,29 @@ body, .gradio-container {
     letter-spacing: 0.06em;
     font-size: 0.78em;
 }
-.canary-row.sev-major { background: var(--alert-tint); }
-.canary-row.sev-minor { background: var(--warning-tint); }
-.canary-sev { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.canary-verdict-red    { border-left: 3px solid var(--alert);   color: var(--text-primary); }
+.canary-verdict-amber  { border-left: 3px solid var(--warning); color: var(--text-primary); }
+.canary-verdict-green  { border-left: 3px solid var(--healthy); color: var(--text-primary); }
+.canary-table tr.status-fail { background: var(--alert-tint); }
+.canary-table tr.status-slow { background: var(--warning-tint); }
+.canary-table tr.status-fail .canary-status { color: var(--alert); }
+.canary-table tr.status-slow .canary-status { color: var(--warning); }
+.canary-table tr.status-pass .canary-status { color: var(--healthy); }
+.canary-status, .canary-latency {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    white-space: nowrap;
+}
+.canary-detail-question { margin: 8px 0; color: var(--text-primary); }
+.canary-replicate {
+    margin: 6px 0;
+    padding: 10px 14px;
+    border-left: 3px solid var(--healthy);
+    background: var(--bg-surface);
+    border-radius: 3px;
+}
+.canary-replicate.status-fail { border-left-color: var(--alert); background: var(--alert-tint); }
+.canary-replicate-head { font-size: 0.85em; color: var(--text-secondary); margin-bottom: 6px; }
+.canary-replicate-answer { white-space: pre-wrap; font-size: 0.92em; }
 .canary-rebaseline-warning {
     color: var(--text-secondary);
     font-size: 0.88em;
@@ -756,41 +749,6 @@ body, .gradio-container {
 }
 .canary-row .canary-delta-cell .delta {
     font-size: 0.88em;
-}
-
-/* Stratified summary chips */
-.canary-stratified {
-    margin: 4px 0 14px;
-    font-size: 0.88em;
-    line-height: 1.8;
-}
-.canary-stratified-label {
-    color: var(--text-secondary);
-    font-size: 0.78em;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-right: 8px;
-}
-.canary-chip {
-    display: inline-block;
-    padding: 2px 8px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.85em;
-    color: var(--text-secondary);
-    margin: 2px 1px;
-}
-.canary-chip strong {
-    color: var(--text-primary);
-    margin-left: 4px;
-}
-.canary-stratified-empty {
-    color: var(--text-muted);
-    font-size: 0.88em;
-    font-style: italic;
-    margin: 4px 0 12px;
 }
 
 /* Restraint: no shadows, no gradients, small radii everywhere */
@@ -2147,46 +2105,6 @@ def _short_sha(sha: str | None) -> str:
     return sha[:7]
 
 
-def format_canary_drift_summary(
-    pointer: dict | None,
-    current_run_records: list[InteractionRecord],
-    flags: list[CanaryDriftFlag],
-) -> str:
-    """One-row banner: flag counts + benchmark date + latest canary run date.
-
-    Both dates carry their git_sha so drift attribution is one glance away
-    (`from_sha → to_sha`)."""
-    if not current_run_records:
-        return CANARY_EMPTY_PLACEHOLDER
-    major = sum(1 for f in flags if f.severity == "major")
-    minor = sum(1 for f in flags if f.severity == "minor")
-    current_sha = _short_sha(current_run_records[0].git_sha)
-    latest_run_at = (current_run_records[0].timestamp or "")[:10]
-
-    if pointer is None:
-        return (
-            "<div class='canary-banner'>"
-            f"latest canary run {html.escape(latest_run_at)} on sha "
-            f"<code>{current_sha}</code> · "
-            "<em>no benchmark frozen — use "
-            "<code>uv run python src/canary_runner.py --freeze-baseline</code> "
-            "or the Re-baseline button below.</em>"
-            "</div>"
-        )
-
-    baseline_sha = _short_sha(pointer.get("frozen_git_sha"))
-    frozen_at = (pointer.get("frozen_at") or "")[:10]
-    return (
-        "<div class='canary-banner'>"
-        f"<span class='count-alert'>{major} major</span> · "
-        f"<span class='count-warning'>{minor} minor</span> · "
-        f"benchmark {html.escape(frozen_at)} (<code>{baseline_sha}</code>) → "
-        f"latest canary run {html.escape(latest_run_at)} "
-        f"(<code>{current_sha}</code>)"
-        "</div>"
-    )
-
-
 def _delta_cell(current: float | None, baseline: float | None,
                 *, as_pct: bool = True, lower_is_better: bool = True) -> str:
     """`Δ baseline` cell — colour-coded delta. `lower_is_better=True` for
@@ -2284,12 +2202,12 @@ def _trajectory_cells(
 def format_canary_health_blocks(
     latest_run_records: list[InteractionRecord],
     baseline_records: list[InteractionRecord],
-    all_records: list[InteractionRecord],
-    corpus,
-    flags: list[CanaryDriftFlag],
     post_baseline_runs: list[list[InteractionRecord]] | None = None,
 ) -> str:
-    """Three health sections (Drift / Quality / Latency) — trajectory view.
+    """Stage-latency section, trajectory view. Issue #53 removed the Drift
+    and Quality sections: correctness is the judge's pass/fail verdict now,
+    and latency is the one canary signal that only has meaning against an
+    earlier run.
 
     Each row renders 5 columns: Metric | Benchmark | +1 | +2 | +3, where +N
     is the Nth canary run that happened after the baseline was frozen.
@@ -2318,129 +2236,6 @@ def format_canary_health_blocks(
         for records in post_baseline_runs
     ]
 
-    def _benchmark(fn):
-        return fn(baseline_model) if baseline_model is not None else None
-
-    def _benchmark_with_corpus(fn):
-        return fn(baseline_model, corpus) if baseline_model is not None else None
-
-    def _post_values(fn) -> list:
-        return [fn(m) for m in post_models]
-
-    def _post_values_with_corpus(fn) -> list:
-        return [fn(m, corpus) for m in post_models]
-
-    # Plain-number formatter for drift counts (no scaling).
-    def _fmt_int(v):
-        return EM_DASH_CELL if v is None else str(v)
-
-    # ---- Drift ------------------------------------------------------------
-    # Drift counts compare each post-baseline run vs the baseline. The
-    # benchmark column reads em-dash (drift against itself is structurally 0;
-    # rendering that would be misleading).
-    from collections import Counter
-
-    def _drift_counts_for_run(run_records: list[InteractionRecord]) -> tuple[int, int, int]:
-        """Returns (total, major, minor) drift flags for one post-baseline run."""
-        if not run_records or not baseline_records:
-            return (0, 0, 0)
-        from canary_drift import detect_drift
-        run_flags = detect_drift(run_records, baseline_records, corpus)
-        sev = Counter(f.severity for f in run_flags)
-        return (len(run_flags), sev.get("major", 0), sev.get("minor", 0))
-
-    per_run_drift = [_drift_counts_for_run(r) for r in post_baseline_runs]
-    total_drift_post = [t for t, _, _ in per_run_drift]
-    major_drift_post = [m for _, m, _ in per_run_drift]
-    minor_drift_post = [n for _, _, n in per_run_drift]
-
-    drift_rows = (
-        _canary_metric_row(
-            "Total drift flags",
-            _trajectory_cells(_fmt_int, None, total_drift_post),
-        )
-        + _canary_metric_row(
-            "Major drift",
-            _trajectory_cells(_fmt_int, None, major_drift_post),
-        )
-        + _canary_metric_row(
-            "Minor drift",
-            _trajectory_cells(_fmt_int, None, minor_drift_post),
-        )
-    )
-
-    # ---- Quality ----------------------------------------------------------
-    def _pass_rate(model: DashboardModel | None) -> float | None:
-        if model is None or not model.records:
-            return None
-        return 1 - model.guardrail_rejection_rate
-
-    quality_rows = (
-        _canary_metric_row(
-            "First-attempt pass rate",
-            _trajectory_cells(_fmt_pct, _pass_rate(baseline_model), [_pass_rate(m) for m in post_models]),
-        )
-        + _canary_metric_row(
-            "Outcome accuracy",
-            _trajectory_cells(
-                _fmt_pct,
-                _benchmark_with_corpus(lambda m, c: m.outcome_accuracy(c)),
-                _post_values_with_corpus(lambda m, c: m.outcome_accuracy(c)),
-            ),
-            suffix="vs expected_outcome",
-        )
-        + _canary_metric_row(
-            "Keyword coverage",
-            _trajectory_cells(
-                _fmt_pct,
-                _benchmark_with_corpus(lambda m, c: m.keyword_coverage(c)),
-                _post_values_with_corpus(lambda m, c: m.keyword_coverage(c)),
-            ),
-            suffix="substantive answers",
-        )
-        + _canary_metric_row(
-            "Red-flag rate",
-            _trajectory_cells(
-                _fmt_pct,
-                _benchmark_with_corpus(lambda m, c: m.red_flag_rate(c)),
-                _post_values_with_corpus(lambda m, c: m.red_flag_rate(c)),
-            ),
-            suffix="must_not_appear hits",
-        )
-        + _canary_metric_row(
-            "Gap rate",
-            _trajectory_cells(
-                _fmt_pct,
-                _benchmark(lambda m: m.gap_rate),
-                _post_values(lambda m: m.gap_rate),
-            ),
-        )
-        + _canary_metric_row(
-            "Refusal rate",
-            _trajectory_cells(
-                _fmt_pct,
-                _benchmark(lambda m: m.refusal_rate),
-                _post_values(lambda m: m.refusal_rate),
-            ),
-        )
-        + _canary_metric_row(
-            "Mean classification confidence",
-            _trajectory_cells(
-                lambda v: _fmt_num(v, 3),
-                _benchmark(lambda m: m.mean_classification_confidence),
-                _post_values(lambda m: m.mean_classification_confidence),
-            ),
-        )
-        + _canary_metric_row(
-            "Tool call success rate",
-            _trajectory_cells(
-                _fmt_pct,
-                _benchmark(lambda m: m.tool_call_success_rate),
-                _post_values(lambda m: m.tool_call_success_rate),
-            ),
-        )
-    )
-
     # ---- Latency ----------------------------------------------------------
     def _stage_p95(model: DashboardModel | None, stage: str) -> float | None:
         if model is None or not model.records:
@@ -2465,107 +2260,151 @@ def format_canary_health_blocks(
             ),
         )
 
-    return (
-        _canary_section("Drift", drift_rows)
-        + _canary_section("Quality", quality_rows)
-        + _canary_section("Latency", latency_rows)
+    return _canary_section("Latency", latency_rows)
+
+
+CANARY_SLOW_MULTIPLIER = 1.5  # per-question median latency vs baseline → amber
+
+
+@dataclass(frozen=True)
+class CanaryView:
+    """Everything the Canary tab renders for the latest run (issue #53)."""
+    run_id: str | None
+    verdict_html: str
+    table_html: str
+    latency_html: str
+    question_ids: list[str]  # detail picker choices, failing first
+
+
+def _median_total_ms(records: list[InteractionRecord]) -> dict[str, float]:
+    by_q: dict[str, list[float]] = {}
+    for r in records:
+        by_q.setdefault(r.question, []).append(r.latency_ms.get("total", 0))
+    return {q: statistics.median(v) for q, v in by_q.items()}
+
+
+def build_canary_view(
+    all_records: list[InteractionRecord],
+    *,
+    baseline_path: Path = DEFAULT_BASELINE_PATH,
+    verdicts_dir: Path = DEFAULT_VERDICTS_DIR,
+) -> CanaryView:
+    """The canary as a regression test: verdict first, then one row per
+    question with failing rows first. A question fails when any replicate
+    fails (red); a passing question is amber when its median latency runs
+    over CANARY_SLOW_MULTIPLIER × the frozen baseline's, or when the run was
+    never judged."""
+    runs = _canary_runs_grouped(all_records)
+    if not runs:
+        return CanaryView(None, CANARY_EMPTY_PLACEHOLDER, "", "", [])
+    run_id, latest = runs[-1]
+    canary_only = [r for r in all_records if r.is_canary]
+    baseline_records = resolve_baseline_records(canary_only, baseline_path)
+    post_ids = runs_after_baseline(canary_only, n=CANARY_TRAJECTORY_SLOTS, path=baseline_path)
+    by_run = dict(runs)
+    latency_html = format_canary_health_blocks(
+        latest, baseline_records, [by_run.get(rid, []) for rid in post_ids],
     )
 
+    run_at = (min(r.timestamp for r in latest) or "")[:10]
+    run_label = f"run {html.escape(run_at)} (<code>{html.escape(_short_sha(latest[0].git_sha))}</code>)"
+    verdicts = read_run_verdicts(run_id, verdicts_dir)
+    if verdicts is None:
+        verdict_html = (
+            "<div class='canary-banner canary-verdict-amber'>"
+            f"Latest {run_label} is not judged. Run "
+            f"<code>uv run python src/canary_runner.py --judge-run {html.escape(run_id)}</code>"
+            "</div>"
+        )
+        return CanaryView(run_id, verdict_html, "", latency_html, [])
 
-def format_canary_stratified(flags: list[CanaryDriftFlag], corpus) -> str:
-    """Stratified summary chips: drift counts grouped three ways — by
-    expected_outcome, by category, and by drift kind. Lets the operator scan
-    'where is drift concentrated?' before scrolling cards. Renders an
-    empty-state line when no drift fired."""
-    if not flags:
-        return (
-            "<div class='canary-stratified-empty'>"
-            "No drift this run."
+    current_ms = _median_total_ms(latest)
+    baseline_ms = _median_total_ms(baseline_records)
+
+    def _is_slow(v: QuestionVerdict) -> bool:
+        cur, base = current_ms.get(v.question), baseline_ms.get(v.question)
+        return bool(cur is not None and base and cur > CANARY_SLOW_MULTIPLIER * base)
+
+    failing = [v for v in verdicts if not v.passed]
+    slow = [v for v in verdicts if v.passed and _is_slow(v)]
+    if failing:
+        ids = ", ".join(html.escape(v.question_id) for v in failing)
+        verdict_html = (
+            "<div class='canary-banner canary-verdict-red'>"
+            f"<strong>{len(failing)} of {len(verdicts)} questions fail</strong>: {ids} · {run_label}"
+            "</div>"
+        )
+    elif slow:
+        ids = ", ".join(html.escape(v.question_id) for v in slow)
+        verdict_html = (
+            "<div class='canary-banner canary-verdict-amber'>"
+            f"<strong>All {len(verdicts)} questions pass</strong>, {len(slow)} slow: {ids} · {run_label}"
+            "</div>"
+        )
+    else:
+        verdict_html = (
+            "<div class='canary-banner canary-verdict-green'>"
+            f"<strong>All {len(verdicts)} questions pass</strong> · {run_label}"
             "</div>"
         )
 
-    summary = stratified_summary(flags, corpus)
-    by_outcome = summary["by_outcome"]
-    by_category = summary["by_category"]
-    by_kind = summary["by_drift_kind"]
-
-    def _chips(items):
-        return " · ".join(
-            f"<span class='canary-chip'>{html.escape(str(k))} <strong>{v}</strong></span>"
-            for k, v in sorted(items, key=lambda x: -x[1])
-        ) or "—"
-
-    return (
-        "<div class='canary-stratified'>"
-        f"<div><span class='canary-stratified-label'>By outcome:</span> {_chips(by_outcome.items())}</div>"
-        f"<div><span class='canary-stratified-label'>By category:</span> {_chips(by_category.items())}</div>"
-        f"<div><span class='canary-stratified-label'>By kind:</span> {_chips(by_kind.items())}</div>"
-        "</div>"
-    )
-
-
-def format_canary_drift_card(flag: CanaryDriftFlag) -> str:
-    """One drift-flag card. Mirrors `format_flag_card` styling but reads the
-    `CanaryDriftFlag.severity` to pick neon-red (major) vs amber (minor)."""
-    sev = "alert" if flag.severity == "major" else "warning"
-    return (
-        f"<div class='canary-drift-card sev-{sev}'>"
-        f"<div class='canary-drift-headline'>{html.escape(flag.headline)}</div>"
-        f"<div class='canary-drift-detail'>"
-        f"<code>{html.escape(flag.question)}</code> · "
-        f"{html.escape(flag.detail)}</div>"
-        "</div>"
-    )
-
-
-def format_canary_per_question_table(
-    flags: list[CanaryDriftFlag],
-    corpus,
-    *,
-    show_all: bool = False,
-) -> str:
-    """Per-question drift rows. Defaults to drifting-only; ``show_all=True``
-    renders every corpus question with a dim row when no drift fired."""
-    drifting = {f.question for f in flags}
-    flags_by_question: dict[str, list[CanaryDriftFlag]] = {}
-    for f in flags:
-        flags_by_question.setdefault(f.question, []).append(f)
-
+    ordered = sorted(verdicts, key=lambda v: (v.passed, v.question_id))
     rows = []
-    for q in corpus:
-        if not show_all and q.question not in drifting:
-            continue
-        question_flags = flags_by_question.get(q.question, [])
-        if question_flags:
-            top_severity = "major" if any(
-                f.severity == "major" for f in question_flags
-            ) else "minor"
-            kind_summary = ", ".join(sorted({f.kind for f in question_flags}))
-        else:
-            top_severity = "healthy"
-            kind_summary = "—"
+    for v in ordered:
+        cur, base = current_ms.get(v.question), baseline_ms.get(v.question)
+        status = "fail" if not v.passed else ("slow" if _is_slow(v) else "pass")
+        bad = [r for r in v.replicates if not r.passed]
+        reason = bad[0].reason if bad else f"{len(v.replicates)}/{len(v.replicates)} pass"
+        latency = (
+            f"{base / 1000:.1f}s → {cur / 1000:.1f}s" if cur is not None and base
+            else (f"{cur / 1000:.1f}s" if cur is not None else "—")
+        )
         rows.append(
-            f"<tr class='canary-row sev-{top_severity}'>"
-            f"<td><code>{html.escape(q.id)}</code></td>"
-            f"<td>{html.escape(q.question)}</td>"
-            f"<td>{html.escape(q.expected_outcome)}</td>"
-            f"<td>{html.escape(kind_summary)}</td>"
-            f"<td class='canary-sev'>{top_severity}</td>"
+            f"<tr class='status-{status}'>"
+            f"<td class='canary-status'>{status}</td>"
+            f"<td><code>{html.escape(v.question_id)}</code></td>"
+            f"<td>{html.escape(v.question)}</td>"
+            f"<td>{html.escape(reason)}</td>"
+            f"<td class='canary-latency'>{latency}</td>"
             "</tr>"
         )
-    if not rows:
-        msg = (
-            "No canary questions drifted this run."
-            if not show_all else "Empty corpus."
+    table_html = (
+        "<table class='canary-table'><thead><tr>"
+        "<th>Status</th><th>ID</th><th>Question</th><th>Judge</th><th>Latency (baseline → now)</th>"
+        f"</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    )
+    return CanaryView(
+        run_id, verdict_html, table_html, latency_html,
+        [v.question_id for v in ordered],
+    )
+
+
+def format_canary_detail(
+    run_id: str | None,
+    question_id: str | None,
+    *,
+    verdicts_dir: Path = DEFAULT_VERDICTS_DIR,
+) -> str:
+    """Every replicate's answer for one question, with its verdict and reason."""
+    if not run_id or not question_id:
+        return ""
+    verdicts = read_run_verdicts(run_id, verdicts_dir) or []
+    match = next((v for v in verdicts if v.question_id == question_id), None)
+    if match is None:
+        return ""
+    blocks = []
+    for r in match.replicates:
+        status = "pass" if r.passed else "fail"
+        blocks.append(
+            f"<div class='canary-replicate status-{status}'>"
+            f"<div class='canary-replicate-head'>replicate {r.replicate_index} · "
+            f"<strong>{status}</strong> · {html.escape(r.reason)}</div>"
+            f"<div class='canary-replicate-answer'>{html.escape(r.answer)}</div>"
+            "</div>"
         )
-        return f"<div class='canary-empty'>{msg}</div>"
     return (
-        "<table class='canary-table'>"
-        "<thead><tr>"
-        "<th>ID</th><th>Question</th><th>Expected outcome</th>"
-        "<th>Drift kinds</th><th>Severity</th>"
-        "</tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table>"
+        f"<div class='canary-detail-question'><code>{html.escape(match.question_id)}</code> "
+        f"{html.escape(match.question)}</div>" + "".join(blocks)
     )
 
 
@@ -2575,54 +2414,6 @@ def _kb_coverage_entries(records: list[InteractionRecord]) -> list[CoverageEntry
     page-load and refresh."""
     flat = [chunk for r in records for chunk in r.retrieved_chunks]
     return compute_coverage(flat, load_sections())
-
-
-def _build_canary_drift_state(
-    all_records: list[InteractionRecord],
-    *,
-    corpus_path: Path = DEFAULT_CORPUS_PATH,
-    baseline_path: Path = DEFAULT_BASELINE_PATH,
-) -> tuple[
-    list[CanaryDriftFlag],
-    list[InteractionRecord],
-    dict | None,
-    list,
-    list[list[InteractionRecord]],
-]:
-    """Resolve drift between the latest canary run and the frozen baseline.
-
-    Returns ``(flags, latest_run_records, baseline_pointer, corpus,
-    post_baseline_run_records)``. The fifth tuple element (added in #51) is
-    a list of up to CANARY_TRAJECTORY_SLOTS record lists, one per +N run in
-    chronological order — feeds the trajectory view in
-    ``format_canary_health_blocks``. Each can be empty / None on cold
-    start; the caller renders the appropriate placeholder."""
-    try:
-        corpus = load_canaries(corpus_path)
-    except (FileNotFoundError, ValueError):
-        corpus = []
-
-    runs = _canary_runs_grouped(all_records)
-    latest_records: list[InteractionRecord] = runs[-1][1] if runs else []
-
-    pointer = read_baseline(baseline_path)
-    canary_only = [r for r in all_records if r.is_canary]
-    baseline_records = resolve_baseline_records(canary_only, baseline_path)
-
-    # Post-baseline trajectory runs (Session 51 — +1 / +2 / +3).
-    post_run_ids = runs_after_baseline(
-        canary_only, n=CANARY_TRAJECTORY_SLOTS, path=baseline_path,
-    )
-    by_run: dict[str, list[InteractionRecord]] = {}
-    for r in canary_only:
-        if r.run_id in post_run_ids:
-            by_run.setdefault(r.run_id, []).append(r)
-    post_baseline_runs = [by_run.get(rid, []) for rid in post_run_ids]
-
-    flags: list[CanaryDriftFlag] = []
-    if latest_records and baseline_records and corpus:
-        flags = detect_drift(latest_records, baseline_records, corpus)
-    return flags, latest_records, pointer, corpus, post_baseline_runs
 
 
 def _build_flags(model: DashboardModel) -> list[Flag]:
@@ -3213,58 +3004,22 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                                     )
 
             # ---- Canary tab -----------------------------------------------
-            # Drift-focused panel: per-question regression detection against
-            # a frozen golden baseline. Sentinel never auto-runs the canary
-            # batch — operator triggers it via `uv run python src/canary_runner.py`.
+            # Regression test (issue #53): every canary question judged
+            # pass/fail against its expected behaviour. Sentinel never runs
+            # the canary batch; the operator runs `src/canary_runner.py`.
             with gr.Tab("Canary", id=TAB_CANARY):
-                gr.Markdown("<div class='section-header-major'>Canary drift</div>")
-                (
-                    initial_drift_flags,
-                    initial_latest_run,
-                    initial_pointer,
-                    canary_corpus,
-                    initial_post_baseline_runs,
-                ) = _build_canary_drift_state(reader.read())
-
-                canary_banner_md = gr.Markdown(format_canary_drift_summary(
-                    initial_pointer, initial_latest_run, initial_drift_flags
-                ))
-                # Three thematic health blocks per the issue #39 spec —
-                # Drift / Quality / Latency, post-#51 each renders a 5-column
-                # trajectory: Metric | Benchmark | +1 | +2 | +3 (the 3
-                # canary runs that came after the frozen baseline). Sits
-                # immediately under the banner so the operator reads health
-                # before scrolling.
-                initial_baseline_records = resolve_baseline_records(
-                    [r for r in reader.read() if r.is_canary],
-                ) if initial_pointer is not None else []
-                initial_all_records = reader.read()
-                canary_blocks_md = gr.Markdown(format_canary_health_blocks(
-                    initial_latest_run, initial_baseline_records,
-                    initial_all_records, canary_corpus, initial_drift_flags,
-                    post_baseline_runs=initial_post_baseline_runs,
-                ))
-                # Stratified summary chips — drift counts grouped by branch,
-                # category, and kind. Different signal from the blocks (which
-                # are absolute health): chips answer "where is drift
-                # concentrated?", blocks answer "what's the metric value?"
-                canary_stratified_md = gr.Markdown(format_canary_stratified(
-                    initial_drift_flags, canary_corpus,
-                ))
-                canary_drift_md = gr.Markdown(
-                    "\n".join(format_canary_drift_card(f) for f in initial_drift_flags)
-                    if initial_drift_flags
-                    else ""
+                gr.Markdown("<div class='section-header-major'>Canary</div>")
+                initial_canary = build_canary_view(reader.read())
+                canary_run_state = gr.State(initial_canary.run_id)
+                canary_verdict_md = gr.Markdown(initial_canary.verdict_html)
+                canary_table_md = gr.Markdown(initial_canary.table_html)
+                canary_detail_dd = gr.Dropdown(
+                    choices=initial_canary.question_ids,
+                    value=None,
+                    label="Show a question's answers",
                 )
-
-                gr.Markdown("<div class='section-header'>Per-question</div>")
-                with gr.Row():
-                    canary_show_all = gr.Checkbox(
-                        value=False, label="Show all (not just drifting)"
-                    )
-                canary_table_md = gr.Markdown(format_canary_per_question_table(
-                    initial_drift_flags, canary_corpus, show_all=False,
-                ))
+                canary_detail_md = gr.Markdown("")
+                canary_latency_md = gr.Markdown(initial_canary.latency_html)
 
                 # Re-baseline tucked inside a collapsed accordion so accidental
                 # clicks need two deliberate actions (expand + click). Overwriting
@@ -3277,13 +3032,12 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                     gr.Markdown(
                         "<div class='canary-rebaseline-warning'>"
                         "Promotes the <strong>latest canary run</strong> to the "
-                        "new frozen golden baseline. All future drift comparisons "
-                        "will run against this run.<br><br>"
-                        "<strong>Use this only after intentional changes</strong> "
-                        "(KB rewrite, prompt tightening, model upgrade) where you've "
-                        "reviewed the drift and accept the new behaviour as correct. "
-                        "Clicking this on an unintentional regression silently locks "
-                        "in the bug — see <code>LIMITATIONS::P12</code>."
+                        "new frozen baseline. The baseline is only the latency "
+                        "reference; pass/fail is judged against each question's "
+                        "expected behaviour and does not depend on it.<br><br>"
+                        "<strong>Use this after intentional changes</strong> "
+                        "(model upgrade, retrieval change) that legitimately move "
+                        "latency. Re-baselining on an unintended slowdown hides it."
                         "</div>"
                     )
                     with gr.Row():
@@ -3453,34 +3207,9 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
 
             flags_empty_html = "" if flags else FLAGS_EMPTY_PLACEHOLDER
 
-            # Canary panel re-render — re-resolves drift state against the
-            # latest run + frozen baseline. No batch trigger here: canary
-            # runs are operator-driven via the CLI, not auto-refreshed.
-            all_records = reader.read()
-            (
-                drift_flags, latest_run_recs, baseline_pointer, corpus,
-                post_baseline_run_recs,
-            ) = _build_canary_drift_state(all_records)
-            canary_banner_html = format_canary_drift_summary(
-                baseline_pointer, latest_run_recs, drift_flags,
-            )
-            canary_baseline_recs = (
-                resolve_baseline_records([r for r in all_records if r.is_canary])
-                if baseline_pointer is not None else []
-            )
-            canary_blocks_html = format_canary_health_blocks(
-                latest_run_recs, canary_baseline_recs,
-                all_records, corpus, drift_flags,
-                post_baseline_runs=post_baseline_run_recs,
-            )
-            canary_stratified_html = format_canary_stratified(drift_flags, corpus)
-            canary_drift_html = (
-                "\n".join(format_canary_drift_card(f) for f in drift_flags)
-                if drift_flags else ""
-            )
-            canary_table_html = format_canary_per_question_table(
-                drift_flags, corpus, show_all=False,
-            )
+            # Canary panel re-render (issue #53). No batch trigger here:
+            # canary runs are operator-driven via the CLI.
+            canary_view = build_canary_view(reader.read())
 
             return [
                 f"<div class='page-meta'>{format_header(source, new_loaded_at)}</div>",
@@ -3498,11 +3227,12 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 format_cluster_panel(read_clusters(CLUSTERS_DEFAULT_PATH)),
                 format_deflection_panel(read_summary("deflection", DEFAULT_SUMMARIES_DIR)),
                 format_kb_coverage_panel(_kb_coverage_entries(new_model.records)),
-                canary_banner_html,
-                canary_blocks_html,
-                canary_stratified_html,
-                canary_drift_html,
-                canary_table_html,
+                canary_view.run_id,
+                canary_view.verdict_html,
+                canary_view.table_html,
+                gr.update(choices=canary_view.question_ids, value=None),
+                "",
+                canary_view.latency_html,
                 # Trends — re-render every chart and its header. Aligned with
                 # `bar_headers` + `bar_charts` dicts which iterate THEMATIC_BLOCKS
                 # in the same order as the build-time pass below.
@@ -3531,30 +3261,22 @@ def build_app(reader: LogReader | None = None, *, autorefresh: bool = True) -> g
                 *feed_drilldowns,
                 *feed_session_states,
                 cluster_md, deflection_md, kb_coverage_md,
-                canary_banner_md,
-                canary_blocks_md,
-                canary_stratified_md,
-                canary_drift_md,
+                canary_run_state,
+                canary_verdict_md,
                 canary_table_md,
+                canary_detail_dd,
+                canary_detail_md,
+                canary_latency_md,
                 *[bar_headers[m] for ms in THEMATIC_BLOCKS.values() for m in ms],
                 *[bar_charts[m] for ms in THEMATIC_BLOCKS.values() for m in ms],
             ],
         )
 
-        # Canary "show all" toggle — re-renders the per-question table with
-        # the toggle's value passed through. Defaults to drifting-only.
-        def _refresh_canary_table(show_all):
-            (drift_flags, _latest, _ptr, corpus, _post) = _build_canary_drift_state(
-                reader.read()
-            )
-            return format_canary_per_question_table(
-                drift_flags, corpus, show_all=bool(show_all),
-            )
-
-        canary_show_all.change(
-            fn=_refresh_canary_table,
-            inputs=[canary_show_all],
-            outputs=[canary_table_md],
+        # Canary detail picker: one question's replicate answers + verdicts.
+        canary_detail_dd.change(
+            fn=lambda run_id, qid: format_canary_detail(run_id, qid),
+            inputs=[canary_run_state, canary_detail_dd],
+            outputs=[canary_detail_md],
         )
 
         # Re-baseline button — promote the latest canary run to the frozen

@@ -22,15 +22,26 @@ testability.
 from __future__ import annotations
 
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from canary_baseline import DEFAULT_BASELINE_PATH, freeze_baseline
 from canary_corpus import DEFAULT_CORPUS_PATH, load_canaries
+from canary_judge import Verdict, judge, shown_answer
+from canary_verdicts import (
+    DEFAULT_VERDICTS_DIR,
+    ReplicateVerdict,
+    format_report,
+    read_run_verdicts,
+    write_run_verdicts,
+)
 from interaction_log import DEFAULT_LOG_PATH, InteractionRecord, LogWriter
+from log_reader import LocalReader
 
 DEFAULT_REPLICATES = 3
+JUDGE_WORKERS = 8  # judge calls in flight; each is one gpt-6.2-sol request
 
 
 def _new_run_id() -> str:
@@ -110,11 +121,14 @@ def run_batch(
     pipeline_factory: Callable[[Any], Any] = _build_default_pipeline,
     freeze_baseline_after: bool = False,
     baseline_path: Path = DEFAULT_BASELINE_PATH,
+    judge_fn: Callable[[InteractionRecord, Any], Verdict] = judge,
+    verdicts_dir: Path = DEFAULT_VERDICTS_DIR,
 ) -> str:
-    """Replay the corpus N replicates per question through one Pipeline.
+    """Replay the corpus N replicates per question through one Pipeline, then
+    judge every replicate (issue #53) and write the run's verdict file.
 
     Returns the ``run_id`` so the CLI can echo it (and so callers driving
-    fix-verification flows can scope their drift comparison to this run)."""
+    fix-verification flows can re-judge this run)."""
     canonical_writer = LogWriter(log_path or DEFAULT_LOG_PATH)
     run_id = _new_run_id()
     canary_writer = _CanaryLogWriter(canonical_writer, run_id=run_id)
@@ -132,10 +146,52 @@ def run_batch(
                 turn_index=replicate_index,
             )
 
+    judge_run(
+        run_id,
+        corpus_path=corpus_path,
+        log_path=log_path or DEFAULT_LOG_PATH,
+        judge_fn=judge_fn,
+        verdicts_dir=verdicts_dir,
+    )
+
     if freeze_baseline_after:
         from pipeline import GIT_SHA
         freeze_baseline(run_id, frozen_git_sha=GIT_SHA, path=baseline_path)
     return run_id
+
+
+def judge_run(
+    run_id: str,
+    *,
+    corpus_path: Path = DEFAULT_CORPUS_PATH,
+    log_path: Path = DEFAULT_LOG_PATH,
+    judge_fn: Callable[[InteractionRecord, Any], Verdict] = judge,
+    verdicts_dir: Path = DEFAULT_VERDICTS_DIR,
+) -> Path:
+    """Judge every replicate of a logged canary run and write its verdict
+    file. Also back-fills runs logged before the judge existed. Records whose
+    question is no longer in the corpus are skipped: there is nothing to
+    grade them against."""
+    corpus = {q.question: q for q in load_canaries(corpus_path)}
+    records = [
+        r for r in LocalReader(log_path).read()
+        if r.is_canary and r.run_id == run_id and r.question in corpus
+    ]
+    ordered = sorted(records, key=lambda r: (corpus[r.question].id, r.replicate_index or 0))
+    with ThreadPoolExecutor(JUDGE_WORKERS) as pool:
+        verdicts = list(pool.map(lambda r: judge_fn(r, corpus[r.question]), ordered))
+    rows = []
+    for r, verdict in zip(ordered, verdicts):
+        q = corpus[r.question]
+        rows.append(ReplicateVerdict(
+            question_id=q.id,
+            question=q.question,
+            replicate_index=r.replicate_index or 0,
+            passed=verdict.passed,
+            reason=verdict.reason,
+            answer=shown_answer(r),
+        ))
+    return write_run_verdicts(run_id, rows, verdicts_dir)
 
 
 def main() -> None:
@@ -156,13 +212,22 @@ def main() -> None:
         "--freeze-baseline", action="store_true",
         help="Promote the just-completed run to the frozen golden baseline.",
     )
+    parser.add_argument(
+        "--judge-run", metavar="RUN_ID",
+        help="Judge an already-logged run instead of replaying the corpus.",
+    )
     args = parser.parse_args()
+    if args.judge_run:
+        judge_run(args.judge_run, corpus_path=args.corpus)
+        print(format_report(read_run_verdicts(args.judge_run)))
+        return
     run_id = run_batch(
         replicates=args.replicates,
         corpus_path=args.corpus,
         freeze_baseline_after=args.freeze_baseline,
     )
     print(f"Canary run complete: run_id={run_id}")
+    print(format_report(read_run_verdicts(run_id)))
     if args.freeze_baseline:
         print(f"Baseline frozen to {DEFAULT_BASELINE_PATH}")
 

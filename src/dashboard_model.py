@@ -239,59 +239,6 @@ class DashboardModel:
             counts[r.branch] = counts.get(r.branch, 0) + 1
         return {b: c / len(fired) for b, c in sorted(counts.items())}
 
-    def outcome_accuracy(self, corpus) -> float | None:
-        """Fraction of canary records whose derived outcome matches the corpus's
-        ``expected_outcome`` for the same question text. Headline correctness
-        signal post-#45; replaces the pre-#45 ``branch_match_rate`` (which
-        asserted mechanism — which branch fired — instead of outcome quality)."""
-        from canary_outcome import derive_outcome
-        by_question = {q.question: q for q in corpus}
-        relevant = [r for r in self.records if r.question in by_question]
-        if not relevant:
-            return None
-        hits = sum(
-            1 for r in relevant
-            if derive_outcome(r, by_question[r.question]) == by_question[r.question].expected_outcome
-        )
-        return hits / len(relevant)
-
-    def keyword_coverage(self, corpus) -> float | None:
-        """Mean per-record keyword coverage across canary records whose corpus
-        question carries ``expected_outcome=='answered_with_substance'`` AND
-        a non-empty ``expected_keywords`` list. Skips other outcomes — a
-        gap-acknowledgement doesn't need keyword coverage; the gap-phrase
-        contract gates correctness via ``derive_outcome`` instead."""
-        from canary_outcome import keyword_hits
-        by_question = {q.question: q for q in corpus}
-        scores: list[float] = []
-        for r in self.records:
-            q = by_question.get(r.question)
-            if q is None:
-                continue
-            if q.expected_outcome != "answered_with_substance":
-                continue
-            matched, total = keyword_hits(r, q)
-            if total == 0:
-                continue
-            scores.append(matched / total)
-        if not scores:
-            return None
-        return sum(scores) / len(scores)
-
-    def red_flag_rate(self, corpus) -> float | None:
-        """Fraction of canary records whose answer text contains any
-        per-question ``must_not_appear`` substring. Fabrication-detection
-        signal post-#45 — populated for gap / refused / out-of-scope corpus
-        entries (and for substantive entries where a specific shape would
-        constitute fabrication)."""
-        from canary_outcome import has_red_flag
-        by_question = {q.question: q for q in corpus}
-        relevant = [r for r in self.records if r.question in by_question]
-        if not relevant:
-            return None
-        hits = sum(1 for r in relevant if has_red_flag(r, by_question[r.question]))
-        return hits / len(relevant)
-
     @property
     def tool_call_count(self) -> int:
         """Total number of tool invocations across all records — volume signal

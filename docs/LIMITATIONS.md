@@ -399,7 +399,7 @@ These are not "readme content" failures — the content is correct and accessibl
 
 ### P12 — Canary stale-baseline noise
 
-**Status:** Predicted (Session 42, `#39`).
+**Status:** Predicted (Session 42, `#39`). **Mostly retired by `#53` (2026-11-20):** pass/fail is judged against each question's `expected_behaviour`, not against the baseline, so a stale baseline no longer fires correctness flags. It now only skews the per-question `slow` status (median latency over 1.5× the baseline's) and the stage-latency trajectory. The text below describes the pre-`#53` drift detector.
 
 The canary's drift detector compares each run against a **frozen golden baseline** that the operator manually promotes (CLI `--freeze-baseline` flag or Sentinel "Re-baseline" button). If the operator forgets to re-baseline after an *intentional* change — KB rewrite, prompt tightening, model upgrade — every subsequent canary run will fire major flags until the baseline is refreshed. The drift detector cannot distinguish "regression I should fix" from "intentional change I forgot to acknowledge."
 
@@ -467,19 +467,19 @@ The canary runner replays 50 questions × 3 replicates = 150 sequential `pipelin
 
 ### P13 — Canary corpus drift away from KB content
 
-**Status:** Predicted (Session 42, `#39`).
+**Status:** Predicted (Session 42, `#39`). **Made loud by `#53` (2026-11-20):** each question's `expected_behaviour` states facts from the KB, and the judge fails any answer that does not get them across, so a question whose grounding changed now fails by name instead of drifting silently. Triage of a failing question therefore starts with "is the expectation stale?" before "did the system regress?". C049 (gambling) is the first case where the expectation was right and the system had been wrong since May (#60).
 
 The 50 canary questions were curated against the KB as it existed on 2026-05-04. As Alejandro adds projects, publications, or rewrites the KB, the corpus may stop reflecting current content — questions could become unanswerable from the new KB, or new content surfaces could go unprobed.
 
 **Why this is logged but not fixed today:**
 
 - The corpus is small enough (50 entries) to audit manually when the KB changes materially.
-- Loading-time validation (`load_canaries()` checks every `expected_branch` against `branches.REGISTRY`) catches the structural-drift case but not the content-drift case (a question whose answer no longer exists in the KB).
+- Loading-time validation (`load_canaries()` refuses an entry with no `expected_behaviour`) catches the structural case; the judge surfaces the content case as a failing question.
 - The right cadence for a corpus refresh is "after a KB rewrite that changes >20% of section content" — too rare to automate.
 
 **Trip-wires (any one promotes priority):**
 
-1. A canary question's `expected_event_type` no longer matches the system's stable behaviour after a KB rewrite — meaning the corpus is wrong, not the system.
+1. A canary question fails after a KB rewrite and the answer is right for the new KB: the expectation is stale, not the system.
 2. New flagship projects / publications land in the KB and no canary question probes them — content blind spot.
 3. The corpus's branch routing distribution stops reflecting recruiter probe shapes — corpus distribution drifted away from realistic traffic.
 
@@ -487,7 +487,7 @@ The 50 canary questions were curated against the KB as it existed on 2026-05-04.
 
 - Audit the corpus against the current KB state — same line-by-line audit as Session 42's audit pass.
 - Add new questions for new flagship content; replace questions whose grounding has been removed.
-- After audit, **re-baseline** to lock the new "correct" state before the next drift comparison.
+- After audit, re-judge the latest run with `canary_runner.py --judge-run <run_id>` to confirm the updated expectations pass.
 
 **Companion observability:** could compute `canary_questions_per_branch` + `canary_questions_per_kb_file` and display in Sentinel as a small audit panel. Not yet built; would be a cheap formatter on top of `load_canaries()` + `kb_corpus.load_sections()`.
 
@@ -546,7 +546,7 @@ The data is on disk and recoverable. The risk is the half-finished-feature patte
 
 ### P17 — Producer rule conflates branch identity with outcome label (LOGISTICAL / GAP)
 
-**Status:** **Observed** (Session 55, 2026-05-06 baseline re-freeze; first production instance Session 66, 2026-08-19).
+**Status:** **Observed** (Session 55, 2026-05-06 baseline re-freeze; first production instance Session 66, 2026-08-19). **Canary side retired by `#53` (2026-11-20):** the canary no longer reads `event_type`; an LLM judge grades each answer against an expected behaviour, so "Where are you based?" → "Melbourne" passes. `derive_outcome`, `outcome_accuracy` and trip-wires 2 and 3 below went with it. The live-traffic consequence (`gap_rate`, `answered_with_substance_rate` on the Sentinel live tabs) is unchanged and still governed by trip-wire 4.
 
 `event_classifier.classify_event_type(branch, final_answer)` (`src/event_classifier.py:25–28`) makes branch identity canonical for two branches:
 

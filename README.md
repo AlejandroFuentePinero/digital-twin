@@ -127,10 +127,10 @@ graph LR
   subgraph sg_tooling["Operator Tools"]
     sentinel["sentinel.py (dashboard)"]:::tooling
     canary_runner["canary_runner.py"]:::tooling
-    canary_drift["canary_drift.py"]:::tooling
+    canary_judge["canary_judge.py"]:::tooling
     canary_baseline["canary_baseline.py"]:::tooling
     canary_corpus["canary_corpus.py"]:::tooling
-    canary_outcome["canary_outcome.py"]:::tooling
+    canary_verdicts["canary_verdicts.py"]:::tooling
     cluster_gaps["cluster_gaps.py"]:::tooling
     failure_feed["failure_feed.py"]:::tooling
     flag_detector["flag_detector.py"]:::tooling
@@ -236,13 +236,13 @@ digital-twin/
 │   ├── interaction_log.py      # Per-turn enriched log writer
 │   ├── session_state.py        # Per-session contact-flow state
 │   ├── sentinel.py             # Operator dashboard (Gradio)
-│   ├── canary_runner.py        # CLI: replay corpus N times for drift
+│   ├── canary_runner.py        # CLI: replay + judge the canary corpus
 │   └── assets/custom.css       # UI theme
 ├── data/
 │   ├── profile.md              # Always-on Frame (~2k tokens)
 │   ├── knowledge_base/         # Substance — RAG'd on demand
 │   ├── readmes/                # Tool-only project docs (29 entries)
-│   ├── canaries/               # Drift-detection corpus + baseline
+│   ├── canaries/               # Canary corpus, latency baseline, verdicts
 │   └── logs/                   # JSONL interaction + contact logs
 ├── docs/
 │   ├── MAP.md                  # Auto-generated system map
@@ -274,7 +274,7 @@ Conventions live in [`docs/TESTING.md`](./docs/TESTING.md): one matching `test_<
 
 A 149-question evaluation set in [`eval/tests.jsonl`](./eval/tests.jsonl) covers seven question categories (direct fact, temporal, comparative, numerical, relationship, spanning, holistic). Retrieval metrics: MRR, nDCG, keyword coverage. Answer metrics: LLM-as-judge on accuracy, completeness, relevance.
 
-A separate **canary corpus** of 50 probe questions (`data/canaries/corpus.json`) is replayed N times via `canary_runner.py` to detect drift between releases. Canary records share the live log file and are surfaced via a dedicated tab in the operator dashboard.
+A separate **canary corpus** of 50 probe questions (`data/canaries/corpus.json`) is replayed N times via `canary_runner.py` as a regression test: an LLM judge grades every answer pass or fail against the question's expected behaviour, and a question passes only when all its replicates do. Canary records share the live log file and are surfaced via a dedicated tab in the operator dashboard.
 
 ## Architecture decisions
 
