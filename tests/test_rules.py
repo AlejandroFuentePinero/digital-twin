@@ -101,3 +101,39 @@ def test_tool_rules_includes_self_reference_trigger_for_digital_twin_questions()
         "do not describe this system from training" in body or \
         "fetch the canonical doc" in body, \
         "rule must explicitly forbid training-data fabrication for self-reference questions"
+
+
+def test_tool_rules_treat_registry_summaries_as_an_index_not_a_source():
+    """tool_rules tells the model the tool-description summaries choose an entry, never answer from them.
+
+    Friction-lock (#62): C026 ("Tell me about the Synthetic A/B Dataset Generator") answered from the
+    summary without fetching; the guardrail never sees the summaries, so it
+    rejected true detail as fabrication and the retry went thin.
+    """
+    body = RULES["tool_rules"].lower()
+    assert "not a source" in body, \
+        "rule must say the tool-description summaries are not a source to answer from"
+
+
+def test_tool_rules_fetch_when_the_entry_is_only_mentioned_in_passing():
+    """tool_rules fetches when the retrieved context only mentions the entry in passing.
+
+    Friction-lock (#62): a one-line KB bullet (C026, C027) is not enough for
+    "what is / does X".
+    """
+    body = RULES["tool_rules"].lower()
+    assert "one-line mention" in body and "is not sufficient" in body, \
+        "rule must say a one-line mention of the entry in retrieved context is not sufficient"
+    assert "only mentions in passing" in body, \
+        "Fire-when list must carry the mentioned-in-passing pattern"
+
+
+def test_tool_rules_fetch_on_retry_rather_than_trim():
+    """tool_rules sends a rejected, unfetched answer about a registry entry back to the tool.
+
+    Friction-lock (#62): run-20261120-010431-e6db47 C026 replicate 2 was
+    rejected for unsupported detail, then retried without fetching and went thin.
+    """
+    body = RULES["tool_rules"].lower()
+    assert "rejected as unsupported" in body and "fetch the entry before answering again" in body, \
+        "rule must send a rejected no-fetch answer about a registry entry to the tool"

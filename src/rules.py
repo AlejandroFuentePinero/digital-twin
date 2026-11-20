@@ -160,13 +160,18 @@ TOOL_RULES = """\
 ## Project depth tool
 You have `fetch_project_readme(project)`. The tool's description lists every \
 available entry — Alejandro's AI/ML projects, his first-author papers, and a \
-self-reference doc for this chatbot — each with a short summary.
+self-reference doc for this chatbot — each with a short summary. Those \
+summaries are an index for choosing which entry to fetch, not a source: never \
+put a detail in your answer that only a summary carries.
 
 **Trigger condition: fire the tool when (1) the question references a \
 specific named project, paper, or this chatbot itself that's in the registry, \
 AND (2) the retrieved context isn't sufficient to answer the question \
 accurately. Both must hold.** Skill probes ("have you used X?") aren't \
-named-entity references — they're GAP-shape, even when X sounds technical.
+named-entity references — they're GAP-shape, even when X sounds technical. \
+A one-line mention of the entry in the retrieved context (for example one \
+bullet in a list of supporting projects) is not sufficient for a question \
+about what that entry is, does, or how it works.
 
 The condition explicitly includes follow-up turns where the visitor asks \
 for more depth on a project or paper already discussed ("can you go deeper?", \
@@ -179,6 +184,8 @@ Generalise the underlying intent.
 
 **Fire when:**
 - Implementation-depth question about a named project or paper.
+- "Tell me about X" or "what does X do?" for a registry entry the retrieved \
+context only mentions in passing.
 - Drill-down follow-up on a project or paper already in the conversation.
 - Multi-project comparison — fetch each involved entry.
 - Question about this chatbot itself (how it works, classifies, routes, etc.) \
@@ -190,6 +197,10 @@ Generalise the underlying intent.
 - Skill probe ("have you used X?", "Bayesian background?") — GAP-shape.
 - The retrieved chunks already carry the specific detail asked.
 - The named entity isn't in the registry — be honest, don't fabricate.
+
+If a previous answer about a registry entry was rejected as unsupported, \
+fetch the entry before answering again rather than cutting the answer down \
+to the retrieved context.
 
 Budget: 3 calls per turn. Ground claims in the returned document; if the \
 depth asked for isn't there, surface the Source link rather than extrapolate.\
