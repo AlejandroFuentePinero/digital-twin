@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from interaction_log import InteractionRecord
 
 from failure_feed import (
-    FAILURE_MODE_TIER,
     FAILURE_MODES,
     QUESTION_PREVIEW_CHARS,
     FailureRow,
@@ -19,7 +18,6 @@ from failure_feed import (
     classify_failure,
     group_by_session,
     select_failures,
-    tier_for_mode,
 )
 
 
@@ -328,37 +326,3 @@ def test_group_by_session_returns_empty_list_for_empty_input():
     assert group_by_session([]) == []
 
 
-# ----- FAILURE_MODE_TIER (Session 49) ---------------------------------------
-
-
-def test_tier_for_mode_returns_failure_for_strict_failure_modes():
-    """refused / retry-exhausted are strict failures — system delivered
-    nothing or burned its full budget. They live in the Failures sub-section
-    of the Failure Feed."""
-    assert tier_for_mode("refused") == "failure"
-    assert tier_for_mode("retry-exhausted") == "failure"
-
-
-def test_tier_for_mode_returns_outcome_for_shape_modes():
-    """rejected-then-recovered / gap / deflected are system-output shapes
-    worth scanning for patterns but not strict failures (guardrail recovered;
-    correct gap-ack on real gap; correct out-of-scope redirect). They live
-    in the Outcomes sub-section."""
-    assert tier_for_mode("rejected-then-recovered") == "outcome"
-    assert tier_for_mode("gap") == "outcome"
-    assert tier_for_mode("deflected") == "outcome"
-
-
-def test_tier_for_mode_returns_outcome_on_unknown_mode():
-    """Fail-soft: an unrecognised mode shouldn't be flagged as a strict
-    failure. Defaults to 'outcome' so a future mode addition doesn't
-    inadvertently get alert framing."""
-    assert tier_for_mode("nonexistent_mode") == "outcome"
-
-
-def test_failure_mode_tier_partitions_every_failure_mode():
-    """Every entry in FAILURE_MODES has a tier assignment — defends against
-    a future mode addition slipping through without explicit tier framing."""
-    for mode in FAILURE_MODES:
-        assert mode in FAILURE_MODE_TIER, f"missing tier assignment for mode: {mode!r}"
-        assert FAILURE_MODE_TIER[mode] in {"failure", "outcome"}

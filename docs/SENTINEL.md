@@ -15,10 +15,28 @@ This is the single source of truth for *what each metric means* and *what to do 
 1. **Summary**, above every tab: a one-sentence verdict, then the newest turn's age, the turns in the last 7 days, the day files read and when, the log writer's last flush, and any flags. Four cards follow: canary, metrics on alert, failures in the last 7 days, sections never retrieved. Each opens its tab. The metrics card counts the rows the Metrics table marks, over every window.
 2. **Metrics:** one table, status first, a column per window (7 days, 30 days, 90 days, all time, each with its turn count). Picking a row opens its detail window: what it measures, how it is marked, and the same figure for each branch with the turns behind each value (this replaces the Trends tab).
 3. **Canary:** the verdict, every run since the baseline (questions and answers passing, median per question, p95 total and per stage), the latest run by category, then the questions table with failing rows shaded; picking a question shows its three answers.
-4. **Failures:** counts per kind for the chosen window, filters (window, branch, kind, search), every failing turn worst kind first then newest (no cap), and a detail window with the attempts, guardrail feedback, retrieved sections, tool calls, latency and the whole session. A turn that failed before the retry loop (#64) shows as refused with no attempts and a "Failed before the attempts" line naming the stage and the error. Gap clusters and the deflection summary follow.
-5. **Coverage:** every knowledge-base section with its retrievals, sortable and filterable.
+4. **Failures:** counts per kind for the chosen window, filters (window, branch, kind, search), every failing visitor turn worst kind first then newest (no cap), and a detail window with the attempts, guardrail feedback, the logged event type and the judged outcome, retrieved sections, tool calls, latency and the whole session. Kinds, worst first: refused (logged), error (judged), retry exhausted and rejected then recovered (from the attempts), did not know and declined (judged), not yet judged. A turn that failed before the retry loop (#64) shows as refused with no attempts and a "Failed before the attempts" line naming the stage and the error. Gap clusters and the deflection summary follow; they still read the logged `event_type` over every live turn (`LIMITATIONS::P17`).
+5. **Coverage:** every knowledge-base section with its retrievals by visitor turns, sortable and filterable.
 
 The page model (`sentinel.build_page`) holds every figure as plain data; `scripts/sentinel_recompute.py` reproduces them from the raw day files without importing `src/`.
+
+### Visitors, deploy checks and test stubs (#63)
+
+Every live turn is one of three kinds, and **every figure on the Metrics, Failures and Coverage tabs counts visitors only**:
+
+- **Deploy check:** a turn within 60 minutes of the first turn of its deploy (`git_sha`). These are the owner's post-deploy checks. In the production log at 2026-11-20 they were 99 of 167 turns. Worked example: a deploy's first turn at 09:00 and another at 09:45 are checks; a turn at 10:05 is a visitor.
+- **Test stub:** a turn the twin answered with no retrieval and a total under 50 ms (the five hand-written records of 2026-05-07). A turn that failed fast is a visitor's failure, never a stub.
+- **Visitor:** everything else, including turns with no `git_sha`.
+
+The summary says how many checks and stubs were left out. A fifth card shows the **last deploy check**: its deploy, how long ago, and its turns answered of turns sent (answered: some attempt was accepted), red when any turn went unanswered. The owner confirms the 60-minute rule against his own sessions before relying on it.
+
+### Outcomes read from the answer (#63)
+
+The logged `event_type` follows the branch for GAP and LOGISTICAL turns (`LIMITATIONS::P17`). Sentinel reads the outcome from the answer instead: on a production run, the **outcome judge** (`src/outcome_judge.py`, `gpt-6.2-sol` like the canary judge) reads each live turn's final answer once (the accepted attempt, or the canned refusal) and labels it **answered**, **declined**, **did not know**, **error** or **test stub**. An honest "he has not done that" is answered. A turn that failed before the retry loop (#64) is an error without a model call.
+
+Labels are cached in `data/logs/outcome_judgements.jsonl` (gitignored), one line per turn keyed by the record's timestamp and session, so each turn is judged once (about 170 calls for the log to date, a few per refresh after that) and nothing the twin logs changes. A turn the judge could not label is not cached: it shows as **not yet judged**, the summary says how many failed and why (red), and the next production run tries again. A `--local` run never calls the judge; it reads whatever labels the cache holds.
+
+Calibration (2026-11-20): one pass over the 167 production turns the #61 audit labelled by hand agreed on 159 (153 of 161 without borderline cases); the logged `event_type` agreed on 119. Details in `LIMITATIONS::P17`.
 
 Companion to:
 - [`ADR-0003`](./adr/0003-classify-then-route.md) — Operational risks section.
@@ -51,27 +69,27 @@ When a Tier A metric goes red OR a Tier B metric fires a shift alert, the matchi
 
 #### `answered_with_substance_rate` (Tier B)
 
-- **Definition:** `count(event_type == "answered") / total`.
-- **What it measures:** the share of turns the producer classified as substantive answers. Completes the 4-bucket Outcome partition: answered + gap + deflected + refused = 100%.
+- **Definition (#63):** `count(judged outcome == "answered") / count(judged visitor turns)`. Unjudged turns are left out and counted on the "Not yet judged" row.
+- **What it measures:** the share of visitor turns whose answer the outcome judge read as answered, an honest "he has not done that" included.
 - **What it proxies:** the system's "delivery rate" of substantive content. Falling sharply ⇒ shift toward gaps / deflections / refusals; rising sharply ⇒ traffic shape pulled toward answerable shapes.
-- **Source signal:** producer's `event_type` value, read directly.
+- **Source signal:** the judged outcome (see "Outcomes read from the answer" above). Before #63 it was the producer's `event_type`, which follows the branch.
 - **Tier B alerting:** shift fires on relative change between (7d, 30d) and (30d, 90d) windows; ≥7% warning, ≥15% alert. No absolute target — substance share depends on traffic mix.
 
 #### `gap_rate` (Tier B)
 
-- **Definition:** `count(event_type == "gap") / total`.
-- **What it measures:** the share of turns where the system either acknowledged it didn't have the information (canonical gap phrase) or produced a structured gap-aware response about an absent skill (broader-skill reframe + active-learning).
-- **What it proxies:** KB / skill-coverage. Rising `gap_rate` ⇒ recruiters are probing skills the system can't speak to with substance.
-- **Source signal:** the producer (`pipeline.py` → `event_classifier.classify_event_type`) emits `event_type='gap'` for every GAP-branch turn (branch policy) and for any non-GAP turn whose answer carries the canonical `GAP_PHRASE`. `LogReader` smart-normalizes pre-v4 records carrying the gap phrase so historical records read consistently. No proxies, no `knew_answer` reads.
+- **Definition (#63):** `count(judged outcome == "did not know") / count(judged visitor turns)`.
+- **What it measures:** the share of visitor turns whose answer said it did not have the information asked for. A gap-aware answer about an absent skill is answered, not a gap.
+- **What it proxies:** KB coverage. Rising `gap_rate` ⇒ visitors ask for facts the knowledge base does not hold.
+- **Source signal:** the judged outcome. Before #63 it was `event_type='gap'`, which the producer sets for every GAP-branch turn whatever the answer (`LIMITATIONS::P17`). The `gap_rate_jump` flag reads the judged rate too; the gap clusters still read the logged label.
 - **Tier B alerting:** shift-on-band, no absolute threshold. The pre-#48 healthy ≤10% / warning ≤15% bands were calibrated against a pre-#42 proxy that under-counted gaps; honest post-#42 gap rate predicts ~44% on healthy traffic, with no normative target. Shift framing is the right one — operator drills into Cluster Gaps when a sharp shift fires.
 - **Routing-vs-coverage attribution:** a "gap" can also be a *routing* failure (a TECHNICAL question classified to GENERIC may emit the gap phrase even though the README the model needed sits in the tool registry). Drill into Failure Feed to attribute.
 
 #### `deflection_rate` (Tier B)
 
-- **Definition:** `count(event_type == "deflected") / total`.
-- **What it measures:** the share of turns where the system politely redirected an out-of-scope question (general coding help, trivia, opinions) instead of answering.
+- **Definition (#63):** `count(judged outcome == "declined") / count(judged visitor turns)`.
+- **What it measures:** the share of visitor turns where the system politely redirected an out-of-scope question (general coding help, trivia, opinions) instead of answering. A logistical answer ("Where does he live?" → "Melbourne") is answered, not declined.
 - **What it proxies:** scope-discipline + recruiter-traffic shape. Rising rate ⇒ more out-of-scope traffic, or the routing is sending more questions through LOGISTICAL / GENERIC than usual. Falling to zero on healthy traffic ⇒ suspect the producer rule has drifted (the static prompt-drift test in `tests/test_composer.py` is the forcing function for the prompt↔producer contract).
-- **Source signal:** the producer emits `event_type='deflected'` for every LOGISTICAL-branch turn (branch policy) and for any non-LOGISTICAL turn whose answer begins with one of the canonical phrases in `rules.DEFLECTION_MARKERS`.
+- **Source signal:** the judged outcome. Before #63 it was `event_type='deflected'`, which the producer sets for every LOGISTICAL-branch turn and for any other turn whose answer begins with one of `rules.DEFLECTION_MARKERS`.
 - **Tier B alerting:** shift-on-band. No absolute target — depends on traffic mix.
 
 #### `refusal_rate` (Tier A)
@@ -242,7 +260,7 @@ Flags are named in the summary line above every tab ("No flags raised" when none
 
 ### `gap_rate_jump`
 
-- **Definition:** `current_window.gap_rate - prior_window.gap_rate > FLAG_GAP_RATE_JUMP_THRESHOLD` (default 0.3, i.e. 30 percentage points). Both windows are 7 days; absolute pp delta matches the codebase's `wow_delta` convention.
+- **Definition:** `current_window.gap_rate - prior_window.gap_rate > FLAG_GAP_RATE_JUMP_THRESHOLD` (default 0.3, i.e. 30 percentage points). Both windows are 7 days; absolute pp delta matches the codebase's `wow_delta` convention. Since #63 both are the judged gap rate over visitor turns, the figure on the Metrics tab; a week with no judged turn raises no flag.
 - **What it measures:** a large week-over-week jump in gap rate.
 - **What it proxies:** KB / routing regression. A 30pp jump is intentionally a high bar — the Trend Explorer covers smaller movements; flags are *anomalies*.
 - **Cold-start guard:** when the prior 7-day window has zero records, no flag fires. Fresh deployments don't flag on a phantom baseline.

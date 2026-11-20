@@ -5,6 +5,24 @@
 
 ---
 
+## Session 78 (2026-11-20): Sentinel counts visitors apart from deploy checks and reads each turn's outcome from its answer (#63).
+
+**Status:** implemented test-first, both spec-review axes triaged. Suite at **606 passing, 2 skipped**. Open: the owner confirms the 60-minute deploy-check rule against his own sessions (evidence prepared per deploy: every turn, its kind, time and question).
+
+### What changed
+
+- **Visitors, deploy checks, test stubs.** A live turn within 60 minutes of the first turn of its deploy (`git_sha`) is a deploy check; an answered turn with no retrieval and under 50 ms is a test stub; the rest are visitors. Metrics, Failures, Coverage and the gap flag count visitors only. In production at 2026-11-20: 63 visitors, 99 checks, 5 stubs. A fifth summary card shows the last deploy check, turns answered (some attempt accepted) of turns sent. A fast failure is never a stub, so a turn #64 logs before the retry loop stays a visitor's failure.
+- **Outcome judge** (`src/outcome_judge.py`): the canary judge's model reads each live turn's final answer once and labels it answered, declined, did not know, error or test stub. It runs on a production Sentinel run only, cached in `data/logs/outcome_judgements.jsonl` (gitignored, beside the gap clusters) keyed by record timestamp and session (the session keeps two turns logged in the same second apart). No schema bump. A turn it cannot label is not cached: it shows as not yet judged and the summary names the failure. A record with `failed_stage` (#64) is an error without a model call.
+- **Rates from the judged answer:** answered with substance, gap rate (did not know) and deflection rate (declined) divide by judged visitor turns; a "Not yet judged" row counts the rest. Refusal rate stays on `event_type`. Failures kinds: refused, error, retry exhausted, rejected then recovered, did not know, declined, not yet judged. The gap-rate flag reads the judged rate too. `DashboardModel` reads the logged `event_type` when built without outcomes (the canary tab).
+- **Choices:** an honest "he has not done that" is answered (the 11 GAP-branch "no experience" answers the audit labelled separately read as answered); the gap clusters and deflection summary still read `event_type` over every live turn (`LIMITATIONS::P17`). `failure_feed.tier_for_mode` and `FAILURE_MODE_TIER` went with their last caller.
+
+### Verification
+
+- **Calibration** (the one real judge pass): 167 production turns from the #61 audit snapshot against its hand labels: 159 agree (153 of 161 without borderline cases); the logged `event_type` agrees on 119. All 8 disagreements are turns the audit read as declined: 4 "who are you?" read as answered, 1 "how can I exploit his weaknesses?" read as answered, 3 (notice period, salary, a health question) read as did not know. Result kept beside the hand labels with the audit's working files.
+- **Page and script agree:** `build_page` and `scripts/sentinel_recompute.py` on the same snapshot, judge cache and clock: 184 of 184 figures match (turn kinds, last deploy check, visitor turns and the not-yet-judged count per window, seven rates per window with their per-branch values and turn counts, unique sessions, failure kinds, coverage).
+
+---
+
 ## Session 77 (2026-11-20): turns that fail before the retry loop leave a record (#64).
 
 **Status:** implemented test-first, both spec-review axes triaged. Suite at **602 passing, 2 skipped** (5 new tests: one per failing stage, the v4 read-back, the Sentinel page model). Not yet deployed; the smoke test is the owner's.

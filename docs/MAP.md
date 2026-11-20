@@ -180,6 +180,7 @@ graph LR
     flag_detector["flag_detector.py"]:::tooling
     metric_status["metric_status.py"]:::tooling
     module_health["module_health.py"]:::tooling
+    outcome_judge["outcome_judge.py"]:::tooling
     sample_chunks["sample_chunks.py"]:::tooling
     sentinel["sentinel.py"]:::tooling
     summarize_failures["summarize_failures.py"]:::tooling
@@ -242,6 +243,9 @@ graph LR
   log_reader --> interaction_log
   log_reader --> rules
   log_reader --> schema_migrations
+  outcome_judge --> canary_judge
+  outcome_judge --> dashboard_model
+  outcome_judge --> interaction_log
   pipeline --> tool_loop
   pipeline --> branches
   pipeline --> classifier
@@ -266,6 +270,7 @@ graph LR
   sentinel --> flag_detector
   sentinel --> failure_feed
   sentinel --> interaction_log
+  sentinel --> outcome_judge
   sentinel --> kb_corpus
   sentinel --> log_reader
   sentinel --> metric_status
@@ -291,6 +296,7 @@ graph LR
   ingest --> ext_ChromaDB
   ingest --> ext_OpenAI_API
   module_health --> ext_Gradio__UI_
+  outcome_judge --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   retrieval --> ext_ChromaDB
   retrieval --> ext_OpenAI___Anthropic_API__via_LiteLLM_
   retrieval --> ext_OpenAI_API
@@ -341,6 +347,7 @@ graph LR
 | `metric_status.py` | Per-metric thresholds + shift-status + week-over-week deltas — Sentinel's |
 | `module_health.py` | Local Gradio dashboard showing pass/fail status of digital-twin tests. |
 | `openai_params.py` | Parameters every OpenAI chat completion in the pipeline sends (#55). |
+| `outcome_judge.py` | Outcome judge for live turns (issue #63). |
 | `pipeline.py` | Per-turn orchestrator (ADR-0003). |
 | `profile.py` | Always-on profile loader (the Frame, per ADR-0001 / ADR-0003). |
 | `retrieval.py` | Retrieval helpers — embedding, ChromaDB query, merge, rewrite, rerank, format. |

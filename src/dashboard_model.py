@@ -11,7 +11,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from statistics import median, quantiles
-from typing import Callable
+from typing import Callable, Mapping
 
 from interaction_log import InteractionRecord
 
@@ -41,6 +41,11 @@ class DashboardModel:
     # `DashboardModel(records, include_canary=True, only_canary=True)`.
     include_canary: bool = False
     only_canary: bool = False
+    # Judged outcomes (issue #63), ``{outcome_key(record): label}``. When
+    # given, the answered, gap and deflection rates read the label the judge
+    # gave the answer, over the judged turns only; when None (canary, flags)
+    # they read the logged ``event_type``.
+    outcomes: Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
         if self.only_canary:
@@ -57,16 +62,32 @@ class DashboardModel:
         return len(self.records)
 
     @property
-    def gap_rate(self) -> float:
+    def gap_rate(self) -> float | None:
         # Direct read of the producer-emitted signal post-#42 (PRD #41 slice 1).
         # The pre-#42 ``or not r.knew_answer`` proxy is gone — the producer now
         # emits all four EventType values, and LogReader smart-normalizes
-        # pre-v4 records carrying GAP_PHRASE.
-        return self._rate_of(lambda r: r.event_type == "gap")
+        # pre-v4 records carrying GAP_PHRASE. With judged outcomes (#63): the
+        # share of judged turns whose answer said it did not know.
+        return self._outcome_rate("did not know", "gap")
 
     @property
-    def deflection_rate(self) -> float:
-        return self._rate_of(lambda r: r.event_type == "deflected")
+    def deflection_rate(self) -> float | None:
+        return self._outcome_rate("declined", "deflected")
+
+    @property
+    def unjudged_count(self) -> int:
+        """Turns the outcome judge has not labelled yet (0 without outcomes)."""
+        if self.outcomes is None:
+            return 0
+        return sum(1 for r in self.records if outcome_key(r) not in self.outcomes)
+
+    def _outcome_rate(self, label: str, event_type: str) -> float | None:
+        if self.outcomes is None:
+            return self._rate_of(lambda r: r.event_type == event_type)
+        judged = [self.outcomes[k] for r in self.records if (k := outcome_key(r)) in self.outcomes]
+        if not judged:
+            return None
+        return judged.count(label) / len(judged)
 
     @property
     def refusal_rate(self) -> float:
@@ -254,13 +275,14 @@ class DashboardModel:
         return sum(1 for c in all_calls if c.get("status") == "success") / len(all_calls)
 
     @property
-    def answered_with_substance_rate(self) -> float:
+    def answered_with_substance_rate(self) -> float | None:
         """Share of turns the producer classified as a substantive answer.
         Completes the 4-bucket Outcome partition: gap + deflected + refused
         + answered_with_substance = 100%. Tier B per the post-#48 framework
         — shift-detected, not threshold-alerted (substance share is shape,
-        not health)."""
-        return self._rate_of(lambda r: r.event_type == "answered")
+        not health). With judged outcomes (#63): the share of judged turns
+        whose answer the judge read as answered."""
+        return self._outcome_rate("answered", "answered")
 
     @property
     def mean_confidence_by_branch(self) -> dict[str, float]:
@@ -302,6 +324,7 @@ class DashboardModel:
             [r for r in self.records if r.timestamp >= cutoff],
             provided_session_ids=self.provided_session_ids,
             include_canary=True,
+            outcomes=self.outcomes,
         )
 
     def time_series_by_day(
@@ -356,7 +379,14 @@ class DashboardModel:
             [r for r in self.records if prior_start <= r.timestamp < prior_end],
             provided_session_ids=self.provided_session_ids,
             include_canary=True,
+            outcomes=self.outcomes,
         )
+
+
+def outcome_key(record: InteractionRecord) -> str:
+    """Key of a turn's judged outcome (#63): its timestamp, with its session
+    to keep two turns logged in the same second apart."""
+    return f"{record.timestamp} {record.session_id}"
 
 
 def _record_date(record: InteractionRecord) -> date:

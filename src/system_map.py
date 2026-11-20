@@ -70,6 +70,7 @@ MODULE_CATEGORY: dict[str, str] = {
     "cluster_gaps": "Tooling",
     "summarize_failures": "Tooling",
     "flag_detector": "Tooling",
+    "outcome_judge": "Tooling",
     "canary_corpus": "Tooling",
     "canary_baseline": "Tooling",
     "canary_judge": "Tooling",

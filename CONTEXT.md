@@ -52,13 +52,26 @@ A soft mapping from KB evidence pattern to claim verb (skill listed + project + 
 A system-prompt rule that triggers on behavioural questions Alejandro has not authorised the agent to answer in his name (e.g. unprompted failure stories, conflict anecdotes). Returns a graceful redirect to live conversation rather than inventing content. Logged with `event_type = "deflected"` so frequency and topic patterns are observable. Distinct from the **Gap phrase** (KB has no info), from a **Gap-aware response** (KB has structured info on a known gap), and from the **Deflection markers** constant (the canonical-phrasing contract used across LOGISTICAL/BEHAVIOURAL/GENERIC out-of-scope redirects).
 
 **Event type**:
-The outcome label the producer (`pipeline.py` → `event_classifier.classify_event_type`) writes per turn — one of `answered`, `gap`, `deflected`, `refused`. The rule is deterministic: refused (no accepted attempt, or a **Pre-loop failure**) → GAP-branch → LOGISTICAL-branch → fallback on **Gap phrase** in answer → fallback on **Deflection markers** in answer → answered. Single source of truth for outcome shape across the **Sentinel** surfaces. Pre-#42 (schema v3 and earlier) the producer only emitted `answered` / `refused`; `LogReader` smart-normalizes pre-v4 records carrying `GAP_PHRASE` to `event_type='gap'` so historical reads stay consistent.
+The outcome label the producer (`pipeline.py` → `event_classifier.classify_event_type`) writes per turn: one of `answered`, `gap`, `deflected`, `refused`. The rule is deterministic: refused (no accepted attempt, or a **Pre-loop failure**) → GAP-branch → LOGISTICAL-branch → fallback on **Gap phrase** in answer → fallback on **Deflection markers** in answer → answered. Because it follows the branch for GAP and LOGISTICAL (`LIMITATIONS::P17`), Sentinel no longer reads it for answered, gap or deflection since #63: it reads the **Judged outcome** instead, and keeps the event type only for refusals. Pre-#42 (schema v3 and earlier) the producer only emitted `answered` / `refused`; `LogReader` smart-normalizes pre-v4 records carrying `GAP_PHRASE` to `event_type='gap'` so historical reads stay consistent.
 
 **Sentinel**:
 A local page (`src/sentinel.py` writes `data/logs/sentinel.html` and opens it) for human review of system behaviour. Reads the whole canonical log store (HF Dataset in production, local JSONL in dev) on every run, all or nothing: a failed read shows "Log read failed" and no numbers. Surfaces health metrics with their split by branch, the canary, every failing turn, gap clusters, the deflection summary, knowledge-base coverage and a small set of automatic flags. Run on demand; not deployed. Static since #61 (ADR-0004); before it, a Gradio app.
 
 **Pre-loop failure**:
 A turn whose classifier, retrieval or composer raised before the retry loop (#64). `Pipeline.run` logs one record with `event_type='refused'`, no attempts, `failed_stage` naming the stage, the error type and message, and the latency so far, then re-raises so `app.py` shows the visitor the canned refusal. Before #64 such a turn left no record (LIMITATIONS::O9). Distinct from a refusal inside the retry loop, where every attempt was rejected or raised.
+
+**Deploy check**:
+A live turn within 60 minutes of the first turn of its deploy (`git_sha`): the owner's post-deploy check, not a visitor. Sentinel leaves deploy checks out of every visitor figure and shows the last one on its own (turns answered of turns sent) (#63). A turn with no `git_sha` is never a deploy check.
+_Avoid_: Smoke test (the runbook's procedure; the deploy check is how its turns are recognised in the log)
+
+**Test stub**:
+A live turn the twin answered with no retrieval and a total under 50 ms: a hand-written test record, not a real exchange (five on 2026-05-07). Left out of every Sentinel figure like a **Deploy check**. A turn that failed fast is never a test stub.
+
+**Judged outcome**:
+What a live turn's final answer did, as read by the **Outcome judge**: answered, declined, did not know, error or test stub. Sentinel's answered, gap and deflection rates and the Failures tab's Did not know, Declined and Error kinds come from it (#63). An honest "he has not done that" is answered. A turn not judged yet shows as not yet judged and is left out of those rates.
+
+**Outcome judge**:
+The canary judge's model (`gpt-6.2-sol`, `outcome_judge.py`) reading each live turn's final answer once to give its **Judged outcome**. It runs on a production Sentinel run and caches each label in `data/logs/outcome_judgements.jsonl`, keyed by the record's timestamp and session, so nothing the twin logs changes. A turn that failed before the retry loop (#64) is an error without a model call.
 
 **Branch**:
 One of five orchestration paths the agent selects per turn: `GAP`, `BEHAVIOURAL`, `TECHNICAL`, `GENERIC`, `LOGISTICAL`. Each branch loads its own subset of `profile.md` sections, sets its own `FINAL_K` for retrieval, exposes its own tools (`fetch_project_readme` is wired into `GENERIC`, `GAP`, and `TECHNICAL` per `branches.REGISTRY`; `LOGISTICAL` and `BEHAVIOURAL` are tool-free), and applies its own rule set in the system prompt. Selected by the **Classifier**. A **Pre-loop failure** in the classifier is logged with branch `UNROUTED`, which is not a path.

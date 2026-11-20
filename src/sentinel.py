@@ -57,9 +57,10 @@ from flag_detector import (
     detect_repeat_failure,
 )
 from summarize_failures import DEFAULT_SUMMARIES_DIR, latest_summary_path, read_summary
-from failure_feed import FAILURE_MODE_LABELS, classify_failure, tier_for_mode
-from failure_feed import _SEVERITY_RANK as _FEED_RANK
+from failure_feed import FAILURE_MODE_LABELS
+from dashboard_model import MAX_ATTEMPTS, outcome_key
 from interaction_log import DEFAULT_LOG_PATH, InteractionRecord
+from outcome_judge import DEFAULT_OUTCOMES_PATH, judge_new_turns, read_outcomes
 from kb_corpus import CoverageEntry, compute_coverage, load_sections
 from log_reader import HFLogReader, LocalReader, LogReader, LogReadError, ReadReport, make_log_reader
 from metric_status import (
@@ -88,6 +89,12 @@ MIN_HISTORY_DAYS_FOR_SEMANTIC_DELTA = 14
 CANARY_SPARK_WINDOW = 12
 CANARY_SLOW_MULTIPLIER = 1.5  # per-question median latency vs baseline marks it slow
 CANARY_FULL_RUN = 150  # 50 questions x 3 answers
+
+# A live turn this many minutes or fewer after the first turn of its deploy
+# (git_sha) is the owner's deploy check, not a visitor (#63).
+DEPLOY_CHECK_MINUTES = 60
+# A turn with no retrieval and a total under this many ms is a test stub.
+STUB_MAX_TOTAL_MS = 50
 
 PAGE_PATH = DEFAULT_LOG_PATH.parent / "sentinel.html"
 TEMPLATE_PATH = Path(__file__).with_name("sentinel_page.html")
@@ -206,10 +213,11 @@ def _short_sha(sha: str | None) -> str:
 # no metric name is for orientation only: it never carries a mark.
 METRIC_SPECS: list[tuple[str, list[tuple]]] = [
     ("Outcome", [
-        ("Total interactions",         None,                          lambda m: m.total_interactions, str),
+        ("Visitor turns",              None,                          lambda m: m.total_interactions, str),
         ("Answered with substance",    "answered_with_substance_rate", lambda m: m.answered_with_substance_rate, _fmt_pct),
         ("Gap rate",                   "gap_rate",                    lambda m: m.gap_rate, _fmt_pct),
         ("Deflection rate",            "deflection_rate",             lambda m: m.deflection_rate, _fmt_pct),
+        ("Not yet judged",             None,                          lambda m: m.unjudged_count, str),
         ("Refusal rate",               "refusal_rate",                lambda m: m.refusal_rate, _fmt_pct),
         ("Guardrail rejection rate",   "guardrail_rejection_rate",    lambda m: m.guardrail_rejection_rate, _fmt_pct),
         ("Retry-exhaustion rate",      "retry_exhausted_rate",        lambda m: m.retry_exhausted_rate, _fmt_pct),
@@ -245,10 +253,11 @@ METRIC_SPECS: list[tuple[str, list[tuple]]] = [
 # What each row measures, shown in its detail window. Keys match the labels
 # in METRIC_SPECS exactly (a test pins the two together).
 METRIC_GLOSSARY: dict[str, str] = {
-    "Total interactions": "Every logged turn in the window, deploy checks included.",
-    "Answered with substance": "Share of turns logged as answered. Not yet trustworthy: the twin sets this label from the branch that handled the question, not from reading the answer (#63).",
-    "Gap rate": "Share of turns logged as a gap: the twin said it did not have the information, or answered on the gap branch. Not yet trustworthy: the label follows the branch, not the answer (#63).",
-    "Deflection rate": "Share of turns logged as deflected: the twin redirected a question it treats as out of scope, or answered on the logistical branch. Not yet trustworthy: the label follows the branch, not the answer (#63).",
+    "Visitor turns": "Every visitor turn in the window. Deploy checks (turns within an hour of a deploy's first turn) and test stubs are left out of every figure on this tab.",
+    "Answered with substance": "Share of judged visitor turns whose answer the outcome judge read as answered, including an honest \"he has not done that\". Read from the answer, not from the branch that handled the question.",
+    "Gap rate": "Share of judged visitor turns whose answer said it did not have the information asked for (the judge's \"did not know\").",
+    "Deflection rate": "Share of judged visitor turns whose answer declined a question as out of scope (the judge's \"declined\").",
+    "Not yet judged": "Visitor turns the outcome judge has not labelled yet. They are left out of the three rates above until a production run judges them.",
     "Refusal rate": "Share of turns that ended in the canned refusal: the guardrail rejected all three attempts, or the classifier, retrieval or composer failed before the first attempt.",
     "Guardrail rejection rate": "Share of turns where the guardrail rejected at least one attempt.",
     "Retry-exhaustion rate": "Share of turns that used all three attempts, whether or not the last one was accepted.",
@@ -448,6 +457,17 @@ def ensure_fresh_summaries(
     )
 
 
+def ensure_outcomes_judged(reader: LogReader, path: Path = DEFAULT_OUTCOMES_PATH) -> str | None:
+    """Judge the outcome of every live turn not yet judged (#63); a turn the
+    judge could not label comes back in the message. A failed read is left to
+    build_page, which shows it instead of any figure."""
+    try:
+        records = reader.read()
+    except LogReadError:
+        return None
+    return judge_new_turns(records, path)
+
+
 def _latest_canary_timestamp(records: list[InteractionRecord]) -> str | None:
     canary = [r for r in records if r.is_canary]
     if not canary:
@@ -553,6 +573,45 @@ def _structured_cell(raw, label: str) -> dict | None:
     return None
 
 
+def turn_kinds(live: list[InteractionRecord]) -> list[str]:
+    """``visitor``, ``check`` or ``stub`` for each live turn, in order.
+
+    A stub is an answered turn with no retrieval and a total under
+    STUB_MAX_TOTAL_MS (a turn that failed fast is a real failure). A check is
+    a turn within DEPLOY_CHECK_MINUTES of the first turn of its git_sha.
+    Everything else, turns with no git_sha included, is a visitor."""
+    first: dict[str, datetime] = {}
+    for r in live:
+        t = datetime.fromisoformat(r.timestamp)
+        if r.git_sha and (r.git_sha not in first or t < first[r.git_sha]):
+            first[r.git_sha] = t
+    kinds = []
+    for r in live:
+        if _answered(r) and not r.retrieved_chunks and r.latency_ms.get("total", 0) < STUB_MAX_TOTAL_MS:
+            kinds.append("stub")
+        elif r.git_sha and datetime.fromisoformat(r.timestamp) - first[r.git_sha] <= timedelta(
+                minutes=DEPLOY_CHECK_MINUTES):
+            kinds.append("check")
+        else:
+            kinds.append("visitor")
+    return kinds
+
+
+def _answered(r: InteractionRecord) -> bool:
+    """The visitor got an answer: some attempt was accepted."""
+    return any(a.get("is_acceptable") for a in r.attempts)
+
+
+def _deploy_check_section(checks: list[InteractionRecord]) -> dict | None:
+    """The newest deploy check: its deploy, when it started, turns sent and answered."""
+    if not checks:
+        return None
+    sha = max(checks, key=lambda r: r.timestamp).git_sha
+    turns = [r for r in checks if r.git_sha == sha]
+    return {"sha": _short_sha(sha), "ts": _iso(min(r.timestamp for r in turns)),
+            "sent": len(turns), "answered": sum(_answered(r) for r in turns)}
+
+
 def _metrics_section(model: DashboardModel) -> tuple[list[dict], list[int]]:
     models = [model.for_window(days=d) for _, d in WINDOWS]
     # All time has no earlier window to compare with, so it gets no prior.
@@ -587,7 +646,8 @@ def _metrics_section(model: DashboardModel) -> tuple[list[dict], list[int]]:
                     for wm in models:
                         recs = [r for r in wm.records if r.branch == b]
                         v = METRIC_GETTERS[metric](
-                            DashboardModel(recs, provided_session_ids=model.provided_session_ids)
+                            DashboardModel(recs, provided_session_ids=model.provided_session_ids,
+                                           outcomes=model.outcomes)
                         ) if recs else None
                         values.append({"text": _fmt_metric_value(metric, v), "n": len(recs)})
                     by_branch.append({"branch": b.capitalize(), "values": values})
@@ -599,21 +659,42 @@ def _metrics_section(model: DashboardModel) -> tuple[list[dict], list[int]]:
     return sections, [m.total_interactions for m in models]
 
 
-def _failures_section(live: list[InteractionRecord]) -> list[dict]:
+# Failures tab kinds (#63), worst first. Refused and the attempt-based kinds
+# come from the log; did not know, declined and error from the judged
+# answer; a turn the judge has not labelled yet is "not-judged".
+FAILURE_RANK = {"refused": 0, "error": 1, "retry-exhausted": 2, "rejected-then-recovered": 3,
+                "did-not-know": 4, "declined": 5, "not-judged": 6}
+FAILURE_KINDS = {"refused", "error", "retry-exhausted"}  # the twin gave nothing usable
+_OUTCOME_MODES = {"error": "error", "did not know": "did-not-know", "declined": "declined"}
+
+
+def _failure_mode(r: InteractionRecord, outcome: str | None) -> str | None:
+    """One kind per failing turn, or None for an answered turn."""
+    if r.event_type == "refused":
+        return "refused"
+    if outcome in _OUTCOME_MODES:
+        return _OUTCOME_MODES[outcome]
+    if any(not a.get("is_acceptable", True) for a in r.attempts):
+        return "retry-exhausted" if len(r.attempts) >= MAX_ATTEMPTS else "rejected-then-recovered"
+    return "not-judged" if outcome is None else None
+
+
+def _failures_section(visitors: list[InteractionRecord], outcomes: dict[str, str]) -> list[dict]:
     sessions: dict[str, list[InteractionRecord]] = {}
-    for r in live:
+    for r in visitors:
         sessions.setdefault(r.session_id, []).append(r)
     rows = []
-    for r in live:
-        mode = classify_failure(r)
+    for r in visitors:
+        outcome = outcomes.get(outcome_key(r))
+        mode = _failure_mode(r, outcome)
         if mode is None:
             continue
         turns = sorted(sessions[r.session_id], key=lambda x: (x.turn_index, x.timestamp))
         rows.append({
             "ts": _iso(r.timestamp), "branch": r.branch.capitalize(), "mode": mode,
-            "tier": tier_for_mode(mode), "question": r.question,
+            "tier": "failure" if mode in FAILURE_KINDS else "outcome", "question": r.question,
             "labels": list(r.classifier_labels or []), "confidence": r.classification_confidence,
-            "event": r.event_type,
+            "event": r.event_type, "outcome": outcome,
             "error": f"{r.failed_stage}: {r.error_type}: {r.error_message}" if r.failed_stage else None,
             "attempts": [{"ok": a.get("is_acceptable", True), "answer": a.get("answer", ""),
                           "feedback": a.get("guardrail_feedback", "")} for a in r.attempts],
@@ -621,11 +702,12 @@ def _failures_section(live: list[InteractionRecord]) -> list[dict]:
             "tools": [f"{c.get('name', '')} · {c.get('status', '')}" for c in (r.tool_calls or [])],
             "latency": {k: r.latency_ms.get(k, 0) for k in STAGES},
             "session": [{"turn": t.turn_index, "question": t.question,
-                         "mode": classify_failure(t) or "answered", "self": t is r} for t in turns],
+                         "mode": _failure_mode(t, outcomes.get(outcome_key(t))) or "answered",
+                         "self": t is r} for t in turns],
         })
     # Sentinel's feed order: the worst kind first, newest first within a kind.
     rows.sort(key=lambda x: x["ts"], reverse=True)
-    rows.sort(key=lambda x: _FEED_RANK.get(x["mode"], 99))
+    rows.sort(key=lambda x: FAILURE_RANK[x["mode"]])
     return rows
 
 
@@ -726,7 +808,7 @@ def _kb_coverage_entries(records: list[InteractionRecord]) -> list[CoverageEntry
 
 def _build_flags(model: DashboardModel) -> list[Flag]:
     return [
-        *detect_gap_rate_jump(model.records),
+        *detect_gap_rate_jump(model.records, outcomes=model.outcomes),
         *detect_new_cluster(
             read_clusters(CLUSTERS_DEFAULT_PATH),
             read_cluster_history(CLUSTERS_ARCHIVE_DIR),
@@ -744,6 +826,7 @@ def build_page(
     corpus_path: Path = DEFAULT_CORPUS_PATH,
     clusters_path: Path = CLUSTERS_DEFAULT_PATH,
     summaries_dir: Path = DEFAULT_SUMMARIES_DIR,
+    outcomes_path: Path = DEFAULT_OUTCOMES_PATH,
     batch_messages: list[str] | None = None,
 ) -> dict:
     """Everything the page shows, as plain data. A failed read gives a page
@@ -762,23 +845,29 @@ def build_page(
     except LogReadError as exc:
         return {"failed": str(exc), "source": source, "commands": COMMANDS}
     report = reader.report
-    model = DashboardModel(all_records, provided_session_ids=provided_session_ids)
-    live = model.records
+    live = [r for r in all_records if not r.is_canary]
+    kinds = turn_kinds(live)
+    # Visitor figures only: deploy checks and test stubs are the owner's turns (#63).
+    visitors = [r for r, k in zip(live, kinds) if k == "visitor"]
+    outcomes = read_outcomes(outcomes_path)
+    model = DashboardModel(visitors, provided_session_ids=provided_session_ids, outcomes=outcomes)
     source.update({
         "records": len(live), "files_read": report.files_read,
         "unreadable_lines": report.unreadable_lines, "duplicates": report.duplicates,
         "newest": max((_iso(r.timestamp) for r in live), default=None),
+        "visitors": len(visitors), "checks": kinds.count("check"), "stubs": kinds.count("stub"),
     })
     sections, totals = _metrics_section(model)
     coverage = [{"section": e.section_heading, "file": e.source_file, "count": e.retrieval_count,
-                 "off": e.off_canon} for e in _kb_coverage_entries(live)]
+                 "off": e.off_canon} for e in _kb_coverage_entries(visitors)]
     return {
         "failed": None, "source": source, "commands": COMMANDS,
         "writer": _writer_state(reader),
         "batch_messages": [m for m in (batch_messages or []) if m],
         "flags": [{"headline": f.headline, "detail": f.detail} for f in _build_flags(model)],
         "metrics": sections, "window_labels": WINDOW_LABELS, "window_totals": totals,
-        "failures": _failures_section(live),
+        "deploy_check": _deploy_check_section([r for r, k in zip(live, kinds) if k == "check"]),
+        "failures": _failures_section(visitors, outcomes),
         "canary": _canary_section(all_records, verdicts_dir=verdicts_dir,
                                   baseline_path=baseline_path, corpus_path=corpus_path),
         # Built from production only; a local page does not show them.
@@ -837,9 +926,10 @@ def main(argv: list[str] | None = None) -> Path:
     messages = [
         ensure_fresh_clusters(out_path=CLUSTERS_DEFAULT_PATH, archive_dir=CLUSTERS_ARCHIVE_DIR, reader=reader),
         ensure_fresh_summaries(out_dir=DEFAULT_SUMMARIES_DIR, reader=reader),
+        ensure_outcomes_judged(reader, DEFAULT_OUTCOMES_PATH),
     ] if _production_reader(reader) is not None else []
-    page = build_page(reader, clusters_path=CLUSTERS_DEFAULT_PATH,
-                      summaries_dir=DEFAULT_SUMMARIES_DIR, batch_messages=messages)
+    page = build_page(reader, clusters_path=CLUSTERS_DEFAULT_PATH, summaries_dir=DEFAULT_SUMMARIES_DIR,
+                      outcomes_path=DEFAULT_OUTCOMES_PATH, batch_messages=messages)
     PAGE_PATH.write_text(render(page), encoding="utf-8")
     print(f"Sentinel written to {PAGE_PATH}")
     if not args.no_open:

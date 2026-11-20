@@ -383,6 +383,7 @@ def _page(reader, tmp_path, **kw):
     from sentinel import build_page
 
     kw.setdefault("provided_session_ids", frozenset())
+    kw.setdefault("outcomes_path", tmp_path / "outcomes.jsonl")
     return build_page(
         reader, verdicts_dir=tmp_path / "verdicts", baseline_path=tmp_path / "baseline.json",
         corpus_path=tmp_path / "corpus.json", clusters_path=tmp_path / "clusters.json",
@@ -731,6 +732,7 @@ def _main_env(tmp_path, monkeypatch):
     monkeypatch.setattr(sentinel, "CLUSTERS_DEFAULT_PATH", tmp_path / "clusters.json")
     monkeypatch.setattr(sentinel, "CLUSTERS_ARCHIVE_DIR", tmp_path / "archive")
     monkeypatch.setattr(sentinel, "DEFAULT_SUMMARIES_DIR", tmp_path / "summaries")
+    monkeypatch.setattr(sentinel, "DEFAULT_OUTCOMES_PATH", tmp_path / "outcomes.jsonl")
     opened = []
     monkeypatch.setattr(sentinel.webbrowser, "open", opened.append)
     return sentinel, opened
@@ -770,8 +772,12 @@ def test_main_on_production_reports_a_cache_batch_whose_model_call_failed(tmp_pa
     def model_down(**kw):
         raise RuntimeError("model down")
 
+    import outcome_judge
+
     monkeypatch.setattr(cluster_gaps, "completion", model_down)
     monkeypatch.setattr(summarize_failures, "completion", model_down)
+    monkeypatch.setattr(outcome_judge, "completion", model_down)
+    monkeypatch.setattr(outcome_judge, "JUDGE_RETRY_WAIT_SECONDS", 0)
     monkeypatch.setattr(cluster_gaps.GapClusterer.cluster.retry, "sleep", lambda seconds: None)
     monkeypatch.setattr(summarize_failures.FailureSummarizer.summarize.retry, "sleep", lambda seconds: None)
 
@@ -779,6 +785,7 @@ def test_main_on_production_reports_a_cache_batch_whose_model_call_failed(tmp_pa
 
     assert "hello there" in html
     assert "Summary batch failed: RuntimeError: model down" in html
+    assert "Outcome judge could not label 1 turn (they show as not yet judged): RuntimeError: model down" in html
 
 
 def test_a_failed_contacts_read_gives_the_red_page_too(tmp_path, monkeypatch):
@@ -810,3 +817,184 @@ def test_the_local_log_is_joined_with_local_contacts_even_with_production_creden
 
     assert page["failed"] is None
     production.list_repo_files.assert_not_called()
+
+
+# ---- Visitors, deploy checks and test stubs (issue #63) ----------------------
+
+
+DEPLOY = NOW - timedelta(days=2)
+
+
+def _turn(minutes: float, *, sha: str | None = "sha-new-1", question: str = "q?", session_id: str = "v",
+          turn_index: int = 0, refused: bool = False, chunks=None, total_ms: int = 1000,
+          event_type: str = "answered", branch: str = "GENERIC", answer: str = "ok",
+          start=None) -> InteractionRecord:
+    """A live turn ``minutes`` after ``start`` (default DEPLOY), logged under deploy ``sha``."""
+    attempts = ([{"answer": "no", "is_acceptable": False, "guardrail_feedback": "x"}] * 3 if refused
+                else [{"answer": answer, "is_acceptable": True, "guardrail_feedback": ""}])
+    return InteractionRecord.model_validate({
+        "schema_version": "4", "git_sha": sha,
+        "timestamp": ((start or DEPLOY) + timedelta(minutes=minutes)).isoformat(),
+        "session_id": session_id, "turn_index": turn_index, "question": question,
+        "event_type": "refused" if refused else event_type, "branch": branch,
+        "classifier_labels": [branch], "classification_confidence": 0.9, "attempts": attempts,
+        "retrieved_chunks": [{"source_file": "skills.md", "section_heading": "Cloud"}] if chunks is None else chunks,
+        "tool_calls": [],
+        "latency_ms": {"classifier": 1, "retrieval": 1, "generation": 1, "guardrail": 1, "total": total_ms},
+        "knew_answer": True,
+    })
+
+
+def test_turns_within_an_hour_of_a_deploys_first_turn_are_checks_and_stubs_are_set_aside(tmp_path):
+    """Worked example: a deploy's first turn at 0 min and one at 59 min are
+    the owner's check; a turn at 61 min is a visitor; a turn with no
+    retrieval and a 4 ms total is a test stub. Only the visitor counts."""
+    records = [
+        _turn(0, session_id="c", question="check one"),
+        _turn(59, session_id="c", turn_index=1, question="check two"),
+        _turn(61, session_id="v", question="visitor"),
+        _turn(5, sha=None, session_id="stub", chunks=[], total_ms=4, question="smoke"),
+    ]
+
+    page = _page(_Reader(records), tmp_path)
+
+    assert (page["source"]["visitors"], page["source"]["checks"], page["source"]["stubs"]) == (1, 2, 1)
+    assert page["window_totals"] == [1, 1, 1, 1]
+    assert _row(page, "Visitor turns")["cells"][3]["text"] == "1"
+
+
+def test_a_fast_failed_turn_with_no_retrieval_is_a_visitor_failure_not_a_stub(tmp_path):
+    """A turn that failed early (no accepted answer, no retrieval, 4 ms) is
+    a real visitor's failure; only answered turns can be test stubs."""
+    failed = _turn(120, session_id="v", refused=True, chunks=[], total_ms=4, question="failed fast")
+
+    page = _page(_Reader([_turn(0, session_id="c"), failed]), tmp_path)
+
+    assert (page["source"]["visitors"], page["source"]["stubs"]) == (1, 0)
+    assert [f["question"] for f in page["failures"]] == ["failed fast"]
+
+
+def test_checks_and_stubs_stay_out_of_the_failures_and_coverage(tmp_path):
+    """A refused deploy-check turn is not a visitor failure, and its
+    retrieval does not count towards knowledge-base coverage."""
+    records = [
+        _turn(0, session_id="c", refused=True, question="check refused"),
+        _turn(120, session_id="v", refused=True, question="visitor refused", chunks=[]),
+    ]
+
+    page = _page(_Reader(records), tmp_path)
+
+    assert [f["question"] for f in page["failures"]] == ["visitor refused"]
+    assert sum(e["count"] for e in page["coverage"]) == 0
+
+
+def test_the_last_deploy_check_shows_turns_answered_of_turns_sent(tmp_path):
+    """Two deploys: the newer one's check sent three turns and one ended in
+    the canned refusal, so two of three were answered."""
+    old = NOW - timedelta(days=9)
+    records = [
+        _turn(0, sha="sha-old-1", session_id="o", start=old),
+        _turn(0, session_id="c"), _turn(10, session_id="c", turn_index=1),
+        _turn(20, session_id="c", turn_index=2, refused=True),
+        _turn(300, session_id="v"),
+    ]
+
+    check = _page(_Reader(records), tmp_path)["deploy_check"]
+
+    assert (check["sha"], check["sent"], check["answered"]) == ("sha-new", 3, 2)
+    assert datetime.fromisoformat(check["ts"]) == DEPLOY
+
+
+# ---- Outcomes read from the answer (issue #63) --------------------------------
+
+
+def _judged(tmp_path, labels: list):
+    """Write the outcome cache as the judge would, from ``[(record, label)]``."""
+    from outcome_judge import outcome_key
+
+    (tmp_path / "outcomes.jsonl").write_text("".join(
+        json.dumps({"key": outcome_key(r), "outcome": o}) + "\n" for r, o in labels))
+
+
+def test_outcome_rates_come_from_the_judged_answer_over_judged_visitor_turns(tmp_path):
+    """Worked example: "Where does he live?" answered "Melbourne" is logged as
+    deflected by the logistical branch; the judge reads it as answered. A
+    second turn is not judged yet, so the rates divide by one judged turn."""
+    where = _turn(100, session_id="a", branch="LOGISTICAL", event_type="deflected",
+                  question="Where does he live?", answer="Melbourne, Victoria, Australia.")
+    later = _turn(200, session_id="b", event_type="gap")
+    _judged(tmp_path, [(where, "answered")])
+
+    page = _page(_Reader([_turn(0, session_id="check"), where, later]), tmp_path)
+
+    assert _row(page, "Answered with substance")["cells"][3]["text"] == "100.0%"
+    assert _row(page, "Deflection rate")["cells"][3]["text"] == "0.0%"
+    assert _row(page, "Gap rate")["cells"][3]["text"] == "0.0%"
+    assert _row(page, "Not yet judged")["cells"][3]["text"] == "1"
+
+
+def test_the_gap_rate_flag_reads_the_judged_outcome_like_the_gap_rate_row(tmp_path):
+    """This week holds four gap-branch turns logged as gap that the judge
+    read as answered, last week one answered turn: the logged label would
+    jump 100 points, the judged gap rate does not move, so no flag."""
+    this_week = [_turn(i, sha=None, session_id=f"g{i}", event_type="gap", start=NOW - timedelta(days=3))
+                 for i in range(4)]
+    last_week = _turn(0, sha=None, session_id="old", start=NOW - timedelta(days=10))
+    _judged(tmp_path, [(r, "answered") for r in [*this_week, last_week]])
+
+    page = _page(_Reader([*this_week, last_week]), tmp_path)
+
+    assert page["source"]["visitors"] == 5
+    assert _row(page, "Gap rate")["cells"][0]["text"] == "0.0%"
+    assert not any(f["headline"].startswith("Gap rate jumped") for f in page["flags"])
+
+
+def test_failures_show_the_judged_outcome_and_unjudged_turns_as_not_yet_judged(tmp_path):
+    """A gap-branch answer with substance is no failure; an answered-logged
+    "I don't have that" is did not know; a declined turn shows as declined."""
+    gap_branch = _turn(100, session_id="a", event_type="gap", question="MTG projects?")
+    no_info = _turn(110, session_id="b", question="Exact F1 score?")
+    joke = _turn(120, session_id="c", event_type="deflected", question="Tell me a joke")
+    unjudged = _turn(130, session_id="d", question="Fresh turn")
+    _judged(tmp_path, [(gap_branch, "answered"), (no_info, "did not know"), (joke, "declined")])
+
+    rows = {f["question"]: f for f in _page(_Reader([_turn(0, session_id="check"), gap_branch, no_info, joke, unjudged]), tmp_path)["failures"]}
+
+    assert set(rows) == {"Exact F1 score?", "Tell me a joke", "Fresh turn"}
+    assert (rows["Exact F1 score?"]["mode"], rows["Exact F1 score?"]["outcome"]) == ("did-not-know", "did not know")
+    assert rows["Tell me a joke"]["mode"] == "declined"
+    assert (rows["Fresh turn"]["mode"], rows["Fresh turn"]["outcome"]) == ("not-judged", None)
+
+
+def test_main_on_production_judges_new_turns_once_before_building_the_page(tmp_path, monkeypatch):
+    """The judge model is faked: the production run labels the new turn and
+    the page shows the label; a second run makes no further call."""
+    import cluster_gaps
+    import outcome_judge
+    import summarize_failures
+
+    sentinel, _ = _main_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("HF_TOKEN", "fake")
+    monkeypatch.setenv("HF_DATASET_REPO", "ignored/repo")
+    day = (NOW - timedelta(days=1)).date().isoformat()
+    hub = _hub({f"logs/{day}.jsonl": [_raw(event_type="gap", question="Any AWS?")]})
+    monkeypatch.setattr("huggingface_hub.HfApi", lambda token=None: hub)
+    monkeypatch.setattr("hf_contact_log.HfApi", lambda token=None: hub)
+    monkeypatch.setattr("hf_log_writer.read_writer_state", lambda api, *, repo_id: None)
+    monkeypatch.setattr(sentinel, "DEFAULT_LOG_PATH", tmp_path / "no-local-canaries.jsonl")
+    monkeypatch.setattr(sentinel, "DEFAULT_OUTCOMES_PATH", tmp_path / "outcomes.jsonl")
+    monkeypatch.setattr(cluster_gaps, "run_batch", lambda **kw: None)
+    monkeypatch.setattr(summarize_failures, "run_batch", lambda **kw: None)
+    calls = []
+
+    def judge_model(**kw):
+        calls.append(kw)
+        return MagicMock(choices=[MagicMock(message=MagicMock(content='{"outcome": "did not know"}'))])
+
+    monkeypatch.setattr(outcome_judge, "completion", judge_model)
+
+    html = sentinel.main(["--no-open"]).read_text()
+    sentinel.main(["--no-open"])
+
+    assert len(calls) == 1
+    assert '"outcome": "did not know"' in html

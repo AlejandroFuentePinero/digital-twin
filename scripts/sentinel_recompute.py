@@ -41,6 +41,9 @@ CORPUS = REPO_ROOT / "data" / "canaries" / "corpus.json"
 KB_DIR = REPO_ROOT / "data" / "knowledge_base"
 GAP_CLUSTERS = REPO_ROOT / "data" / "logs" / "gap_clusters.json"
 GAP_ARCHIVE = REPO_ROOT / "data" / "logs" / "gap_clusters_archive"
+OUTCOMES = REPO_ROOT / "data" / "logs" / "outcome_judgements.jsonl"
+CHECK_MINUTES = 60  # a turn this soon after its deploy's first turn is a deploy check
+STUB_MAX_TOTAL_MS = 50  # an answered turn with no retrieval and a total under this is a test stub
 
 WINDOWS = {"7d": 7, "30d": 30, "90d": 90, "global": None}
 BRANCHES = ["GENERIC", "GAP", "TECHNICAL", "BEHAVIOURAL", "LOGISTICAL"]
@@ -161,6 +164,47 @@ def rate(num: int, den: int) -> dict:
     return {"value": (num / den) if den else None, "num": num, "n": den}
 
 
+def answered(r: dict) -> bool:
+    return any(a.get("is_acceptable") for a in r["attempts"])
+
+
+def mark_kinds(live: list[dict]) -> None:
+    """Set `_kind` to visitor, check or stub on every live record (#63)."""
+    first: dict[str, datetime] = {}
+    for r in live:
+        s = r.get("git_sha")
+        if s and (s not in first or ts(r) < first[s]):
+            first[s] = ts(r)
+    for r in live:
+        s = r.get("git_sha")
+        if answered(r) and not r["retrieved_chunks"] and r["latency_ms"].get("total", 0) < STUB_MAX_TOTAL_MS:
+            r["_kind"] = "stub"
+        elif s and ts(r) - first[s] <= timedelta(minutes=CHECK_MINUTES):
+            r["_kind"] = "check"
+        else:
+            r["_kind"] = "visitor"
+
+
+def read_outcomes(path: Path) -> dict[str, str]:
+    """The outcome judge's cache: `{"<timestamp> <session_id>": label}`. Missing file: none judged."""
+    return {row["key"]: row["outcome"] for row in read_jsonl_strict(path)} if path.exists() else {}
+
+
+def outcome_of(r: dict, outcomes: dict[str, str]) -> str | None:
+    return outcomes.get(f"{r['timestamp']} {r['session_id']}")
+
+
+def deploy_check(live: list[dict]) -> dict | None:
+    """The newest deploy check: turns sent, and answered (some attempt accepted)."""
+    checks = [r for r in live if r["_kind"] == "check"]
+    if not checks:
+        return None
+    sha = max(checks, key=ts)["git_sha"]
+    turns = [r for r in checks if r["git_sha"] == sha]
+    return {"sha": sha[:7], "first_turn": min(ts(r) for r in turns).isoformat(), "sent": len(turns),
+            "answered": sum(1 for r in turns if answered(r))}
+
+
 def in_window(records: list[dict], now: datetime, days: int | None) -> list[dict]:
     if days is None:
         return list(records)
@@ -170,14 +214,18 @@ def in_window(records: list[dict], now: datetime, days: int | None) -> list[dict
 
 # --------------------------------------------------------------------- metrics
 
-def metrics(records: list[dict], contact_sessions: set[str]) -> dict:
-    """Every Metrics-tab figure for one set of records (one window, or one branch)."""
+def metrics(records: list[dict], contact_sessions: set[str], outcomes: dict[str, str]) -> dict:
+    """Every Metrics-tab figure for one set of visitor records (one window, or one branch)."""
     n = len(records)
     out: dict = {"total_interactions": n}
     ev = Counter(r["event_type"] for r in records)
-    out["answered_with_substance_rate"] = rate(ev["answered"], n)
-    out["gap_rate"] = rate(ev["gap"], n)
-    out["deflection_rate"] = rate(ev["deflected"], n)
+    # Outcome rates read the judged answer, over judged turns only (#63).
+    judged = Counter(o for r in records if (o := outcome_of(r, outcomes)) is not None)
+    nj = sum(judged.values())
+    out["answered_with_substance_rate"] = rate(judged["answered"], nj)
+    out["gap_rate"] = rate(judged["did not know"], nj)
+    out["deflection_rate"] = rate(judged["declined"], nj)
+    out["not_yet_judged"] = n - nj
     out["refusal_rate"] = rate(ev["refused"], n)
     out["guardrail_rejection_rate"] = rate(
         sum(1 for r in records if any(a.get("is_acceptable") is False for a in r["attempts"])), n)
@@ -229,33 +277,42 @@ def metrics(records: list[dict], contact_sessions: set[str]) -> dict:
     return out
 
 
-def failure_feed(records: list[dict]) -> dict:
-    """Row counts for the Failures tab, one count per kind (kinds are disjoint here)."""
+def failure_feed(records: list[dict], outcomes: dict[str, str]) -> dict:
+    """Row counts for the Failures tab over visitor turns, one count per kind
+    (kinds are disjoint). Judged did-not-know, declined and error take
+    precedence over the attempt-based kinds; an unjudged turn that is not a
+    failure otherwise counts as not yet judged."""
     kinds = Counter()
     for r in records:
         rejected = any(a.get("is_acceptable") is False for a in r["attempts"])
+        o = outcome_of(r, outcomes)
         if r["event_type"] == "refused":
             kinds["refused"] += 1
-        elif len(r["attempts"]) >= MAX_ATTEMPTS:
+        elif o in ("error", "did not know", "declined"):
+            kinds[o] += 1
+        elif rejected and len(r["attempts"]) >= MAX_ATTEMPTS:
             kinds["retry_exhausted_then_accepted"] += 1
         elif rejected:
             kinds["rejected_then_recovered"] += 1
-        elif r["event_type"] == "gap":
-            kinds["gap"] += 1
-        elif r["event_type"] == "deflected":
-            kinds["deflected"] += 1
+        elif o is None:
+            kinds["not yet judged"] += 1
     return {"disjoint_kinds": dict(kinds),
+            "judged": dict(Counter(o for r in records if (o := outcome_of(r, outcomes)))),
             "event_gap_total": sum(1 for r in records if r["event_type"] == "gap"),
             "event_deflected_total": sum(1 for r in records if r["event_type"] == "deflected"),
             "any_attempt_rejected_total": sum(
                 1 for r in records if any(a.get("is_acceptable") is False for a in r["attempts"]))}
 
 
-def flags(live: list[dict], now: datetime) -> dict:
+def flags(live: list[dict], now: datetime, outcomes: dict[str, str]) -> dict:
     cur = [r for r in live if now - timedelta(days=7) <= ts(r)]
     prior = [r for r in live if now - timedelta(days=14) <= ts(r) < now - timedelta(days=7)]
-    g = lambda rs: (sum(1 for r in rs if r["event_type"] == "gap") / len(rs)) if rs else None  # noqa: E731
-    jump = (g(cur) - g(prior)) if (cur and prior) else None
+
+    def g(rs):  # judged gap rate (#63): "did not know" over judged turns
+        judged = [o for r in rs if (o := outcome_of(r, outcomes)) is not None]
+        return judged.count("did not know") / len(judged) if judged else None
+
+    jump = (g(cur) - g(prior)) if (cur and prior and g(cur) is not None and g(prior) is not None) else None
     norm = lambda q: re.sub(r"\s+", " ", q.strip().lower())  # noqa: E731
     rep = Counter(norm(r["question"]) for r in cur if r["event_type"] in ("deflected", "refused"))
     out = {
@@ -360,9 +417,12 @@ def canary() -> dict:
 
 # ------------------------------------------------------------------------ main
 
-def recompute(snapshot: Path, now: datetime) -> dict:
+def recompute(snapshot: Path, now: datetime, outcomes_path: Path = OUTCOMES) -> dict:
     records, contacts, state, integrity = load_production(snapshot)
     live = [r for r in records if not r.get("is_canary")]
+    mark_kinds(live)
+    visitors = [r for r in live if r["_kind"] == "visitor"]
+    outcomes = read_outcomes(outcomes_path)
     contact_sessions = {c["session_id"] for c in contacts}
     newest = max(ts(r) for r in live)
     result = {
@@ -378,15 +438,22 @@ def recompute(snapshot: Path, now: datetime) -> dict:
             if state and state.get("last_flush_time") else None),
         "days_with_records_in_last_30": len({r["_day_file"] for r in in_window(live, now, 30)}),
         "longest_gap_between_record_days": _longest_gap(sorted({r["_day_file"] for r in live})),
+        "turn_kinds": dict(Counter(r["_kind"] for r in live)),
+        "kind_rule": f"stub: answered, no retrieval, total < {STUB_MAX_TOTAL_MS} ms; check: within "
+                     f"{CHECK_MINUTES} min of its git_sha's first turn; visitor: the rest. "
+                     "Every figure below is visitors only.",
+        "outcomes_file": str(outcomes_path),
+        "deploy_check": deploy_check(live),
         "windows": {}, "by_branch": {}, "failure_feed": {},
     }
     for w, days in WINDOWS.items():
-        rs = in_window(live, now, days)
-        result["windows"][w] = metrics(rs, contact_sessions)
-        result["by_branch"][w] = {b: metrics([r for r in rs if r["branch"] == b], contact_sessions) for b in BRANCHES}
-        result["failure_feed"][w] = failure_feed(rs)
-    result["flags"] = flags(live, now)
-    result["kb_coverage"] = {"production_live_records_only": kb_coverage(live)}
+        rs = in_window(visitors, now, days)
+        result["windows"][w] = metrics(rs, contact_sessions, outcomes)
+        result["by_branch"][w] = {b: metrics([r for r in rs if r["branch"] == b], contact_sessions, outcomes)
+                                  for b in BRANCHES}
+        result["failure_feed"][w] = failure_feed(rs, outcomes)
+    result["flags"] = flags(visitors, now, outcomes)
+    result["kb_coverage"] = {"production_visitor_records_only": kb_coverage(visitors)}
     result["canary"] = canary()
     return result
 
@@ -421,9 +488,11 @@ def print_table(res: dict) -> None:
     print(f"  writer state: {res['writer_state']} (last flush {res['writer_last_flush_age_hours']:.1f} h ago)"
           if res["writer_last_flush_age_hours"] is not None else f"  writer state: {res['writer_state']}")
     print(f"  longest gap between days with records: {res['longest_gap_between_record_days']}")
+    print(f"  turn kinds: {res['turn_kinds']} ({res['kind_rule']})")
+    print(f"  last deploy check: {res['deploy_check']}")
     scalar = [k for k, v in res["windows"]["global"].items()
               if not isinstance(v, dict) or "value" in v]
-    print("\nMETRICS (live records)            " + "".join(f"{w:>18}" for w in WINDOWS))
+    print("\nMETRICS (visitor records)         " + "".join(f"{w:>18}" for w in WINDOWS))
     for k in scalar:
         print(f"  {k[:32]:<32}" + "".join(f"{_fmt(res['windows'][w][k]):>18}" for w in WINDOWS))
     for group in ("attempts_distribution", "branch_distribution", "mean_confidence_by_branch"):
@@ -438,7 +507,7 @@ def print_table(res: dict) -> None:
         print(f"  {'latency p50|p95 ' + s:<32}{row}")
     print("\nFAILURE FEED (global):", res["failure_feed"]["global"])
     print("FLAGS:", json.dumps(res["flags"], indent=1))
-    kb = res["kb_coverage"]["production_live_records_only"]
+    kb = res["kb_coverage"]["production_visitor_records_only"]
     print(f"\nKB COVERAGE: {kb['canonical_sections']} sections, {kb['retrieved_sections']} retrieved, "
           f"{kb['never_retrieved']} never, {kb['off_canon']} off-canon")
     c = res["canary"]
@@ -452,18 +521,19 @@ def main() -> int:
     ap.add_argument("--save", type=Path, help="when reading production, keep the downloaded copy here")
     ap.add_argument("--now", help="ISO time to anchor the windows (default: the current UTC time)")
     ap.add_argument("--json", type=Path, help="also write the full result as JSON")
+    ap.add_argument("--outcomes", type=Path, default=OUTCOMES, help="the outcome judge's cache to read")
     args = ap.parse_args()
     now = datetime.fromisoformat(args.now) if args.now else datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     if args.snapshot:
-        res = recompute(args.snapshot, now)
+        res = recompute(args.snapshot, now, args.outcomes)
     else:
         with tempfile.TemporaryDirectory() as tmp:
             dest = args.save or Path(tmp)
             dest.mkdir(parents=True, exist_ok=True)
             fetch_production(dest)
-            res = recompute(dest, now)
+            res = recompute(dest, now, args.outcomes)
     print_table(res)
     if args.json:
         args.json.write_text(json.dumps(res, indent=1, default=str))

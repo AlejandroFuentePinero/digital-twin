@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Literal, Mapping
 
 from dashboard_model import DashboardModel
 from interaction_log import InteractionRecord
@@ -64,16 +64,21 @@ def detect_gap_rate_jump(
     *,
     threshold: float = FLAG_GAP_RATE_JUMP_THRESHOLD,
     days: int = 7,
+    outcomes: Mapping[str, str] | None = None,
 ) -> list[Flag]:
     """Fire one flag when the trailing-`days` gap rate exceeds the prior
-    `days`-window gap rate by more than `threshold` pp."""
+    `days`-window gap rate by more than `threshold` pp. With judged
+    ``outcomes`` (#63) the gap rate is the judged one, as on the Metrics tab;
+    a week with no judged turn gives no flag."""
     prior_records = _prior_window(records, days=days)
     if not prior_records:
         # No prior-week history → no baseline to compare against. Don't fire on
         # fresh deployments; the next week establishes the baseline.
         return []
-    current = DashboardModel(_trailing_window(records, days=days)).gap_rate
-    prior = DashboardModel(prior_records).gap_rate
+    current = DashboardModel(_trailing_window(records, days=days), outcomes=outcomes).gap_rate
+    prior = DashboardModel(prior_records, outcomes=outcomes).gap_rate
+    if current is None or prior is None:
+        return []
     delta = current - prior
     if delta <= threshold:
         return []
