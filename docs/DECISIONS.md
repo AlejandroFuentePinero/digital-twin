@@ -7,7 +7,7 @@
 
 ## Session 74 (2026-11-20): projects the KB only mentions in passing fetch their README (#62); C026 and C027 fetch on the first attempt.
 
-**Status:** implemented test-first (commit `6f4f2be`), both spec-review axes triaged, one judged canary run on the final code plus a full pre-check run. Suite at **629 passing, 1 skipped** (3 new). Not deployed: deploy debt is this commit.
+**Status:** implemented test-first (commit `6f4f2be`), both spec-review axes triaged, one judged canary run on the final code plus a full pre-check run. Suite at **629 passing, 1 skipped** (3 new). Deployed 2026-11-20 (Space commit `750a52f9`, five-branch API smoke passed and C026 answered with README depth, see the runbook).
 
 ### Cause
 
