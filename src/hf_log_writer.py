@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from huggingface_hub import HfApi
-from huggingface_hub.utils import EntryNotFoundError
+from huggingface_hub.utils import EntryNotFoundError, LocalEntryNotFoundError
 
 _log = logging.getLogger(__name__)
 
@@ -62,8 +62,9 @@ class LogBuffer:
 
     The disk file is the recovery story — if the process crashes after
     ``append`` but before a flush, a new instance pointed at the same
-    path picks the records up. ``flush`` drains both layers atomically:
-    in-memory list reset + disk file truncated. The clock used for
+    path picks the records up. ``flush`` drains the oldest records from
+    both layers under one lock and rewrites the disk file with whatever
+    was appended after the caller's snapshot (#65). The clock used for
     ``time_since_last_flush`` is overridable for tests.
     """
 
@@ -99,11 +100,20 @@ class LogBuffer:
         with self._lock:
             return list(self._records)
 
-    def flush(self) -> list[dict]:
+    def flush(self, count: int | None = None) -> list[dict]:
+        """Drain the oldest ``count`` records (all when None). Records
+        appended after the caller's snapshot stay buffered, in memory and
+        on disk (#65)."""
         with self._lock:
-            drained = list(self._records)
-            self._records.clear()
-            if self._path.exists():
+            if count is None:
+                count = len(self._records)
+            drained = self._records[:count]
+            del self._records[:count]
+            if self._records:
+                tmp = self._path.with_suffix(".tmp")
+                tmp.write_text("".join(json.dumps(r) + "\n" for r in self._records), encoding="utf-8")
+                os.replace(tmp, self._path)
+            elif self._path.exists():
                 self._path.unlink()
             self._last_flush_monotonic = self._clock()
             return drained
@@ -207,7 +217,7 @@ class HFLogWriter:
                 )
                 error = f"{type(exc).__name__}: {exc}"
             else:
-                self._buffer.flush()
+                self._buffer.flush(len(records))
             # State file is diagnostic; surface it on every attempt
             # (success OR failure). Wrapped in its own broad ``except``
             # so a state-upload failure can't mask a successful data
@@ -300,19 +310,24 @@ class HFLogWriter:
                 return
 
     def _fetch_existing(self, path_in_repo: str) -> list[dict]:
+        """The day file's records, or [] only when the hub says it does
+        not exist. Any other failure raises so ``flush`` aborts and keeps
+        the buffer (#65): uploading the buffer alone would replace the
+        day's earlier records. ``force_download`` stops an unreachable
+        hub from serving a stale cached copy (it raises ``ValueError``
+        instead). ``LocalEntryNotFoundError``, the library's "hub
+        unreachable" without ``force_download``, subclasses
+        ``EntryNotFoundError``, so it is re-raised first."""
         try:
             local = self._api.hf_hub_download(
                 repo_id=self._repo_id,
                 filename=path_in_repo,
                 repo_type="dataset",
+                force_download=True,
             )
-        except (EntryNotFoundError, FileNotFoundError):
-            return []
-        except Exception as exc:
-            # Treat as "no existing file" but warn — this is the same
-            # error class as a transient 5xx and we don't want to raise
-            # it back into ``flush`` and clobber the buffer.
-            _log.warning("Could not fetch existing %s (%s); treating as empty", path_in_repo, exc)
+        except LocalEntryNotFoundError:
+            raise
+        except EntryNotFoundError:
             return []
         return [
             json.loads(line)

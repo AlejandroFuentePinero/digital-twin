@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from huggingface_hub.utils import EntryNotFoundError
 
 
 def _contact_record(session_id: str = "sess-1", timestamp: str = "2026-05-07T12:00:00+00:00") -> dict:
@@ -34,7 +35,7 @@ def _contact_record(session_id: str = "sess-1", timestamp: str = "2026-05-07T12:
 def _hf_api_for_writer() -> MagicMock:
     api = MagicMock()
     api.upload_file = MagicMock(return_value=None)
-    api.hf_hub_download = MagicMock(side_effect=FileNotFoundError())
+    api.hf_hub_download = MagicMock(side_effect=EntryNotFoundError("no day file yet"))
     return api
 
 

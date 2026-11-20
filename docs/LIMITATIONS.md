@@ -375,9 +375,13 @@ These are not "readme content" failures — the content is correct and accessibl
 
 ### O11: The HF log writer can overwrite a day's records when its fetch of the day file fails
 
-**Status:** Predicted; reproduced by fault injection in the #61 audit, never observed in production. Ticket: [#65](https://github.com/AlejandroFuentePinero/digital-twin/issues/65).
+**Status:** Predicted; reproduced by fault injection in the #61 audit, never observed in production. Fixed in [#65](https://github.com/AlejandroFuentePinero/digital-twin/issues/65) (2026-11-20, awaiting deploy); one part stands, below.
 
 `HFLogWriter` merges its buffer into the existing day file before uploading. If the download of that file fails, `_fetch_existing` treats it as empty and the upload replaces the day's earlier records with the buffer alone (2 of 5 survived in the injection). A record appended while an upload is in flight can be lost, and when every upload fails the state file cannot be written either, so `hf_writer_state.json` keeps reporting no error.
+
+**Fix (#65):** only the hub's "file not found" counts as an empty day. Any other failed fetch aborts the flush, keeps the buffer for the next attempt and is written to the state file as `last_error`. Two library behaviours made the old path worse than the code read: `huggingface_hub` raises `LocalEntryNotFoundError` when the hub is unreachable, a subclass of `EntryNotFoundError` and `FileNotFoundError`, so an outage was caught as "not found"; and without `force_download` an unreachable hub hands back a stale cached copy of the day file, which would drop every record written after that copy. The writer now passes `force_download=True` (an unreachable hub then raises `ValueError`) and re-raises `LocalEntryNotFoundError` before the "not found" branch. A successful flush removes only the records it uploaded, so a turn that finishes mid-upload stays buffered.
+
+**What stands:** when the hub refuses every upload, the state file cannot be written either, and it keeps its last value. The signal then is age: Sentinel's last flush and newest turn both stop moving while visitors are still arriving (see SENTINEL.md, Operational caveats). A quiet week looks the same, so it is a prompt to look at the Space logs, not a verdict.
 
 **Trip-wire:** a day file whose record count drops between two Sentinel runs, or a day file holding only turns from the end of the day. Sentinel shows the newest record's age and the files read on every run.
 

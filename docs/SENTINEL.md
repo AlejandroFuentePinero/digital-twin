@@ -471,6 +471,10 @@ Use the *combination*; no single metric tells the whole story.
 
 Each run downloads every day file (30 files, a few seconds today). **Revisit when the log exceeds ~5,000 records**: at that point materialise daily aggregates to a side file.
 
+### A writer that cannot reach the hub (#65)
+
+The writer reports a failed fetch or upload in its state file, shown red on the summary, and keeps the records for the next attempt. When the hub refuses every upload the state file cannot be written either, so the summary keeps showing the last flush with no error. Read the ages instead: a last flush and a newest turn that both stop moving while you know people are visiting mean the writer is stuck; check the Space logs. A quiet week reads the same, so this is a reason to look, not a verdict. LIMITATIONS O11.
+
 ### No alerting
 
 Sentinel is on-demand only. There is no background process watching for thresholds to fire. **If `gap_rate` doubles overnight, nobody knows until you open the dashboard.** This is intentional — at portfolio scale, alerting infrastructure is overhead without benefit. Revisit if the system becomes load-bearing for someone other than the project owner.

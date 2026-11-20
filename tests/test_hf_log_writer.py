@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from huggingface_hub.utils import EntryNotFoundError, LocalEntryNotFoundError
 
 
 def _record(turn_index: int = 0, session_id: str = "sess-1") -> dict:
@@ -140,7 +141,7 @@ def _hf_api_mock() -> MagicMock:
     rather than reaching for ``requests`` or HTTP."""
     api = MagicMock()
     api.upload_file = MagicMock(return_value=None)
-    api.hf_hub_download = MagicMock(side_effect=FileNotFoundError())
+    api.hf_hub_download = MagicMock(side_effect=EntryNotFoundError("no day file yet"))
     return api
 
 
@@ -753,3 +754,121 @@ def test_real_round_trip_to_hf_dataset_and_back(tmp_path):
     out = HFLogReader(repo_id=repo_id, token=token).read(days=2)
     matched = [r for r in out if r.session_id == f"itest-{run_marker}"]
     assert len(matched) == 1, f"expected our test record back; got {len(matched)} matches"
+
+
+# ---------------------------------------------------------------------------
+# #65: a flush never overwrites a day file it could not read, never drops a
+# record appended during an upload, and reports what failed
+# ---------------------------------------------------------------------------
+
+
+class _FakeHub:
+    """An in-memory dataset standing in for ``HfApi`` at the network
+    boundary. ``hf_hub_download`` raises ``EntryNotFoundError`` for a
+    missing file, as the hub does. While ``fetch_down`` is set it raises
+    what ``huggingface_hub`` 0.35 raises when the hub cannot be reached:
+    ``ValueError`` under ``force_download``, ``LocalEntryNotFoundError``
+    otherwise. ``on_upload`` runs inside a data upload, to model a turn
+    finishing mid-flush."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.files: dict[str, str] = {}
+        self.fetch_down = False
+        self.on_upload = None
+        self._dir = tmp_path / "_hub"
+        self._dir.mkdir()
+
+    def hf_hub_download(self, *, repo_id, filename, repo_type, **kwargs):
+        if self.fetch_down:
+            if kwargs.get("force_download"):
+                raise ValueError("Force download failed: hub unreachable")
+            raise LocalEntryNotFoundError("hub unreachable")
+        if filename not in self.files:
+            raise EntryNotFoundError(f"{filename} not found")
+        local = self._dir / filename.replace("/", "_")
+        local.write_text(self.files[filename], encoding="utf-8")
+        return str(local)
+
+    def upload_file(self, *, path_or_fileobj, path_in_repo, repo_id, repo_type, commit_message):
+        if path_in_repo.startswith("logs/") and self.on_upload is not None:
+            hook, self.on_upload = self.on_upload, None
+            hook()
+        self.files[path_in_repo] = path_or_fileobj.decode("utf-8")
+
+    def turns(self, path_in_repo: str) -> list[int]:
+        return [json.loads(ln)["turn_index"] for ln in self.files[path_in_repo].splitlines() if ln.strip()]
+
+    def state(self) -> dict:
+        return json.loads(self.files["hf_writer_state.json"])
+
+
+def _hub_writer(hub: _FakeHub, buffer_path: Path):
+    from hf_log_writer import HFLogWriter
+
+    return HFLogWriter(
+        repo_id="ignored/test",
+        buffer_path=buffer_path,
+        flush_batch_size=50,
+        flush_interval_seconds=600,
+        hf_api=hub,
+    )
+
+
+def test_failed_fetch_of_the_day_file_keeps_every_earlier_record(tmp_path):
+    """A flush that cannot read the day file leaves it alone and keeps its
+    buffer, so the day's earlier records survive and the retry adds to them."""
+    hub = _FakeHub(tmp_path)
+    writer = _hub_writer(hub, tmp_path / ".hf_buffer.jsonl")
+    for i in range(3):
+        writer.append(_record(i))
+    writer.flush()
+
+    hub.fetch_down = True
+    writer.append(_record(3))
+    writer.append(_record(4))
+    writer.flush()
+
+    assert hub.turns("logs/2026-05-07.jsonl") == [0, 1, 2]
+    assert writer.buffer_size() == 2
+
+    hub.fetch_down = False
+    writer.flush()
+
+    assert hub.turns("logs/2026-05-07.jsonl") == [0, 1, 2, 3, 4]
+    assert writer.buffer_size() == 0
+
+
+def test_record_appended_during_an_upload_survives(tmp_path):
+    """A turn that finishes while a flush is uploading stays buffered, on
+    disk too, and ships with the next flush."""
+    hub = _FakeHub(tmp_path)
+    buffer_path = tmp_path / ".hf_buffer.jsonl"
+    writer = _hub_writer(hub, buffer_path)
+    writer.append(_record(0))
+    hub.on_upload = lambda: writer.append(_record(1))
+    writer.flush()
+
+    assert hub.turns("logs/2026-05-07.jsonl") == [0]
+    assert writer.buffer_size() == 1
+
+    restarted = _hub_writer(hub, buffer_path)  # a restart flushes the disk buffer
+
+    assert hub.turns("logs/2026-05-07.jsonl") == [0, 1]
+    assert restarted.buffer_size() == 0
+
+
+def test_failing_fetch_is_reported_in_the_writer_state(tmp_path):
+    """A flush that cannot read the day file says so in
+    ``hf_writer_state.json``, with the records still waiting, where
+    Sentinel shows it."""
+    hub = _FakeHub(tmp_path)
+    writer = _hub_writer(hub, tmp_path / ".hf_buffer.jsonl")
+    hub.fetch_down = True
+    writer.append(_record(0))
+    writer.append(_record(1))
+    writer.flush()
+
+    state = hub.state()
+    assert "hub unreachable" in state["last_error"]
+    assert state["buffer_size"] == 2
+    assert "logs/2026-05-07.jsonl" not in hub.files

@@ -5,6 +5,23 @@
 
 ---
 
+## Session 76 (2026-11-20): the HF log writer never overwrites a day file it could not read (#65).
+
+**Status:** implemented test-first, both spec-review axes triaged. Suite at **600 passing, 2 skipped**. Not yet deployed; the deploy and smoke test are the owner's.
+
+### What changed
+
+- **A failed fetch aborts the flush.** Only the hub's "file not found" (`EntryNotFoundError`) counts as an empty day; any other failure keeps the buffer for the next attempt and is written to `hf_writer_state.json` as `last_error`. Reading `huggingface_hub` 0.35 showed the old path was wider than the audit's injection: an unreachable hub raises `LocalEntryNotFoundError`, a subclass of both `EntryNotFoundError` and `FileNotFoundError`, so an outage was caught as "not found"; and without `force_download` an unreachable hub returns a stale cached copy of the day file. The fetch now passes `force_download=True` and re-raises `LocalEntryNotFoundError` first.
+- **A turn that finishes mid-upload survives.** `LogBuffer.flush(count)` drains only the records the flush uploaded and rewrites the disk buffer with the rest (temp file, then `os.replace`).
+- **A writer that cannot reach the hub at all** cannot write its state file either; no code change, the signal is the age of the last flush and of the newest turn, both already on the Sentinel summary. Documented in SENTINEL.md (Operational caveats) and LIMITATIONS O11.
+- A flush spanning two days whose second fetch fails re-uploads the first day's records on retry; the reader already collapses the duplicates.
+
+### Tests
+
+Three new tests at the writer's public interface against an in-memory fake hub: a failed fetch keeps every earlier record, an append during an upload survives (and survives a restart), a failed fetch is reported in the state file. All three fail on the previous writer. Two existing fakes (`_hf_api_mock` here and the contact writer's) used a plain `FileNotFoundError` for "no day file yet"; they now raise `EntryNotFoundError`, which is what the hub raises for a missing file.
+
+---
+
 ## Session 75 (2026-11-20): Sentinel audited blind, then rebuilt as a calm static page with an all-or-nothing read (#61).
 
 **Status:** implemented test-first, both spec-review axes triaged. Suite at **598 passing, 1 skipped**: 80 Sentinel tests replaced by 41 (19 kept verbatim, 22 new at the page-model seam; the other 61 tested the removed Gradio formatters, charts and panels, their surviving behaviours re-tested on the page model), plus 8 new reader, contact-reader and batch tests. The owner picked the calm light prototype and signed off its style. Follow-ups filed: #63 (visitors apart from deploy checks, outcomes read from the answer), #64 (log turns that fail before the retry loop), #65 (writer overwrite on a failed fetch).
