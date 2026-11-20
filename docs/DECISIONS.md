@@ -29,7 +29,7 @@
 
 ## Session 77 (2026-11-20): turns that fail before the retry loop leave a record (#64).
 
-**Status:** implemented test-first, both spec-review axes triaged. Suite at **602 passing, 2 skipped** (5 new tests: one per failing stage, the v4 read-back, the Sentinel page model). Not yet deployed; the smoke test is the owner's.
+**Status:** implemented test-first, both spec-review axes triaged. Suite at **602 passing, 2 skipped** (5 new tests: one per failing stage, the v4 read-back, the Sentinel page model). Deployed 2026-11-20 (Space commit `9c50d097`, five-branch API smoke passed, see the runbook). A turn that fails before the retry loop has not happened live yet, so the new record is proven by tests only.
 
 **What changed.** A classifier, retrieval or composer error used to leave `Pipeline.run` before the log record was built, so Sentinel never saw it (LIMITATIONS::O9: the October outage ran five days with an empty log). `Pipeline.run` now wraps those three stages, writes one record and re-raises. The record has `event_type='refused'`, no attempts, the question, `failed_stage`, `error_type`, `error_message`, and the latency so far (the failing stage's own time plus the total). `app.py` is unchanged, so the visitor sees the same canned refusal and the Space log keeps its print line. Schema v5 adds the three fields. The read-time migration fills them with `None` on older records.
 
@@ -45,7 +45,7 @@
 
 ## Session 76 (2026-11-20): the HF log writer never overwrites a day file it could not read (#65).
 
-**Status:** implemented test-first, both spec-review axes triaged. Suite at **600 passing, 2 skipped**. Not yet deployed; the deploy and smoke test are the owner's.
+**Status:** implemented test-first, both spec-review axes triaged. Suite at **600 passing, 2 skipped**. Deployed 2026-11-20 (Space commit `9c50d097`, five-branch API smoke passed, see the runbook). The next flush kept the day's 13 earlier records and added the 5 smoke turns.
 
 ### What changed
 
